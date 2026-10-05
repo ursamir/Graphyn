@@ -8,6 +8,15 @@ Also writes under the version dir:
     metadata.json  — per-sample metadata
     lineage.json   — version + optional run_id for Projects lineage
 
+    manifest.json  — per-file sha256 + content_hash (recomputed after every write)
+
+Dataset versions are immutable: when ``{output_dir}/{version_tag}`` already
+holds files and neither ``append`` nor ``overwrite`` is set, the export goes
+to the next free version (v1 → v2 …, v1.0.0 → v1.0.1) and the switch is
+logged. ``overwrite=true`` replaces the version, unless runs / packages
+reference it (then the node fails with a clear error). ``append`` into a
+referenced version fails the same way.
+
 Splits samples into train/val/test according to split_ratios.
 If a sample already has a 'split' key in its metadata, that value is used
 directly (allows upstream nodes to pre-assign splits).
@@ -84,7 +93,9 @@ class AudioExporterNode(Node):
         split_ratios (dict): train/val/test fractions (must sum to 1.0)
         version_tag (str): subdirectory version tag (e.g. "v1")
         random_seed (int): seed for reproducible split assignment
-        append (bool): if True, append to existing output; if False, clear first
+        append (bool): if True, append to an existing (unreferenced) version
+        overwrite (bool): if True, replace an existing (unreferenced) version;
+            with both off an existing tag makes the export use the next free version
     """
 
     node_type: ClassVar[str] = "audio_exporter"
@@ -97,7 +108,7 @@ class AudioExporterNode(Node):
             "Writes labels.csv and metadata.json."
         ),
         category="Audio",
-        version="1.0.0",
+        version="1.1.0",
         tags=["audio", "output", "export", "dataset"],
         requires_gpu=False,
         supports_cpu=True,
@@ -134,7 +145,8 @@ class AudioExporterNode(Node):
         group_by_source: bool = Field(default=True, title="Group splits by source", description="Keep every segment and augmented copy of a recording in the same split, so test clips never leak into training (On/Off). Off = random split per sample.")
         version_tag: str = Field(default='v1', pattern=r"^v\d+(\.\d+)*$", title="Version tag", description="Canonical version tag matching vN / vN.N.N (e.g. v1, v1.0.0).")
         random_seed: int = Field(default=42, title="Random seed", description="RNG seed for reproducible split assignment.")
-        append: bool = Field(default=False, title="Append", description="On = add to an existing dataset version (its file lists are merged); Off = replace that version.")
+        append: bool = Field(default=False, title="Append", description="On = add to an existing dataset version (its file lists are merged); Off = write a new version (next free vN when the tag is taken).")
+        overwrite: bool = Field(default=False, title="Overwrite existing version", description="On = replace an existing version with the same tag (refused when runs or packages reference it); Off = never replace — an existing tag makes the export go to the next free version.")
 
         @field_validator("split_ratios")
         @classmethod
@@ -191,9 +203,7 @@ class AudioExporterNode(Node):
                 f"'{workspace_root}'. Refusing to proceed."
             )
 
-        if not cfg.append and out_root.exists():
-            import shutil
-            shutil.rmtree(out_root)
+        version_tag, out_root = self._resolve_version(cfg, Path(output_dir), version_tag)
         out_root.mkdir(parents=True, exist_ok=True)
 
         # Always stamp a version dir (labels.csv + lineage) so Projects Versions
@@ -201,6 +211,7 @@ class AudioExporterNode(Node):
         if not samples:
             self._write_manifests(cfg, out_root, [], [])
             self._write_lineage(out_root, version_tag, 0)
+            self._write_dataset_manifest(out_root, Path(output_dir), version_tag, 0)
             self._register_version(Path(output_dir), version_tag)
             self._publish_export_tree(out_root, [])
             log.info(
@@ -308,6 +319,8 @@ class AudioExporterNode(Node):
             if rows or meta_entries:
                 self._write_manifests(cfg, out_root, rows, meta_entries)
                 self._write_lineage(out_root, version_tag, len(rows))
+            # Always recompute manifest.json (append + partial batches too).
+            self._write_dataset_manifest(out_root, Path(output_dir), version_tag, len(rows))
 
         progress.update(len(samples))
         # Count by split for logging (uses the rows already written)
@@ -326,10 +339,117 @@ class AudioExporterNode(Node):
 
         return samples
 
+    # ── immutable versions ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _has_content(path: Path) -> bool:
+        try:
+            return path.is_dir() and any(path.iterdir())
+        except OSError:
+            return False
+
+    @staticmethod
+    def _bump(tag: str) -> str:
+        nums = tag[1:].split(".")
+        nums[-1] = str(int(nums[-1]) + 1)
+        return "v" + ".".join(nums)
+
+    @staticmethod
+    def _references(project_dir: Path, version_tag: str) -> list[dict]:
+        """Runs / lineage / ship packages citing ``<project>/<version>`` (best effort)."""
+        try:
+            from app.core.mlops.dataset_versions import find_references
+        except ImportError:  # pragma: no cover - host predates the guard
+            return []
+        try:
+            return list(find_references(project_dir.name, version_tag))
+        except Exception as exc:
+            log.warning("AudioExporterNode: reference check failed: %s", exc)
+            return []
+
+    def _resolve_version(self, cfg, project_dir: Path, version_tag: str) -> tuple[str, Path]:
+        """Pick the version dir to write, enforcing immutability.
+
+        * free tag (missing / empty dir) → use it;
+        * ``append`` → add to it, unless referenced;
+        * ``overwrite`` → clear it, unless referenced;
+        * otherwise → next free version (logged).
+        """
+        out_root = project_dir / version_tag
+        if not self._has_content(out_root):
+            return version_tag, out_root
+        overwrite = bool(getattr(cfg, "overwrite", False))
+        if cfg.append or overwrite:
+            refs = self._references(project_dir, version_tag)
+            if refs:
+                cited = ", ".join(f"{r.get('kind')}:{r.get('id')}" for r in refs[:5])
+                action = "append to" if cfg.append else "overwrite"
+                raise ValueError(
+                    f"AudioExporterNode: cannot {action} dataset version {project_dir.name}/{version_tag} — "
+                    f"it is referenced by {cited}. Set a new version_tag (or turn Append/Overwrite off "
+                    "to write the next free version)."
+                )
+            if cfg.append:
+                return version_tag, out_root
+            import shutil
+
+            log.warning("AudioExporterNode: overwrite=true — replacing %s", out_root)
+            shutil.rmtree(out_root)
+            return version_tag, out_root
+        tag = version_tag
+        while self._has_content(project_dir / tag):
+            tag = self._bump(tag)
+        log.warning(
+            "AudioExporterNode: dataset version %s already exists and versions are immutable — "
+            "writing %s instead (set overwrite=true to replace %s)",
+            version_tag,
+            tag,
+            version_tag,
+        )
+        return tag, project_dir / tag
+
+    def _write_dataset_manifest(self, out_root: Path, project_dir: Path, version_tag: str, n_rows: int) -> None:
+        """(Re)compute manifest.json (sha256 per file) and audit the version write."""
+        try:
+            from app.core.mlops.dataset_versions import compute_manifest, write_manifest
+        except ImportError:  # pragma: no cover - host predates manifests
+            return
+        try:
+            man = compute_manifest(out_root)
+            run_id = str(getattr(self, "_run_id", "") or getattr(self, "_current_run_id", "") or "").strip()
+            src: dict = {"kind": "audio_exporter", "node_type": self.node_type}
+            if run_id:
+                src["run_id"] = run_id
+            man["source"] = src
+            write_manifest(out_root, man)
+        except Exception as exc:
+            log.warning("AudioExporterNode: manifest write failed for %s: %s", out_root, exc)
+            return
+        try:
+            from app.core.trust.audit import record_audit
+
+            record_audit(
+                actor="system",
+                action="dataset.version_create",
+                resource_type="dataset_version",
+                resource_id=f"{project_dir.name}/{version_tag}",
+                meta={
+                    "path": str(out_root),
+                    "samples_written": n_rows,
+                    "append": bool(self.config.append),
+                    "overwrite": bool(getattr(self.config, "overwrite", False)),
+                    "file_count": man.get("file_count"),
+                    "content_hash": man.get("content_hash"),
+                    **({"run_id": src["run_id"]} if src.get("run_id") else {}),
+                },
+            )
+        except Exception:
+            log.debug("AudioExporterNode: audit failed", exc_info=True)
+
     def _publish_export_tree(self, out_root: Path, rel_paths: list[str]) -> None:
         """Announce the export tree via the generic Node.publish_files contract."""
         files: list[dict] = []
-        for name in ("labels.csv", "metadata.json", "lineage.json"):
+        for name in ("labels.csv", "metadata.json", "lineage.json", "manifest.json"):
             p = out_root / name
             if p.is_file():
                 try:

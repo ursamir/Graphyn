@@ -108,6 +108,11 @@ def rewire_for_execution(graph: Any) -> Any:
     from app.core.paths.workspace_paths import apply_output_rewire
 
     rewired = apply_output_rewire(graph)
+    # ``…/latest`` dataset versions → concrete vN before the run, so the
+    # snapshot, run record and replay all pin one immutable version.
+    from app.core.execution.dataset_refs import resolve_latest_refs
+
+    rewired, _ = resolve_latest_refs(rewired)
     # Sample ingest under examples/**/data now points at
     # workspace/datasets/input/<slug>; REST seeds those at startup/sync, so
     # seed lazily for SDK / CLI / MCP when the rewire introduced one.
@@ -248,8 +253,15 @@ def persist_run_identity(
     actor: str,
     trigger: str,
     payload: dict[str, Any] | None = None,
+    actor_verified: bool | None = None,
+    claimed_actor: str | None = None,
 ) -> None:
     """Write ``actor`` / ``trigger`` (+ declared saved-pipeline ref) into run meta.
+
+    ``actor_verified`` / ``claimed_actor`` default from the current API
+    request identity (app.core.trust.identity.bind_actor): verified only when
+    the bearer token maps to the actor name. Non-HTTP callers (MCP, CLI, SDK)
+    record ``actor_verified: false``.
 
     The same actor string goes into meta.json, the sealed audit record and
     every run.* platform audit event. Optional payload keys ``pipeline``,
@@ -262,10 +274,19 @@ def persist_run_identity(
     writer = getattr(run_manager, "_write_meta_field", None)
     if not callable(writer):
         return
+    try:
+        from app.core.trust.identity import bind_actor
+
+        act, verified, claimed, _origin = bind_actor(actor, actor_verified, claimed_actor)
+    except Exception:
+        act, verified, claimed = (actor or "unknown").strip()[:128] or "unknown", bool(actor_verified), claimed_actor
     fields: dict[str, Any] = {
-        "actor": (actor or "unknown").strip()[:128] or "unknown",
+        "actor": act or "unknown",
+        "actor_verified": bool(verified),
         "trigger": normalize_trigger(trigger),
     }
+    if claimed:
+        fields["claimed_actor"] = str(claimed)[:128]
     body = payload if isinstance(payload, dict) else {}
     name = body.get("pipeline") or body.get("pipeline_name")
     if isinstance(name, str) and name.strip():

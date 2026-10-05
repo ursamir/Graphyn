@@ -29,7 +29,7 @@ from app.core.ir.models import GraphIR
 
 # ── Version constant ──────────────────────────────────────────────────────────
 
-CURRENT_IR_VERSION: str = "1.2"
+CURRENT_IR_VERSION: str = "1.3"
 """The IR schema version implemented in this phase.
 
 Format: "<major>.<minor>". The loader rejects documents whose major version
@@ -37,12 +37,14 @@ differs from this constant's major component.
 
 Phase 3 bumped the minor to 1 (``IREdge.condition``, ``IRNode.event_trigger``).
 Distributed execution bumps the minor to 2 (``IRNode.placement`` / ``IRPlacement``).
-Documents with versions ``"1.0"``, ``"1.1"``, and ``"1.2"`` are accepted; older
-minors get new fields as their Pydantic defaults (``None`` / empty).
+Workflow automation bumps the minor to 3 (``IRNode.on_error`` / ``IRNode.retry``).
+Documents with versions ``"1.0"`` … ``"1.3"`` are accepted; older minors get
+new fields as their Pydantic defaults (``None`` / empty). Unset 1.3 fields are
+omitted from dumps so older graphs hash identically.
 """
 
 SUPPORTED_MAJOR: int = 1
-SUPPORTED_MINOR_MAX: int = 2  # accepts 1.0, 1.1, and 1.2
+SUPPORTED_MINOR_MAX: int = 3  # accepts 1.0 … 1.3
 
 # ── Error types ───────────────────────────────────────────────────────────────
 

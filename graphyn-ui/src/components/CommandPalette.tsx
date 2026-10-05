@@ -4,7 +4,7 @@ import { useAppStore, type AppView } from '../store/appStore'
 import { apiJson } from '../api/client'
 import { unwrapList } from '../api/unwrapList'
 import { shortRunId } from '../lib/format'
-import { runDisplayName } from '../lib/runDisplay'
+import { runDisplayName, runStatusLabel } from '../lib/runDisplay'
 import { pathForView } from '../routes/viewMap'
 import { navigatePath } from '../routes/parsePath'
 import { paths } from '../routes/paths'
@@ -299,7 +299,7 @@ export function CommandPalette({
       out.push({
         id: `run:${r.run_id}`,
         label: `${runDisplayName(r)} · ${shortRunId(r.run_id)}`,
-        hint: r.status || r.project || undefined,
+        hint: r.status ? runStatusLabel(r.status) : r.project || undefined,
         group: 'Runs',
         keywords: `${r.run_id} ${r.display_name || ''} ${r.graph_name || ''} ${r.project || ''} ${r.status || ''}`,
         run: () => {
@@ -444,7 +444,7 @@ export function CommandPalette({
               const groupItems = filtered.filter((i) => i.group === group)
               return (
                 <li key={group} role="presentation">
-                  <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+                  <div className="px-3 pb-1 pt-2 text-[11px] font-semibold text-ink-500">
                     {group}
                   </div>
                   <ul>

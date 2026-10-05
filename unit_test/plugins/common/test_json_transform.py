@@ -34,9 +34,21 @@ def test_metadata(installed_cls):
     assert meta.label and meta.category and meta.version
 
 def test_path(installed_cls):
-    node = installed_cls(config={"path": "$.user.name"}, seed=0)
+    node = installed_cls(config={"jsonpath": "$.user.name"}, seed=0)
     out = node.process({"input": {"user": {"name": "sam"}}})["output"].data
     assert out == "sam"
+
+
+def test_legacy_path_alias(installed_cls):
+    node = installed_cls(config={"path": "$.user.name"}, seed=0)
+    assert node.config.jsonpath == "$.user.name"
+    assert "path" not in node.config.model_dump()
+    assert node.process({"input": {"user": {"name": "sam"}}})["output"].data == "sam"
+
+
+def test_jsonpath_not_treated_as_audit_input():
+    from app.core.runs.audit_record import _INPUT_KEYS
+    assert "jsonpath" not in _INPUT_KEYS
 
 
 def test_mappings(installed_cls):

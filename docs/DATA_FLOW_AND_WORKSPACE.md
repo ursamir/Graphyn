@@ -92,14 +92,17 @@ dataset_builder.process(features)
 workspace/
 ├── datasets/
 │   ├── input/
-│   │   ├── {label}/           # Audio files organized by label
+│   │   ├── {label}/           # Any allowlisted files (audio, csv, json, txt, md, pdf, png/jpg, parquet); sub-folders = classes
 │   │   │   ├── file1.wav
 │   │   │   └── file2.mp3
 │   │   ├── mic/               # Mic recordings uploaded via browser
 │   │   │   └── mic_20240101_120000_000000.wav
-│   │   └── uploads/           # Files uploaded via POST /api/v1/data/inputs/upload
-│   │       └── upload_20240101_120000_000000.wav
+│   │   ├── uploads/           # Default label for POST /api/v1/data/inputs/upload (original names kept)
+│   │   │   └── recording.wav
+│   │   └── .ingest/           # Ingest provenance: {job_id}.json (source, resolved HF sha, per-file sha256)
 │   └── output/
+│       ├── _inputs/           # Frozen input labels (POST /data/inputs/{label}/snapshot)
+│       │   └── {label}/vN/    # copy + manifest.json; project id "_inputs/{label}"
 │       └── {project}/
 │           ├── project.json       # Project metadata
 │           ├── taxonomy.json      # Label hierarchy
@@ -121,6 +124,7 @@ workspace/
 │               │   └── {label}/
 │               │       └── {hash_id}.wav
 │               ├── labels.csv     # id, path, label, split
+│               ├── manifest.json  # sha256 per file + content_hash (recomputed after every write)
 │               ├── metadata.json  # Full sample metadata
 │               └── pipeline.yaml  # Pipeline config snapshot (if pipeline_config set)
 ├── runs/
@@ -274,3 +278,15 @@ data: {"type": "summary", "total_files": 3, "total_duration_seconds": 12.5, "lab
 - Ingestion download filenames are prefixed with a UUID to prevent collisions and path traversal.
 - `GRAPHYN_PLUGIN_ALLOWED_SOURCES` — comma-separated base-URL allowlist for plugin installs (structural host/path match); empty = allow all.
 - Run IDs validated against ASCII-only alphanumeric regex before any filesystem access.
+
+### Reading "the newest version" (`…/latest`)
+
+Dataset versions are immutable: re-exporting writes the next version (`v2`, `v3`, …)
+instead of overwriting. A pipeline that should always train on the newest version can
+point a path at `…/<dataset folder>/latest` (Example 06's training template does:
+`workspace/artifacts/speech-commands/dataset/speech_commands/latest`). Before every run
+(API, webhook, schedule, SDK, MCP) `app/core/execution/dataset_refs.py` replaces `latest`
+with the newest **non-empty** `v<N>(.<N>)*` folder, so the executed graph snapshot, the
+run record's `external_inputs` / `dataset_versions` and *Replay exactly* all pin that
+concrete version. URLs and paths whose `latest` has no version-named siblings are left
+untouched.

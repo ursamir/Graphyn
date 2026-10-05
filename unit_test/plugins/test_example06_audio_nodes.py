@@ -536,11 +536,20 @@ class TestAudioExporter:
         assert len(rows) == 20 and {r["label"] for r in rows} == {"yes", "no"}
         assert sorted(int(r["id"]) for r in rows) == list(range(20))
 
-    def test_append_false_replaces_version_dir(self, cls, in_tmp_cwd):
+    def test_append_false_writes_next_free_version(self, cls, in_tmp_cwd):
+        # Versions are immutable: an existing v1 is kept and the export goes to v2.
         _run(cls, self._samples(10, "yes"), {"output_dir": "out"})
         _run(cls, self._samples(4, "no"), {"output_dir": "out", "append": False})
+        assert len(_labels_csv(in_tmp_cwd / "out/v1")) == 10
+        rows = _labels_csv(in_tmp_cwd / "out/v2")
+        assert len(rows) == 4 and not (in_tmp_cwd / "out/v2/train/yes").exists()
+
+    def test_overwrite_replaces_version_dir(self, cls, in_tmp_cwd):
+        _run(cls, self._samples(10, "yes"), {"output_dir": "out"})
+        _run(cls, self._samples(4, "no"), {"output_dir": "out", "overwrite": True})
         rows = _labels_csv(in_tmp_cwd / "out/v1")
         assert len(rows) == 4 and not (in_tmp_cwd / "out/v1/train/yes").exists()
+        assert not (in_tmp_cwd / "out/v2").exists()
 
     def test_version_tag_dir(self, cls, in_tmp_cwd):
         _run(cls, self._samples(3), {"output_dir": "out", "version_tag": "v2.1.0"})

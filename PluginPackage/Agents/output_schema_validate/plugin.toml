@@ -1,0 +1,20 @@
+[plugin]
+name             = "output-schema-validate"
+version          = "0.1.0"
+description      = "Validate LLM JSON vs schema"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["agents", "output"]
+
+dependencies = []
+
+runtime = "inprocess"
+node_types = ["output_schema_validate"]
+
+[config_schema.output_schema_validate]
+stub = { type = "boolean", title = "Stub mode", default = false, description = "Opt-in placeholder. Default runs the real implementation." }
+json_schema = { type = "object", title = "Json schema", default = {}, description = "JSON Schema (subset: type, required, properties, items, enum, const, bounds, anyOf/oneOf/allOf)." }
+strict = { type = "boolean", title = "Strict", default = true, description = "Raise on invalid output; when false emit only the `errors` port." }

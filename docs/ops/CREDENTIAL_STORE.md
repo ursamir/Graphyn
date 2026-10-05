@@ -27,7 +27,8 @@ Runtime resolves `id → secret` for that step only and fails closed with
 | `gemini` | `api_key`, `base_url?` | `GEMINI_API_KEY` / `GOOGLE_API_KEY` |
 | `ollama` | `base_url?`, `api_key?`, `default_model?` | `OLLAMA_BASE_URL`, `OLLAMA_MODEL` |
 | `smtp` | `host`, `port`, `user`, `password`, `from_addr`, `tls`, `dry_run` | `GRAPHYN_SMTP_*` |
-| `webhook` | `url`, `events?` | — |
+| `webhook` | `url`, `events?` | — (used by `http_webhook.connection_id`; URL is a secret) |
+| `http_auth` | `scheme` (`bearer` \| `basic` \| `header`), `token`, `username`/`password`, `header_name`/`header_value`, `allowed_hosts?` (CSV) | — (explicit `connection_id` only; no workspace-default use by `http_request`). Secrets: `token`, `password`, `header_value`. Scheme-specific required fields are validated on create. |
 
 Plugins may call `register_kind(...)` at load time. **Using** an existing
 connection of a known kind never requires an API restart.

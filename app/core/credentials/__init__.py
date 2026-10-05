@@ -64,3 +64,6 @@ __all__ = [
     "resolve_connection",
     "resolve_llm_credentials",
 ]
+
+# Append-only extra kinds registered from their own modules.
+from app.core.credentials import inbound_webhook as _inbound_webhook  # noqa: E402,F401

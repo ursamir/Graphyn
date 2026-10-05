@@ -7,10 +7,13 @@ Responsibility:   Download audio from URLs or HuggingFace datasets into the
 Owns:             IngestionJob model, _jobs store (in-process + Redis),
                   IngestionService (start_url_job, start_hf_job, get_job,
                   stream_job), background worker threads.
-Public Surface:   IngestionService, IngestionJob, SUPPORTED_EXTENSIONS
+Public Surface:   IngestionService, IngestionJob, SUPPORTED_EXTENSIONS,
+                  DEFAULT_HF_MAX_ROWS
 Must NOT:         Import from app.core.nodes or app.core.execution.orchestrator.
                   Must not register node types.
 Dependencies:     app.core.config (datasets_input_dir, redis_url),
+                  app.core.mlops.dataset_versions (aggregate_content_hash),
+                  app.core.trust.audit (record_audit),
                   stdlib (threading, time, uuid, pathlib, re),
                   httpx, soundfile, librosa, numpy, datasets (optional).
 Scalability:      When GRAPHYN_REDIS_URL is set, completed job state is
@@ -18,6 +21,11 @@ Scalability:      When GRAPHYN_REDIS_URL is set, completed job state is
                   graphyn:ingest_events:{id}, 24h TTL) enabling cross-worker
                   SSE streaming. get_job() checks in-process dict first, then
                   falls back to Redis (SCALE-2 fix).
+Provenance:       Every finished job writes datasets/input/.ingest/<job_id>.json
+                  (source URLs or HF repo/split/revision + resolved commit sha,
+                  per-file sha256, content_hash) and records a
+                  ``dataset.ingest_finish`` audit event (category ``data``).
+                  HF jobs stop after ``max_rows`` rows (default 10 000).
 Security:         Label values sanitized via _sanitize_label() (G3-23).
                   Download size capped at 500 MB per file (SEC-4).
                   Path traversal guard via is_relative_to() in HF job (G3-23).
@@ -57,6 +65,9 @@ def _sanitize_label(label: str) -> str:
 
 # Supported audio extensions for URL ingestion
 SUPPORTED_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a"}
+
+# Default cap on rows streamed from a HuggingFace dataset per job.
+DEFAULT_HF_MAX_ROWS = 10_000
 
 # Maximum number of completed jobs to keep in memory (B-29 fix)
 _MAX_COMPLETED_JOBS = 200
@@ -222,10 +233,10 @@ class IngestionService:
     # URL ingestion
     # ------------------------------------------------------------------
 
-    def start_url_job(self, urls: list[str], label: str) -> str:
+    def start_url_job(self, urls: list[str], label: str, *, actor: Optional[str] = None) -> str:
         """Start a background job to download each URL into workspace/datasets/input/{label}/.
 
-        Returns the job_id immediately.
+        Returns the job_id immediately. *actor* is recorded on the finish audit event.
         """
         job_id = uuid.uuid4().hex
         job = IngestionJob(job_id=job_id, status="running")
@@ -234,13 +245,17 @@ class IngestionService:
         thread = threading.Thread(
             target=self._run_url_job,
             args=(job, urls, label),
+            kwargs={"actor": actor},
             daemon=True,
         )
         thread.start()
         return job_id
 
-    def _run_url_job(self, job: IngestionJob, urls: list[str], label: str) -> None:
+    def _run_url_job(
+        self, job: IngestionJob, urls: list[str], label: str, *, actor: Optional[str] = None
+    ) -> None:
         """Background worker: download each URL, validate, and check for corruption."""
+        saved: list[tuple[Path, str]] = []
         try:
             import httpx
         except ImportError:
@@ -250,6 +265,7 @@ class IngestionService:
             })
             job.set_status("failed")
             _persist_job_to_redis(job)
+            self._finish_provenance(job, {"kind": "url", "urls": list(urls), "label": label}, [], actor, ok=False)
             return
 
         dest_dir = self.BASE_INPUT / _sanitize_label(label)
@@ -389,6 +405,7 @@ class IngestionService:
             total_files += 1
             total_duration += duration
             label_distribution[label] = label_distribution.get(label, 0) + 1
+            saved.append((dest_path, url))
 
             job.append_progress({
                 "type": "progress",
@@ -397,16 +414,102 @@ class IngestionService:
                 "message": f"Downloaded to {dest_path} ({duration:.2f}s)",
             })
 
+        prov = self._finish_provenance(
+            job, {"kind": "url", "urls": list(urls), "label": _sanitize_label(label)}, saved, actor, ok=True
+        )
         # Emit summary event
         job.append_progress({
             "type": "summary",
             "total_files": total_files,
             "total_duration_seconds": total_duration,
             "label_distribution": label_distribution,
+            "content_hash": prov.get("content_hash"),
         })
         job.set_status("completed")
         # Flush final state to Redis so other workers can stream it (SCALE-2 fix)
         _persist_job_to_redis(job)
+
+    # ------------------------------------------------------------------
+    # Provenance + audit
+    # ------------------------------------------------------------------
+
+    def _finish_provenance(
+        self,
+        job: IngestionJob,
+        source: dict,
+        saved: list[tuple[Path, str]],
+        actor: Optional[str],
+        *,
+        ok: bool,
+        error: Optional[str] = None,
+    ) -> dict:
+        """Write ``.ingest/<job_id>.json`` and record ``dataset.ingest_finish``.
+
+        Best effort: provenance / audit failures are logged, never raised.
+        """
+        import hashlib
+        import json
+        from datetime import datetime, timezone
+
+        base = self.BASE_INPUT
+        files: list[dict] = []
+        for path, origin in saved:
+            try:
+                h = hashlib.sha256()
+                with open(path, "rb") as fh:
+                    for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                        h.update(chunk)
+                rel = path.resolve().relative_to(base.resolve()).as_posix()
+                files.append({"path": rel, "sha256": h.hexdigest(), "size": path.stat().st_size, "origin": origin})
+            except (OSError, ValueError) as exc:
+                logger.debug("ingest provenance skip %s: %s", path, exc)
+        try:
+            from app.core.mlops.dataset_versions import aggregate_content_hash
+
+            content_hash = aggregate_content_hash([(f["path"], f["sha256"]) for f in files])
+        except Exception:
+            content_hash = None
+        labels = sorted({f["path"].split("/", 1)[0] for f in files})
+        prov = {
+            "job_id": job.job_id,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "status": "completed" if ok else "failed",
+            "source": source,
+            "labels": labels,
+            "file_count": len(files),
+            "content_hash": content_hash,
+            "files": files,
+        }
+        if error:
+            prov["error"] = error
+        try:
+            pdir = base / ".ingest"
+            pdir.mkdir(parents=True, exist_ok=True)
+            (pdir / f"{job.job_id}.json").write_text(json.dumps(prov, indent=2) + "\n", encoding="utf-8")
+        except OSError as exc:
+            logger.warning("ingest provenance write failed for %s: %s", job.job_id, exc)
+        try:
+            from app.core.trust.audit import record_audit
+
+            record_audit(
+                actor=actor or "system",
+                action="dataset.ingest_finish",
+                resource_type="dataset_input",
+                resource_id=",".join(labels) or str(source.get("label") or job.job_id),
+                meta={
+                    "job_id": job.job_id,
+                    "source": source,
+                    "count": len(files),
+                    "content_hash": content_hash,
+                    "files": [{"path": f["path"], "sha256": f["sha256"]} for f in files[:500]],
+                    "files_truncated": len(files) > 500,
+                    **({"error": error} if error else {}),
+                },
+                result="success" if ok else "failure",
+            )
+        except Exception as exc:
+            logger.debug("ingest audit failed: %s", exc)
+        return prov
 
     # ------------------------------------------------------------------
     # HuggingFace ingestion
@@ -419,10 +522,14 @@ class IngestionService:
         audio_col: str,
         label_col: Optional[str],
         label_override: Optional[str],
+        *,
+        max_rows: int = DEFAULT_HF_MAX_ROWS,
+        revision: Optional[str] = None,
+        actor: Optional[str] = None,
     ) -> str:
         """Start a background job to stream a HuggingFace dataset and save audio samples.
 
-        Returns the job_id immediately.
+        Stops after *max_rows* rows. Returns the job_id immediately.
         """
         job_id = uuid.uuid4().hex
         job = IngestionJob(job_id=job_id, status="running")
@@ -431,6 +538,7 @@ class IngestionService:
         thread = threading.Thread(
             target=self._run_hf_job,
             args=(job, repo_id, split, audio_col, label_col, label_override),
+            kwargs={"max_rows": max_rows, "revision": revision, "actor": actor},
             daemon=True,
         )
         thread.start()
@@ -444,42 +552,91 @@ class IngestionService:
         audio_col: str,
         label_col: Optional[str],
         label_override: Optional[str],
+        *,
+        max_rows: int = DEFAULT_HF_MAX_ROWS,
+        revision: Optional[str] = None,
+        actor: Optional[str] = None,
     ) -> None:
         """Background worker: stream HuggingFace dataset and save audio samples."""
+        label_override = (label_override or "").strip() or None
+        label_col = (label_col or "").strip() or None
+        max_rows = max(1, int(max_rows or DEFAULT_HF_MAX_ROWS))
+        source = {
+            "kind": "huggingface",
+            "repo_id": repo_id,
+            "split": split,
+            "revision": revision or None,
+            "resolved_sha": None,
+            "audio_col": audio_col,
+            "label_col": label_col,
+            "label_override": label_override,
+            "max_rows": max_rows,
+        }
+        saved: list[tuple[Path, str]] = []
+
+        def _fail(message: str) -> None:
+            job.append_progress({"type": "error", "message": message})
+            job.set_status("failed")
+            _persist_job_to_redis(job)
+            self._finish_provenance(job, source, saved, actor, ok=False, error=message)
+
         try:
             from datasets import load_dataset  # type: ignore
         except ImportError:
-            job.append_progress({
-                "type": "error",
-                "message": "The 'datasets' library is not installed; cannot ingest from HuggingFace",
-            })
-            job.set_status("failed")
-            _persist_job_to_redis(job)
+            _fail(
+                "The 'datasets' library is not installed on the API host; cannot ingest from "
+                "HuggingFace (install the 'hf' extra: pip install -e '.[hf]')"
+            )
             return
 
+        source["resolved_sha"] = _resolve_hf_revision(repo_id, revision)
         try:
-            dataset = load_dataset(repo_id, split=split, streaming=True)
+            load_kwargs: dict = {"split": split, "streaming": True}
+            if revision:
+                load_kwargs["revision"] = revision
+            dataset = load_dataset(repo_id, **load_kwargs)
         except Exception as exc:
-            job.append_progress({
-                "type": "error",
-                "message": f"Failed to load HuggingFace dataset '{repo_id}': {type(exc).__name__}: {exc}",
-            })
-            job.set_status("failed")
-            _persist_job_to_redis(job)
+            _fail(f"Failed to load HuggingFace dataset '{repo_id}': {type(exc).__name__}: {exc}")
             return
+
+        # ClassLabel columns stream ints; map them back to their names.
+        label_names = None
+        try:
+            feats = getattr(dataset, "features", None)
+            feat = feats.get(label_col) if (feats is not None and label_col) else None
+            if feat is not None and hasattr(feat, "int2str"):
+                label_names = feat
+        except Exception:
+            label_names = None
 
         total_files = 0
         total_duration = 0.0
         label_distribution: dict[str, int] = {}
         files_failed = 0
+        rows_seen = 0
 
         try:
             for i, sample in enumerate(dataset):
+                if i >= max_rows:
+                    job.append_progress({
+                        "type": "progress",
+                        "url": f"sample_{i}",
+                        "status": "info",
+                        "message": f"Stopped after max_rows={max_rows} rows",
+                    })
+                    break
+                rows_seen += 1
                 # Determine label for this sample
                 if label_override:
                     label = _sanitize_label(label_override)
                 elif label_col and label_col in sample:
-                    label = _sanitize_label(str(sample[label_col]))
+                    raw_label = sample[label_col]
+                    if label_names is not None and isinstance(raw_label, int):
+                        try:
+                            raw_label = label_names.int2str(raw_label)
+                        except Exception:
+                            pass
+                    label = _sanitize_label(str(raw_label))
                 else:
                     label = "default"
 
@@ -542,6 +699,7 @@ class IngestionService:
                 total_files += 1
                 total_duration += duration
                 label_distribution[label] = label_distribution.get(label, 0) + 1
+                saved.append((saved_path, f"{repo_id}:{split}[{i}]"))
 
                 job.append_progress({
                     "type": "progress",
@@ -551,20 +709,20 @@ class IngestionService:
                 })
 
         except Exception as exc:
-            job.append_progress({
-                "type": "error",
-                "message": f"Streaming error: {type(exc).__name__}: {exc}",
-            })
-            job.set_status("failed")
-            _persist_job_to_redis(job)
+            _fail(f"Streaming error: {type(exc).__name__}: {exc}")
             return
 
+        source["rows_read"] = rows_seen
+        prov = self._finish_provenance(job, source, saved, actor, ok=True)
         # Emit summary event
         job.append_progress({
             "type": "summary",
             "total_files": total_files,
             "total_duration_seconds": total_duration,
             "label_distribution": label_distribution,
+            "rows_read": rows_seen,
+            "resolved_sha": source.get("resolved_sha"),
+            "content_hash": prov.get("content_hash"),
         })
         job.set_status("completed")
         # Flush final state to Redis so other workers can stream it (SCALE-2 fix)
@@ -633,6 +791,19 @@ class IngestionService:
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
+def _resolve_hf_revision(repo_id: str, revision: Optional[str]) -> Optional[str]:
+    """Commit sha of the dataset revision on the Hub (None when unavailable)."""
+    try:
+        from huggingface_hub import HfApi  # type: ignore
+
+        info = HfApi().dataset_info(repo_id, revision=revision or None, timeout=15)
+        sha = getattr(info, "sha", None)
+        return str(sha) if sha else None
+    except Exception as exc:  # offline, private repo, old hub client …
+        logger.debug("HF revision resolve failed for %s: %s", repo_id, exc)
+        return None
+
 
 def _get_audio_duration(path: str) -> Optional[float]:
     """Return audio duration in seconds, or None if the file cannot be decoded."""

@@ -52,3 +52,52 @@ def test_missing_smtp_fails_closed(installed_cls, monkeypatch):
     node = installed_cls(config={"to": "ops@example.com", "dry_run": False}, seed=0)
     with pytest.raises(RuntimeError, match="needs-credentials"):
         node.process({"input": {"body": "x"}})
+
+
+# ── recipient allowlist / payload recipients (review fixes) ──────────────────
+
+def test_payload_recipients_refused_by_default(installed_cls, monkeypatch):
+    monkeypatch.setenv("GRAPHYN_SMTP_DRY_RUN", "1")
+    node = installed_cls(config={}, seed=0)
+    with pytest.raises(ValueError, match="allow_payload_recipients"):
+        node.process({"input": {"to": "attacker@evil.example", "body": "x"}})
+
+
+def test_payload_recipients_opt_in(installed_cls, monkeypatch):
+    monkeypatch.setenv("GRAPHYN_SMTP_DRY_RUN", "1")
+    node = installed_cls(config={"allow_payload_recipients": True,
+                                 "allowed_recipient_domains": ["example.com"]}, seed=0)
+    out = node.process({"input": {"to": "a@team.example.com", "body": "x"}})["output"]
+    assert out.to == ["a@team.example.com"]
+    with pytest.raises(ValueError, match="allowed_recipient_domains"):
+        node.process({"input": {"to": "a@evil.example", "body": "x"}})
+
+
+def test_config_recipient_domain_allowlist_and_injection(installed_cls, monkeypatch):
+    monkeypatch.setenv("GRAPHYN_SMTP_DRY_RUN", "1")
+    node = installed_cls(config={"to": "x@other.org", "allowed_recipient_domains": ["example.com"]}, seed=0)
+    with pytest.raises(ValueError, match="allowed_recipient_domains"):
+        node.process({"input": {"body": "x"}})
+    bad = installed_cls(config={"to": "a@example.com\nBcc: z@evil.example"}, seed=0)
+    with pytest.raises(ValueError, match="invalid recipient"):
+        bad.process({"input": {"body": "x"}})
+
+
+def test_payload_from_ignored_without_opt_in(installed_cls, monkeypatch):
+    monkeypatch.setenv("GRAPHYN_SMTP_DRY_RUN", "1")
+    node = installed_cls(config={"to": "ops@example.com"}, seed=0)
+    out = node.process({"input": {"from": "ceo@bank.example", "body": "x"}})["output"]
+    assert out.from_addr != "ceo@bank.example"
+    assert node.take_external_calls() == []  # dry-run: no egress recorded
+
+
+def test_smtp_send_recorded(installed_cls, monkeypatch):
+    from unittest.mock import MagicMock, patch
+    monkeypatch.delenv("GRAPHYN_SMTP_DRY_RUN", raising=False)
+    monkeypatch.setenv("GRAPHYN_SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("GRAPHYN_SMTP_FROM", "bot@example.com")
+    node = installed_cls(config={"to": "ops@example.com"}, seed=0)
+    with patch("smtplib.SMTP", MagicMock()):
+        node.process({"input": {"body": "x"}})
+    calls = node.take_external_calls()
+    assert calls and calls[0]["kind"] == "smtp" and calls[0]["url"].startswith("smtp://smtp.example.com")

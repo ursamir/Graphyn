@@ -53,7 +53,7 @@ User-facing steps: docs/GETTING_STARTED.md. Protocol details: docs/DISTRIBUTED_E
 ```
 app/api/          FastAPI routers
 app/cli/          argparse CLI (`main.py` dispatch; `cmd_*.py` per command group)
-app/mcp/          MCP stdio server (77 tools; +`accept_proposal` when GRAPHYN_MCP_HUMAN_APPROVAL=1 — 78 `register("` calls in `app/mcp/tool_registry.py`)
+app/mcp/          MCP stdio server (79 tools; +`accept_proposal` when GRAPHYN_MCP_HUMAN_APPROVAL=1 — 80 `register("` calls in `app/mcp/tool_registry.py`)
 app/core/         Kernel (config, errors, logger, sdk) plus packages:
                   ir/, nodes/, plugins/, execution/, runs/, artifacts/,
                   notify/, persist/, paths/, trust/, templates/, pipelines/,

@@ -76,7 +76,7 @@ _CLEANUP_LOCK = threading.Lock()
 
 
 @router.post("/cleanup", summary="Clean up old runs and cache")
-def cleanup(body: CleanupRequest = CleanupRequest()):
+def cleanup(request: Request, body: CleanupRequest = CleanupRequest()):
     """Delete finished run journals older than older_than_days.
 
     ``older_than_days=0`` deletes all finished runs (completed/failed/cancelled).
@@ -117,7 +117,7 @@ def cleanup(body: CleanupRequest = CleanupRequest()):
         from app.core.trust.audit import record_audit
 
         record_audit(
-            actor="api",
+            actor=resolve_actor(request),
             action="system.cleanup",
             resource_type="workspace",
             resource_id="cleanup",
@@ -274,15 +274,18 @@ def auth_status():
 
     Does not reveal the token value. Safe for UI banners.
     """
-    from app.core.config import api_token, auth_required, graphyn_env
+    from app.core.config import auth_required, graphyn_env
+    from app.core.trust.identity import load_token_map, token_auth_configured
 
-    token = api_token()
+    configured = token_auth_configured()
     required = auth_required()
     return {
         "auth_required": required,
-        "token_configured": bool(token),
+        "token_configured": configured,
+        # True when GRAPHYN_API_TOKENS[_FILE] maps tokens to named identities.
+        "token_map_configured": bool(load_token_map()),
         "env": graphyn_env(),
-        "ok": (not required) or bool(token),
+        "ok": (not required) or configured,
     }
 
 
@@ -293,6 +296,10 @@ class ScheduleCreateBody(BaseModel):
     project: str = Field(..., min_length=1, max_length=64)
     pipeline: str = Field(..., min_length=1, max_length=64)
     interval_minutes: int = Field(60, ge=1, le=43200)
+    cron: str | None = Field(
+        None, max_length=128,
+        description="Optional 5-field cron (UTC, e.g. '0 2 * * 1-5'); overrides interval_minutes",
+    )
     enabled: bool = True
     env: str = Field("prod", description="draft | staging | prod")
 
@@ -346,6 +353,7 @@ def post_schedule(body: ScheduleCreateBody, request: Request):
                 interval_minutes=body.interval_minutes,
                 enabled=body.enabled,
                 env=body.env,
+                cron=body.cron,
             )
             item = normalize_schedule(item)
         except SchedulesDataError as exc:

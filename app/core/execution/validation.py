@@ -545,6 +545,27 @@ def validate_graph_ir_result(graph: Any, registry: Any) -> dict:
             )
             continue
 
+        # IR 1.3: edges out of an on_error=route node's synthetic error port.
+        from app.core.ir.models import routed_error_port
+
+        _src_ir = next((n for n in graph.nodes if n.id == edge.src_id), None)
+        _err_port = routed_error_port(_src_ir) if _src_ir is not None else None
+        if _err_port is not None and edge.src_port == _err_port:
+            if edge.dst_port not in dst_inst.__class__.input_ports:
+                errors.append(
+                    _finding(
+                        "VAL-MISS-PORT",
+                        "error",
+                        f"Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
+                        f"'{edge.dst_id}' has no input port '{edge.dst_port}'. "
+                        f"Available: {sorted(dst_inst.__class__.input_ports)}",
+                        node_ids=[edge.dst_id],
+                        edge_index=edge_index,
+                        field=edge.dst_port,
+                    )
+                )
+            continue
+
         if edge.src_port not in src_inst.__class__.output_ports:
             available = sorted(src_inst.__class__.output_ports)
             errors.append(

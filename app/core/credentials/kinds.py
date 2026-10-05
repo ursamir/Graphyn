@@ -1,7 +1,8 @@
 # app/core/credentials/kinds.py
 """Extensible credential-kind registry.
 
-Built-in kinds: openai_compat, anthropic, gemini, ollama, smtp, webhook.
+Built-in kinds: openai_compat, anthropic, gemini, ollama, smtp, webhook,
+http_auth (generic HTTP auth for http_request: bearer | basic | custom header).
 Plugins may call register_kind() at import/load time — no API restart needed
 for *using* an already-registered kind with an existing connection.
 """
@@ -15,8 +16,10 @@ from app.core.credentials.errors import CredentialError
 # Secret field names that must never appear in API/MCP list/get responses.
 _ALWAYS_SECRET = frozenset({
     "api_key", "password", "token", "secret", "webhook_url", "url",
-    "authorization", "private_key",
+    "authorization", "private_key", "header_value",
 })
+
+HTTP_AUTH_SCHEMES = ("bearer", "basic", "header")
 
 
 @dataclass(frozen=True)
@@ -107,7 +110,32 @@ def validate_payload(kind_id: str, payload: dict[str, Any], *, partial: bool = F
         for f in kind.fields:
             if f.name not in cleaned and f.default is not None:
                 cleaned[f.name] = f.default
+    if kind.id == "http_auth":
+        _validate_http_auth(cleaned, partial=partial)
     return cleaned
+
+
+def _validate_http_auth(payload: dict[str, Any], *, partial: bool) -> None:
+    """Scheme-specific checks for ``http_auth`` (never echoes secret values)."""
+    scheme = payload.get("scheme")
+    if scheme is None and partial:
+        return
+    scheme = str(scheme or "").strip().lower()
+    if scheme not in HTTP_AUTH_SCHEMES:
+        raise CredentialError(
+            f"http_auth.scheme must be one of {', '.join(HTTP_AUTH_SCHEMES)}"
+        )
+    payload["scheme"] = scheme
+    if partial:
+        return
+    need = {"bearer": ("token",), "basic": ("username", "password"), "header": ("header_name", "header_value")}
+    for name in need[scheme]:
+        if payload.get(name) in (None, ""):
+            raise CredentialError(f"Field {name!r} is required for http_auth scheme {scheme!r}")
+    if scheme == "header":
+        hn = str(payload.get("header_name") or "")
+        if not hn.replace("-", "").replace("_", "").isalnum():
+            raise CredentialError("http_auth.header_name must be a plain HTTP header token")
 
 
 def redact_payload(kind_id: str, payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -218,6 +246,28 @@ def _register_builtins() -> None:
         fields=[
             KindField("url", secret=True, required=True, description="Webhook URL"),
             KindField("events", secret=False, required=False, description="Optional event filter CSV", default=""),
+        ],
+        env_fallbacks={},
+    ))
+    register_kind(CredentialKind(
+        id="http_auth",
+        label="HTTP auth",
+        description=(
+            "Generic HTTP authentication for http_request: bearer token, basic "
+            "username/password, or a custom header. Optional allowed_hosts binds "
+            "the secret to specific hosts."
+        ),
+        fields=[
+            KindField("scheme", secret=False, required=True, description="bearer | basic | header", default="bearer"),
+            KindField("token", secret=True, required=False, description="Bearer token (scheme=bearer)", default=""),
+            KindField("username", secret=False, required=False, description="Username (scheme=basic)", default=""),
+            KindField("password", secret=True, required=False, description="Password (scheme=basic)", default=""),
+            KindField("header_name", secret=False, required=False, description="Header name (scheme=header), e.g. X-API-Key", default=""),
+            KindField("header_value", secret=True, required=False, description="Header value (scheme=header)", default=""),
+            KindField(
+                "allowed_hosts", secret=False, required=False, default="",
+                description="Optional CSV of hostnames this secret may be sent to (empty = any egress-allowed host)",
+            ),
         ],
         env_fallbacks={},
     ))

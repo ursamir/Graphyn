@@ -206,7 +206,13 @@ def replay_artifact(artifact_id: str):
     try:
         new_run_mgr._write_meta_field("replay_of", original_run_id)
         new_run_mgr._write_meta_field("trigger", "replay")
-        new_run_mgr._write_meta_field("actor", "api")
+    except Exception:
+        pass
+    try:
+        from app.core.execution.graph_prepare import persist_run_identity
+
+        # Token-bound actor + actor_verified (request identity ContextVar).
+        persist_run_identity(new_run_mgr, actor="", trigger="replay")
     except Exception:
         pass
 

@@ -1,9 +1,9 @@
 # MCP Server
 
-> **Inventory (2026-09-28):** `tool_registry.py` registers **~77 tools** (+`accept_proposal` when human-approval enabled). Legacy `secrets_list` / `secrets_set` removed — use credential tools. See [`MCP_AGENT_PACK_COVERAGE.md`](./MCP_AGENT_PACK_COVERAGE.md).
+> **Inventory (2026-09-28):** `tool_registry.py` registers **~79 tools** (+`accept_proposal` when human-approval enabled; incl. approval-gate tools `list_pending_gates` / `decide_gate`). Legacy `secrets_list` / `secrets_set` removed — use credential tools. See [`MCP_AGENT_PACK_COVERAGE.md`](./MCP_AGENT_PACK_COVERAGE.md).
 
 
-The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes **~77 tools by default** (+1 when `GRAPHYN_MCP_HUMAN_APPROVAL=1`, which enables `accept_proposal`) over stdio transport. Prefer `tool_registry.py` / MCP_AGENT_PACK_COVERAGE.md as source of truth.
+The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes **~79 tools by default** (+1 when `GRAPHYN_MCP_HUMAN_APPROVAL=1`, which enables `accept_proposal`) over stdio transport. Prefer `tool_registry.py` / MCP_AGENT_PACK_COVERAGE.md as source of truth.
 
 **File:** `app/mcp/`  
 **Transport:** stdio (JSON-RPC on stdin/stdout, logs to stderr)  
@@ -27,7 +27,7 @@ python -m app.mcp.server
 app/mcp/
 ├── server.py          # startup, stdio loop, tool dispatch, get_tool()
 ├── auth.py            # check_auth() — Bearer token middleware
-├── tool_registry.py   # register_all_tools() — ~77 tools
+├── tool_registry.py   # register_all_tools() — ~79 tools
 ├── handlers/
     ├── discovery.py   # list_nodes
     ├── graph.py       # generate_graph, validate_graph, get_graph_schema,
@@ -54,7 +54,7 @@ Token from `GRAPHYN_API_TOKEN`. Expected at `arguments._meta.auth_token`. In dev
 
 ## Tool inventory (see MCP_AGENT_PACK_COVERAGE for full list)
 
-> **77 tools** are registered by default (78 `register("` calls in `app/mcp/tool_registry.py`; `accept_proposal` is registered only when `GRAPHYN_MCP_HUMAN_APPROVAL=1`). The historical “29 tools” table below is **partial** — journey/ship/audit/credentials/notifications tools were added later; full list in [MCP_AGENT_PACK_COVERAGE.md](./MCP_AGENT_PACK_COVERAGE.md).
+> **79 tools** are registered by default (80 `register("` calls in `app/mcp/tool_registry.py`; `accept_proposal` is registered only when `GRAPHYN_MCP_HUMAN_APPROVAL=1`). The historical “29 tools” table below is **partial** — journey/ship/audit/credentials/notifications tools were added later; full list in [MCP_AGENT_PACK_COVERAGE.md](./MCP_AGENT_PACK_COVERAGE.md).
 
 ### Core tools (original set)
 
@@ -97,7 +97,7 @@ Token from `GRAPHYN_API_TOKEN`. Expected at `arguments._meta.auth_token`. In dev
 
 ## Intentional omissions
 
-Schedules (`list_schedules`, `upsert_schedule`, `enable_schedule`, `delete_schedule`, `run_schedule_now`) and worker/job observe (`list_workers`, `list_jobs`) are MCP tools as well as REST. Document ingest remains REST-oriented; see `API_REFERENCE.md` for the HTTP routes.
+Schedules (`list_schedules`, `upsert_schedule` — accepts optional 5-field UTC `cron`, `enable_schedule`, `delete_schedule`, `run_schedule_now`), approval gates (`list_pending_gates` — one run or all running runs; `decide_gate` — `approve` needs `GRAPHYN_MCP_HUMAN_APPROVAL=1`, `reject` always allowed, actor from the mapped `_meta.auth_token` else `mcp:<actor>` unverified) and worker/job observe (`list_workers`, `list_jobs`) are MCP tools as well as REST. Document ingest remains REST-oriented; see `API_REFERENCE.md` for the HTTP routes.
 
 ---
 

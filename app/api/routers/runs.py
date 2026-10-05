@@ -15,13 +15,16 @@ Owns:             Route definitions for GET /runs, GET /runs/{run_id}
                   GET /runs/{run_id}/checkpoints/**,
                   GET /runs/{run_id}/artifacts,
                   GET /runs/{run_id}/outputs (?with_meta=1, ?node_id=&limit=&offset=),
-                  GET /runs/{run_id}/outputs/zip,
+                  GET /runs/{run_id}/outputs/zip (audited as run.outputs_zip),
                   POST /runs/{run_id}/promote,
                   DELETE /runs/{run_id} (archive; ?purge=true + X-Confirm-Purge),
-                  POST /runs/{run_id}/restore, GET /runs/{run_id}/verify,
+                  POST /runs/{run_id}/restore, GET|POST /runs/{run_id}/verify
+                  (each call recorded in runs/<id>/verify.json + audit
+                  ``run.verified``), GET /runs/{run_id}/verify/history,
+                  GET /runs/compare/diff (2–5 runs; app.core.runs.run_diff),
                   POST /runs/{run_id}/replay; GET /runs/{run_id} adds
                   ``record`` (sealed prove.json), ``record_status``,
-                  ``pipeline_drift``. Every {run_id} accepts a unique
+                  ``pipeline_drift``, ``last_verify`` (also on list rows). Every {run_id} accepts a unique
                   prefix >= 8 chars (app.api.run_ids; ambiguous → 409).
                   GET /runs/{run_id}/provenance.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
@@ -30,6 +33,8 @@ Must NOT:         Contain run persistence logic — delegate to RunJournal,
 Dependencies:     fastapi, app.core.runs.run_journal, app.core.runs.run_nodes,
                   app.core.runs.run_summary, app.core.runs.audit_record,
                   run_archive, run_replay, run_resolve, run_cleanup,
+                  app.core.runs.verify_log, app.core.runs.run_diff,
+                  app.api.actor (token-bound identity),
                   app.core.artifacts.artifact_store,
                   app.core.config, stdlib (json, pathlib, re).
 Reason To Change: New run history endpoint added, or response schema changes.
@@ -96,6 +101,11 @@ def _enrich_run_summary(meta: dict, run_path: Path) -> dict:
     out = dict(meta)
     if "status" in out:
         out["status"] = normalize_status(out.get("status"))
+        # G5: a running run blocked on a human approval gate is shown as
+        # awaiting_approval (durable meta status stays "running").
+        from app.core.runs.gates import awaiting_approval_overlay
+
+        out.update(awaiting_approval_overlay(run_path, out["status"]))
     run_id = str(out.get("run_id") or run_path.name)
     need_graph_name = not (
         isinstance(out.get("graph_name"), str) and str(out.get("graph_name")).strip()
@@ -198,6 +208,34 @@ def list_runs(
     ]
 
 
+@router.get("/compare/diff", summary="What changed between 2–5 runs")
+def compare_diff(
+    ids: str = Query(..., description="Comma-separated run ids (full or unique prefix >= 8), 2–5"),
+    all: bool = Query(False, description="Include equal rows (default: differences only)"),
+):
+    """Settings / data / code / environment / metrics diff of the given runs.
+
+    Uses each run's logical graph snapshot and sealed record (prove.json).
+    Every section row carries per-run ``values`` in ``runs`` order. See
+    docs/API_REFERENCE.md for the response shape.
+    """
+    from app.api.run_ids import run_dir_http
+    from app.core.runs.run_diff import MAX_RUNS, MIN_RUNS, diff_runs
+
+    raw = [x.strip() for x in (ids or "").split(",") if x.strip()]
+    dirs: list[Path] = []
+    for rid in raw:
+        path = run_dir_http(rid, runs_root=_get_runs_root())
+        if path not in dirs:
+            dirs.append(path)
+    if not (MIN_RUNS <= len(dirs) <= MAX_RUNS):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "bad_run_count", "message": f"Pass {MIN_RUNS}-{MAX_RUNS} distinct run ids", "count": len(dirs)},
+        )
+    return diff_runs(dirs, include_all=bool(all))
+
+
 def _with_results(row: dict, run_path: Path, *, include_regression: bool = True) -> dict:
     """Attach ``display_name`` / ``summary`` / ``regression`` (cached, best-effort).
 
@@ -212,6 +250,12 @@ def _with_results(row: dict, run_path: Path, *, include_regression: bool = True)
         fields = {"display_name": row.get("graph_name") or run_id, "summary": None, "regression": None}
     out = dict(row)
     out.update(fields)
+    try:
+        from app.core.runs.verify_log import last_verify
+
+        out["last_verify"] = last_verify(run_path)
+    except Exception:
+        out["last_verify"] = None
     try:
         from app.core.runs.run_summary import apply_headline_metrics
 
@@ -287,9 +331,13 @@ def get_run(run_id: str):
     from app.core.runs.audit_record import load_record
 
     record = load_record(run_path)
+    from app.core.runs.verify_log import last_verify
+
     return {
         "run_id": run_id,
         "meta": meta,
+        # Latest recorded verification (runs/<id>/verify.json) or null.
+        "last_verify": last_verify(run_path),
         # Sealed audit record (prove.json); null until the run is terminal.
         "record": record,
         "record_status": "sealed" if record is not None else "pending",
@@ -429,18 +477,55 @@ def restore_run_endpoint(run_id: str, request: Request):
 # ── Audit: verify / replay ────────────────────────────────────────────────────
 
 @router.get("/{run_id}/verify", summary="Verify a run's sealed audit record")
-def verify_run_endpoint(run_id: str):
+@router.post("/{run_id}/verify", summary="Verify a run's sealed audit record (recorded)")
+def verify_run_endpoint(run_id: str, request: Request):
     """Re-hash the graph snapshot, external inputs (current content), stored
     output folders, the record hash and its position in the project chain.
 
     ``status``: ``pass`` | ``changed`` (inputs/outputs differ now) | ``fail``
     (tamper / hash mismatch) | ``unsealed`` (no prove.json yet). Per-check
     rows: ``{check, status, expected, actual, target?, node_id?, details?}``.
+
+    Every call (GET or POST) is recorded: appended to ``runs/<id>/verify.json``
+    and audited as ``run.verified`` with the caller's token-bound actor. Added
+    fields: ``checked_at``, ``actor``, ``actor_verified``, ``claimed_actor``,
+    ``summary`` ``{passed, total, failed, changed, missing, skipped}``,
+    ``history_count``. The sealed record itself is never modified.
     """
+    from app.api.actor import resolve_identity
     from app.core.runs.audit_record import verify_run
+    from app.core.runs.verify_log import record_verification
 
     run_path = _run_dir(run_id)
-    return verify_run(run_path, meta=_load_meta(run_path))
+    result = verify_run(run_path, meta=_load_meta(run_path))
+    ident = resolve_identity(request)
+    entry = record_verification(
+        run_path,
+        result,
+        actor=ident["actor"],
+        actor_verified=bool(ident["actor_verified"]),
+        claimed_actor=ident.get("claimed_actor"),
+    )
+    out = dict(result)
+    out.update({
+        "checked_at": entry["checked_at"],
+        "actor": entry["actor"],
+        "actor_verified": entry["actor_verified"],
+        "claimed_actor": entry["claimed_actor"],
+        "summary": entry["summary"],
+        "history_count": entry.get("history_count"),
+    })
+    return out
+
+
+@router.get("/{run_id}/verify/history", summary="Past verifications of a run")
+def verify_history_endpoint(run_id: str, limit: int = Query(50, ge=1, le=200)):
+    """Newest-first verification history from ``runs/<id>/verify.json``."""
+    from app.core.runs.verify_log import load_verify_history
+
+    run_path = _run_dir(run_id)
+    hist = load_verify_history(run_path)
+    return {"run_id": run_path.name, "total": len(hist), "history": list(reversed(hist))[:limit]}
 
 
 @router.post("/{run_id}/replay", summary="Replay a run from its stored graph")
@@ -454,7 +539,12 @@ def replay_run_endpoint(run_id: str, request: Request, body: dict | None = Body(
     ``run.replay``.
     """
     from app.api.actor import resolve_actor
-    from app.core.runs.run_replay import InputsChanged, ReplayGraphMissing, start_replay
+    from app.core.runs.run_replay import (
+        InputsChanged,
+        ReplayGraphMissing,
+        ReplayInputsUnavailable,
+        start_replay,
+    )
 
     payload = body if isinstance(body, dict) else {}
     run_path = _run_dir(run_id)
@@ -472,6 +562,8 @@ def replay_run_endpoint(run_id: str, request: Request, body: dict | None = Body(
         )
     except ReplayGraphMissing as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ReplayInputsUnavailable as exc:
+        raise HTTPException(status_code=409, detail={"code": "replay_inputs_unavailable", "message": str(exc)})
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Replay failed: {exc}")
 
@@ -541,8 +633,12 @@ def get_run_status(run_id: str):
         progress_pct = 100.0
 
     node_progress = meta.get("node_progress")
+    from app.core.runs.gates import awaiting_approval_overlay
+
+    overlay = awaiting_approval_overlay(run_path, status)
     return {
-        "status": status,
+        **overlay,
+        "status": overlay.get("status", status),
         "progress_pct": progress_pct,
         "current_node": current_node,
         # Latest node_progress event per node_id (live training progress).
@@ -661,7 +757,7 @@ def list_run_outputs(
 
 
 @router.get("/{run_id}/outputs/zip", summary="Download run outputs as a zip")
-def download_run_outputs_zip(run_id: str):
+def download_run_outputs_zip(run_id: str, request: Request):
     """Zip output files under ``<node_id>/<filename>`` (``run/`` when unattributed).
 
     Uses a higher prioritised file cap than the UI listing. Headers:
@@ -676,6 +772,16 @@ def download_run_outputs_zip(run_id: str):
     payload, byte_capped, packed = pack_outputs_zip(entries)
     filename = f"{run_id}-outputs.zip"
     truncated = bool(list_capped or byte_capped)
+    from app.api.download_audit import audit_bytes_download
+
+    audit_bytes_download(
+        request,
+        action="run.outputs_zip",
+        resource_type="run",
+        resource_id=run_id,
+        payload=payload,
+        extra={"file": filename, "files": packed, "truncated": truncated},
+    )
     return Response(
         content=payload,
         media_type="application/zip",

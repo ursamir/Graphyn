@@ -1,0 +1,39 @@
+[plugin]
+name             = "http-request"
+version          = "1.1.0"
+description      = "Generic HTTP request node: safe retries, response size cap, credential-store or env auth (real network only)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["http", "request", "workflow", "common"]
+
+dependencies = []
+
+optional_dependencies = [
+    "httpx>=0.27",
+]
+
+runtime = "inprocess"
+node_types = ["http_request"]
+
+[config_schema.http_request]
+method = {  type = "string", title = "Method", default = "GET", description = "HTTP method. One of: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.", enum = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"], ui = { group = "Basic" } }
+url = { type = "string", title = "URL", default = "", description = "Full request URL (https recommended).", ui = { group = "Basic" } }
+headers = {  type = "object", title = "Headers", default = { }, description = "HTTP headers as a JSON object of string keys to string values.", widget = "json", ui = { group = "Basic" } }
+query = {  type = "object", title = "Query", default = { }, description = "URL query parameters as a JSON object.", widget = "json", ui = { group = "Basic" } }
+json_body = { type = "object", title = "JSON body", description = "JSON request body (object or array). Prefer this over raw body for JSON APIs; omit to use connected payload.", widget = "json", ui = { group = "Basic" } }
+body = { type = "string", title = "Body", description = "Raw request body string used when json_body is empty.", ui = { group = "Basic" } }
+timeout_s = { type = "number", title = "Timeout (s)", default = 30.0, description = "Request/operation timeout in seconds.", ui = { group = "Advanced" } }
+retry = { type = "integer", title = "Retries", default = 0, description = "Retries after a retryable failure (status in retry_on_status or a connection error). Non-idempotent methods (POST/PATCH) retry only when idempotency_key is set.", ui = { group = "Advanced" } }
+retry_on_status = { type = "array", title = "Retry on status", default = [429, 500, 502, 503, 504], description = "HTTP statuses that may be retried (default 429, 500, 502, 503, 504). Other 4xx/5xx fail immediately.", ui = { group = "Advanced" } }
+retry_backoff_s = { type = "number", title = "Retry backoff (s)", default = 0.5, description = "Base delay for exponential backoff with jitter.", ui = { group = "Advanced" } }
+retry_backoff_max_s = { type = "number", title = "Retry backoff cap (s)", default = 10.0, description = "Maximum delay between attempts (also caps Retry-After).", ui = { group = "Advanced" } }
+idempotency_key = { type = "string", title = "Idempotency key", default = "", description = "Sent as the Idempotency-Key header; enables retries for POST/PATCH.", ui = { group = "Advanced" } }
+max_response_bytes = { type = "integer", title = "Max response bytes", default = 5242880, description = "Abort when the streamed response body exceeds this size (default 5 MB).", ui = { group = "Advanced" } }
+provider = { type = "string", title = "Provider", default = "http", description = "HTTP provider. Only http (real network) is supported.", enum = ["http"], ui = { group = "Basic" } }
+connection_id = { type = "string", title = "Credential connection id", default = "", description = "Credential store connection (kind http_auth: bearer | basic | header). Takes precedence over auth_env. Only used when set explicitly.", ui = { group = "Basic" } }
+auth_env = { type = "string", title = "Auth env / secret name", default = "", description = "Environment variable or Graphyn secret NAME for the bearer/token (never paste the secret into IR). Fallback when connection_id is empty.", ui = { group = "Advanced" } }
+auth_header = { type = "string", title = "Auth header", default = "Authorization", description = "HTTP header that receives the auth_env value (default Authorization).", ui = { group = "Advanced" } }
+auth_prefix = { type = "string", title = "Auth prefix", default = "Bearer ", description = "Prefix prepended to the auth_env secret (e.g. 'Bearer '). Use empty for raw tokens.", ui = { group = "Advanced" } }

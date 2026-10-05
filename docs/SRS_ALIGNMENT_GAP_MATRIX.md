@@ -195,7 +195,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | Check IDs VAL-DUP/CYCLE/SECRET/… | 14.2 | `validate_graph_ir_result` emits VAL-* + severity | Confirmed | Wave A batch 1 | A |
 | Result schema valid/errors[]/warnings[] | 14.3 | full §14.3 shape from validate endpoint | Confirmed | Wave A batch 1 | A |
 | IR-006 secret fail-closed | 8.7 | `ir/secret_policy.py` | Confirmed | | — |
-| schema_version 1.2 | IR-001/002 | `ir/loader.py` CURRENT_IR_VERSION=1.2 | Confirmed | | — |
+| schema_version 1.3 | IR-001/002 | `ir/loader.py` CURRENT_IR_VERSION=1.3 (1.3 adds `on_error` / `retry`) | Confirmed | | — |
 
 ### 3.6 Distributed — §15
 

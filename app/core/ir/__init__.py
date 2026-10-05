@@ -5,7 +5,8 @@ Responsibility:   Public API surface for the Graph IR package. Re-exports all
                   types, loaders, and constants so callers use a single import
                   path rather than deep sub-module imports.
 Owns:             Re-export declarations for GraphIR, IRNode, IREdge,
-                  IRMetadata, IRCapabilityMetadata, IRParameter, IRPlacement, load_ir,
+                  IRMetadata, IRCapabilityMetadata, IRParameter, IRPlacement, IROnError,
+                  IRRetry, load_ir,
                   dump_ir, load_ir_from_file, dump_ir_to_file,
                   CURRENT_IR_VERSION, IRValidationError, IRVersionError.
 Public Surface:   All names listed in __all__.
@@ -20,8 +21,10 @@ from app.core.ir.models import (
     IREdge,
     IRMetadata,
     IRNode,
+    IROnError,
     IRParameter,
     IRPlacement,
+    IRRetry,
     IRUIPosition,
     IRUIState,
 )
@@ -42,8 +45,10 @@ __all__ = [
     "IREdge",
     "IRMetadata",
     "IRNode",
+    "IROnError",
     "IRParameter",
     "IRPlacement",
+    "IRRetry",
     "IRUIPosition",
     "IRUIState",
     # Loader

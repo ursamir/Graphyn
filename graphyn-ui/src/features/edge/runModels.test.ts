@@ -6,6 +6,9 @@ import {
   parseLabelsCsv,
   pickDefaultRunModel,
   runModelSummary,
+  runModelTitle,
+  isGeneratedModelFileName,
+  splitShipModels,
   runModelsFromOutputs,
   shipLineageModel,
 } from './runModels'
@@ -125,3 +128,31 @@ describe('shipLineageModel', () => {
     ).toBeNull()
   })
 })
+
+describe('runModelTitle', () => {
+  it('replaces generated compiled_<hash> names with a friendly one', () => {
+    expect(isGeneratedModelFileName('compiled_3fa9c2d1e0.keras')).toBe(true)
+    expect(isGeneratedModelFileName('model.keras')).toBe(false)
+    expect(
+      runModelTitle({ path: 'w/a/compiled_3fa9c2d1e0.keras', kind: 'trained', node_type: 'keras_trainer', path_label: 'Path A' }),
+    ).toBe('Path A — Trained model · Keras Trainer')
+    expect(runModelTitle({ path: 'w/a/compiled_untrained_ab12cd.keras', kind: 'compiled_untrained' })).toBe('Untrained model')
+    expect(runModelTitle({ path: 'w/a/best_model.keras' })).toBe('best_model.keras')
+  })
+})
+
+describe('splitShipModels', () => {
+  const a = { path: 'a.keras', kind: 'trained', format: 'keras', path_id: 'A', metrics: { test_accuracy: 0.7 } }
+  const b = { path: 'b.keras', kind: 'trained', format: 'keras', path_id: 'B', metrics: { test_accuracy: 0.8 } }
+  const u = { path: 'compiled_untrained.keras', kind: 'compiled_untrained', format: 'keras' }
+  const t = { path: 'm.tflite', kind: 'optimized', format: 'tflite' }
+  it('puts shippable trained models first, best first', () => {
+    const r = splitShipModels([u, a, t, b])
+    expect(r.main.map((m) => m.path)).toEqual(['b.keras', 'a.keras'])
+    expect(r.rest.map((m) => m.path)).toEqual(['compiled_untrained.keras', 'm.tflite'])
+  })
+  it('prefers the best path id', () => {
+    expect(splitShipModels([a, b], 'A').main[0].path).toBe('a.keras')
+  })
+})
+

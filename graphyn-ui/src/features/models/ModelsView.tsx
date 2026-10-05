@@ -1,10 +1,23 @@
 import React from 'react'
 import { Boxes as EmptyBoxes } from 'lucide-react'
 import { Box, CheckCircle2, GitBranch, RefreshCw, Shield } from 'lucide-react'
-import { apiJson } from '../../api/client'
+import { ApiError, apiJson } from '../../api/client'
+import { ActorName } from '../../components/ActorName'
+import { ShortId } from '../../components/ui'
+import {
+  buildModelLineage,
+  datasetLine,
+  lineageStageFor,
+  modelStageLabel,
+  shortHash,
+  stepLine,
+  type LineageMadeFrom,
+  type LineageStage,
+  type ModelLineageView,
+} from './modelLineage'
 import { useAppStore } from '../../store/appStore'
-import { EmptyState, ErrorBanner, LoadingBlock, SegmentedTabs, StatusBadge } from '../../components/ui'
-import { MasterDetail, ViewShell } from '../../layout'
+import { EmptyState, ErrorBanner, LoadingBlock, RunStatusBadge, SegmentedTabs } from '../../components/ui'
+import { MasterDetail, MasterDetailToggle, ViewShell } from '../../layout'
 import { paths } from '../../routes/paths'
 import { navigatePath, parsePathname } from '../../routes/parsePath'
 import { onPathChange } from '../../routes/nav'
@@ -24,12 +37,13 @@ import { apiErrorCode } from '../../api/errorCode'
 import {
   MODEL_STAGE_HELP,
   REQUEST_PROD_HELP,
-  disambiguatedModelTitles,
   findModelForRoute,
   modelDisplayName,
-  modelPrimaryMetricText,
-  preferredStageKey,
+  modelRowSubtitle,
+  modelStageSummary,
+  defaultModelName,
   stageFacts,
+  modelUsedInRuns,
   stageRunId,
   type ModelStage,
 } from './modelDisplay'
@@ -40,6 +54,9 @@ type ProjectRun = {
   graph_name?: string
   display_name?: string
   created_at?: string
+  /** meta.lineage_request — Ship declares the registered model it packages here. */
+  lineage_request?: unknown
+  lineage?: unknown
 }
 
 type ModelRow = {
@@ -93,6 +110,11 @@ export default function ModelsView() {
   /** Selected row to scroll into view once it is rendered in the master list. */
   const [revealModel, setRevealModel] = React.useState<string | null>(null)
   const listRef = React.useRef<HTMLUListElement | null>(null)
+  /**
+   * `GET /models/{name}/lineage` for the selected model. `unavailable` = older
+   * API (404/405) → client-side Used in + run-level How it was made fallback.
+   */
+  const [lineage, setLineage] = React.useState<{ name: string; view: ModelLineageView | null; unavailable: boolean } | null>(null)
 
   // Back / forward (and in-app links) between model URLs.
   React.useEffect(
@@ -181,6 +203,28 @@ export default function ModelsView() {
       cancelled = true
     }
   }, [selected, rows])
+
+  React.useEffect(() => {
+    if (!selected) {
+      setLineage(null)
+      return
+    }
+    let cancelled = false
+    setLineage((prev) => (prev && prev.name === selected ? prev : null))
+    apiJson<unknown>(`/models/${encodeURIComponent(selected)}/lineage`)
+      .then((raw) => {
+        if (!cancelled) setLineage({ name: selected, view: buildModelLineage(raw), unavailable: false })
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        const old = err instanceof ApiError && (err.status === 404 || err.status === 405)
+        // A 404 can also mean "model not found"; either way fall back to the client view.
+        setLineage({ name: selected, view: null, unavailable: old })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selected])
 
   // Path labels / kinds for the stages' source runs (new API; silently absent on old).
   React.useEffect(() => {
@@ -305,7 +349,7 @@ export default function ModelsView() {
           ...(allowUntrained ? { allow_untrained: true } : {}),
         }),
       })
-      pushToast(`Registered ${name} in staging`, 'success')
+      pushToast(`Registered ${name} in Staging`, 'success')
       setRegisterOpen(false)
       setRegName('')
       setRegRunId('')
@@ -354,8 +398,6 @@ export default function ModelsView() {
 
   const filteredRows =
     activeProject && scopeMode === 'workspace' ? rows.filter(inWorkspace) : rows
-  /** List titles; colliding names ("Edge Optimizer model" ×2) get run id + date. */
-  const listTitles = disambiguatedModelTitles(filteredRows)
 
   // Deep link /models/<name>: select that model once the registry list loads.
   React.useEffect(() => {
@@ -369,6 +411,16 @@ export default function ModelsView() {
     setSelected(hit.name)
     setRevealModel(hit.name)
   }, [routeModel, rows, loading, pushToast])
+
+  // Never leave an empty "Select a model" panel: once the list (and the
+  // workspace's run ids) are loaded, pick the first visible model unless a
+  // route model is still being resolved.
+  const firstVisible = defaultModelName(filteredRows)
+  const selectedVisible = Boolean(selected) && filteredRows.some((r) => r.name === selected)
+  React.useEffect(() => {
+    if (loading || routeModel || revealModel || !projectRunsLoaded) return
+    if (!selectedVisible && firstVisible) setSelected(firstVisible)
+  }, [loading, routeModel, revealModel, projectRunsLoaded, selectedVisible, firstVisible])
 
   // The deep-linked model lives outside this workspace's runs → show All workspaces.
   const revealHidden = Boolean(revealModel) && !filteredRows.some((r) => r.name === revealModel)
@@ -395,11 +447,34 @@ export default function ModelsView() {
   /* Ship the staging candidate first (what the user is evaluating), else prod / latest. */
   const primaryStageKey = stages.staging ? 'staging' : stages.prod ? 'prod' : stages.latest ? 'latest' : null
   const primaryRunId = (primaryStageKey ? stageRunId(stages[primaryStageKey]) : null) || undefined
+  const lineageView = lineage && detail && lineage.name === detail.name ? lineage.view : null
+  /** Producing run + step for "How it was made" (lineage made_from, else the stage's run). */
+  const howMade = (stageKey: string | null): { runId: string; step?: string } | null => {
+    if (!stageKey) return null
+    const ls = lineageStageFor(lineageView, stageKey)
+    const runId = ls?.madeFrom?.runId || ls?.runId || stageRunId(stages[stageKey]) || ''
+    if (!runId) return null
+    const step = ls?.madeFrom?.step?.nodeId || ls?.nodeId || stages[stageKey]?.node_id || undefined
+    return { runId, step }
+  }
+  const openHowMade = (stageKey: string | null) => {
+    const h = howMade(stageKey)
+    if (h) openTrace({ runId: h.runId, project: activeProject || undefined, step: h.step })
+  }
+  const usedIn = React.useMemo(
+    () =>
+      detail
+        ? modelUsedInRuns(projectRuns, detail.name, {
+            excludeRunIds: Object.values(detail.stages || {}).map((st) => stageRunId(st)),
+          })
+        : [],
+    [detail, projectRuns],
+  )
 
   return (
     <ViewShell
       title="Models"
-      description="Trained models saved from runs. Each model has stages: staging (candidate) and production (approved)."
+      description="Trained models saved from runs. Each model has stages: Staging (candidate) and Production (approved)."
       toolbar={
         activeProject ? (
           <SegmentedTabs
@@ -521,11 +596,11 @@ export default function ModelsView() {
             </label>
           ) : null}
           <p className="text-[11px] text-ink-500">
-            New models start in <span className="font-medium">staging</span> (candidate). Ask for production
+            New models start in <span className="font-medium">Staging</span> (candidate). Ask for production
             approval once it performs well.
           </p>
           <button type="button" className="btn-primary" disabled={busy} onClick={() => void register(false)}>
-            Register to staging
+            Register to Staging
           </button>
         </div>
       )}
@@ -564,6 +639,9 @@ export default function ModelsView() {
       ) : (
         <MasterDetail
           className="min-h-0 flex-1"
+          listLabel="models"
+          storageKey="graphyn.models"
+          selectedKey={selected}
           masterClassName="!p-0 !bg-transparent"
           detailClassName="!p-0"
           master={
@@ -586,21 +664,34 @@ export default function ModelsView() {
                   }}
                 >
                   <Box className="h-4 w-4 shrink-0 text-ink-400" />
-                  <span className="min-w-0 flex-1" title={m.name}>
-                    <span className="block truncate font-medium text-ink-900">{listTitles.get(m.name) ?? modelDisplayName(m)}</span>
+                  {/* Line 1: full name (wraps, never truncated). Line 2: source run
+                      short id · date — what tells two same-named models apart.
+                      Line 3: both stages with their metric. */}
+                  <span className="min-w-0 flex-1 self-start text-left" title={m.name}>
+                    <span className="block break-words font-medium text-ink-900">{modelDisplayName(m)}</span>
                     {(() => {
-                      const key = preferredStageKey(m.stages)
-                      const metric = key ? modelPrimaryMetricText(m.stages?.[key]) : null
-                      return metric ? (
-                        <span className="block truncate text-[11px] font-normal text-ink-500">{metric}</span>
-                      ) : null
+                      const sub = modelRowSubtitle(m)
+                      const stagesText = modelStageSummary(m.stages)
+                      return (
+                        <>
+                          {sub.shortId || sub.date ? (
+                            <span className="block text-[11px] font-normal text-ink-500">
+                              {sub.shortId ? (
+                                <>
+                                  run <span className="font-mono" title={`Run ${sub.runId}`}>{sub.shortId}</span>
+                                </>
+                              ) : null}
+                              {sub.shortId && sub.date ? ' · ' : ''}
+                              {sub.date}
+                            </span>
+                          ) : null}
+                          {stagesText ? (
+                            <span className="block text-[11px] font-normal text-ink-600">{stagesText}</span>
+                          ) : null}
+                        </>
+                      )
                     })()}
                   </span>
-                  {m.stages?.prod ? (
-                    <StatusBadge status="prod" />
-                  ) : m.stages?.staging ? (
-                    <StatusBadge status="staging" />
-                  ) : null}
                 </button>
               </li>
             ))}
@@ -608,12 +699,15 @@ export default function ModelsView() {
           }
           detail={
           <div className="rounded-2xl border border-ink-200 bg-white p-4 space-y-4">
-            {!selected || !detail ? (
+            <MasterDetailToggle className="-mb-2" />
+            {!selected ? (
               <EmptyState compact title="Select a model" description="Choose a model on the left to see its accuracy, files and stages." />
+            ) : !detail ? (
+              <LoadingBlock label="Loading model…" />
             ) : (
               <>
                 <div>
-                  <h2 className="text-base font-semibold text-ink-950" title={detail.name}>
+                  <h2 className="break-words text-base font-semibold text-ink-950" title={detail.name}>
                     {modelDisplayName(detail)}
                   </h2>
                   {modelDisplayName(detail) !== detail.name ? (
@@ -644,10 +738,10 @@ export default function ModelsView() {
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <div
-                            className="text-[11px] font-semibold uppercase tracking-wide text-ink-400"
+                            className="text-[12px] font-semibold text-ink-700"
                             title={MODEL_STAGE_HELP[stage]}
                           >
-                            Model stage · {stage === 'prod' ? 'production' : stage}
+                            {modelStageLabel(stage)} stage
                           </div>
                           {stage === 'staging' && entry ? (
                             entry.run_id === stages.prod?.run_id ? (
@@ -688,7 +782,7 @@ export default function ModelsView() {
                               <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[12px] sm:grid-cols-4">
                                 {facts.map((f) => (
                                   <div key={f.label} className="min-w-0" title={f.title}>
-                                    <dt className="text-[10px] uppercase tracking-wide text-ink-400">{f.label}</dt>
+                                    <dt className="text-[11px] text-ink-400">{f.label}</dt>
                                     <dd className="truncate font-medium text-ink-800">{f.value}</dd>
                                   </div>
                                 ))}
@@ -722,6 +816,16 @@ export default function ModelsView() {
                                 <span title={formatLocaleDateTime(created)}>Created {formatRelativeTime(created)}</span>
                               ) : null}
                             </div>
+                            {(() => {
+                              const ls = lineageStageFor(lineageView, stage)
+                              return ls ? (
+                                <MadeFromBlock
+                                  stage={ls}
+                                  onOpenRun={(rid) => openRun(rid)}
+                                  onHowMade={() => openHowMade(stage)}
+                                />
+                              ) : null
+                            })()}
                             {entry.exists === false ? (
                               <p className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-900">
                                 The model file for this stage is missing on disk — re-run training or register
@@ -737,16 +841,51 @@ export default function ModelsView() {
                     <p className="text-[11px] leading-relaxed text-ink-500">{REQUEST_PROD_HELP}</p>
                   ) : null}
                   <p className="text-[11px] text-ink-400">
-                    Model stages (staging / production) are separate from pipeline versions on Home — a
+                    Model stages (Staging / Production) are separate from pipeline versions on Home — a
                     pipeline version is the saved graph, a model stage is the trained file it produced.
                   </p>
                 </div>
+                {lineageView ? (
+                  <LineageUsedIn view={lineageView} onOpenRun={(rid, project) => openRun(rid, project ? { project } : undefined)} />
+                ) : activeProject ? (
+                  <section aria-label="Used in">
+                    <h3 className="text-[12px] font-semibold text-ink-700">Used in</h3>
+                    {usedIn.length === 0 ? (
+                      <p className="mt-1 text-[12px] text-ink-400">
+                        No Ship packages in this workspace's recent runs use this model yet.
+                      </p>
+                    ) : (
+                      <ul className="mt-1 divide-y divide-ink-100 rounded-lg border border-ink-100">
+                        {usedIn.slice(0, 8).map((u) => (
+                          <li key={u.runId}>
+                            <button
+                              type="button"
+                              className="ide-row w-full flex-wrap gap-x-2 gap-y-0.5 !px-3 !py-1.5 text-left text-[12px]"
+                              title={`Run ${u.runId}`}
+                              onClick={() => openRun(u.runId)}
+                            >
+                              <span className="min-w-0 flex-1 truncate font-medium text-accent-800">{u.label}</span>
+                              {u.stage ? <span className="text-ink-500">{modelStageLabel(u.stage)}</span> : null}
+                              {u.status ? <RunStatusBadge status={u.status} /> : null}
+                              {u.createdAt ? (
+                                <span className="text-ink-400" title={formatLocaleDateTime(u.createdAt)}>
+                                  {formatRelativeTime(u.createdAt)}
+                                </span>
+                              ) : null}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                ) : null}
                 <div className="flex flex-wrap gap-2">
                   {primaryRunId ? (
                     <button
                       type="button"
                       className="btn-secondary"
-                      onClick={() => openTrace({ runId: primaryRunId, project: activeProject || undefined })}
+                      title="Open the run that produced this model, focused on the step that wrote it"
+                      onClick={() => openHowMade(primaryStageKey)}
                     >
                       <GitBranch className="h-3.5 w-3.5" /> How it was made
                     </button>
@@ -759,13 +898,6 @@ export default function ModelsView() {
                         onClick={() => openData({ mode: 'outputs', project: activeProject })}
                       >
                         Datasets
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-quiet"
-                        onClick={() => openProjects({ project: activeProject })}
-                      >
-                        Open Home
                       </button>
                       <button
                         type="button"
@@ -800,5 +932,210 @@ export default function ModelsView() {
       )}
       </div>
     </ViewShell>
+  )
+}
+
+/** Small key/value row used by the lineage blocks. */
+function LineageRow({ label, children, title }: { label: string; children: React.ReactNode; title?: string }) {
+  return (
+    <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5" title={title}>
+      <dt className="w-24 shrink-0 text-[11px] text-ink-400">{label}</dt>
+      <dd className="min-w-0 flex-1 break-words text-[12px] text-ink-800">{children}</dd>
+    </div>
+  )
+}
+
+/**
+ * Per-stage "Made from" (lineage `made_from`): datasets (label · hash · files),
+ * source run (short id), producing step (label · plugin version · code hash),
+ * seed, graph hash, key step settings (collapsed) and environment.
+ */
+function MadeFromBlock({
+  stage,
+  onOpenRun,
+  onHowMade,
+}: {
+  stage: LineageStage
+  onOpenRun: (runId: string) => void
+  onHowMade: () => void
+}) {
+  const m: LineageMadeFrom | null = stage.madeFrom
+  if (!m) {
+    return stage.modelHash ? (
+      <p className="text-[11px] text-ink-500" title={stage.modelHash}>
+        Model hash <span className="font-mono">{shortHash(stage.modelHash)}</span> · no run record for its source
+      </p>
+    ) : null
+  }
+  return (
+    <div className="space-y-1.5 rounded-lg border border-ink-100 bg-white px-2.5 py-2" aria-label="Made from">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-[12px] font-semibold text-ink-700">Made from</span>
+        <button type="button" className="text-[11px] font-medium text-accent-800 hover:underline" onClick={onHowMade}>
+          How it was made →
+        </button>
+      </div>
+      <dl className="space-y-1">
+        {m.datasets.length > 0 ? (
+          <LineageRow label={m.datasets.length === 1 ? 'Dataset' : 'Datasets'}>
+            <ul className="space-y-0.5">
+              {m.datasets.map((d) => (
+                <li key={`${d.nodeId}.${d.key}.${d.path}`} title={[d.path, d.hash].filter(Boolean).join('\n')}>
+                  {datasetLine(d)}
+                </li>
+              ))}
+            </ul>
+          </LineageRow>
+        ) : null}
+        {m.runId ? (
+          <LineageRow label="Run">
+            <button
+              type="button"
+              className="font-mono text-[11px] text-accent-800 hover:underline"
+              title={`Open run ${m.runId}`}
+              onClick={() => onOpenRun(m.runId)}
+            >
+              {m.runId.slice(0, 8)}
+            </button>
+            {m.graphName ? <span className="text-ink-500"> · {m.graphName}</span> : null}
+            {m.sealed === false ? <span className="text-amber-800"> · record not sealed</span> : null}
+          </LineageRow>
+        ) : null}
+        {m.step ? (
+          <LineageRow label="Step" title={[m.step.nodeId, m.step.nodeType, m.step.codeHash].filter(Boolean).join(' · ')}>
+            {stepLine(m.step)}
+          </LineageRow>
+        ) : null}
+        {m.seed != null || m.graphHash ? (
+          <LineageRow label="Reproduce">
+            {m.seed != null ? <span>seed {m.seed}</span> : null}
+            {m.seed != null && m.graphHash ? <span className="text-ink-400"> · </span> : null}
+            {m.graphHash ? (
+              <span title={`Graph hash ${m.graphHash}`}>
+                graph <span className="font-mono">{shortHash(m.graphHash)}</span>
+              </span>
+            ) : null}
+            {stage.modelHash ? (
+              <span title={`Model hash ${stage.modelHash}`}>
+                <span className="text-ink-400"> · </span>model <span className="font-mono">{shortHash(stage.modelHash)}</span>
+              </span>
+            ) : null}
+          </LineageRow>
+        ) : null}
+        {m.environment.length > 0 ? (
+          <LineageRow label="Environment">
+            {m.environment.map((e) => `${e.label} ${e.value}`).join(' · ')}
+          </LineageRow>
+        ) : null}
+      </dl>
+      {m.settings.length > 0 ? (
+        <details className="text-[12px]">
+          <summary className="cursor-pointer select-none text-[11px] text-ink-500">
+            Step settings ({m.settings.length})
+          </summary>
+          <dl className="mt-1 grid gap-x-3 gap-y-0.5 sm:grid-cols-2">
+            {m.settings.map((kv) => (
+              <div key={kv.key} className="flex min-w-0 gap-1.5">
+                <dt className="shrink-0 text-ink-500">{kv.key}</dt>
+                <dd className="min-w-0 truncate font-mono text-[11px] text-ink-800" title={kv.value}>
+                  {kv.value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </details>
+      ) : null}
+    </div>
+  )
+}
+
+/** Lineage "Used in" (package runs) + Ship packages built from this model. */
+function LineageUsedIn({
+  view,
+  onOpenRun,
+}: {
+  view: ModelLineageView
+  onOpenRun: (runId: string, project?: string) => void
+}) {
+  return (
+    <section aria-label="Used in" className="space-y-3">
+      <div>
+        <h3 className="text-[12px] font-semibold text-ink-700">Used in</h3>
+        {view.usedIn.length === 0 ? (
+          <p className="mt-1 text-[12px] text-ink-400">No runs have packaged or used this model yet.</p>
+        ) : (
+          <ul className="mt-1 divide-y divide-ink-100 rounded-lg border border-ink-100">
+            {view.usedIn.slice(0, 20).map((u) => (
+              <li key={u.runId}>
+                <button
+                  type="button"
+                  className="ide-row w-full flex-wrap gap-x-2 gap-y-0.5 !px-3 !py-1.5 text-left text-[12px]"
+                  title={[`Run ${u.runId}`, u.project ? `workspace ${u.project}` : '', u.match ? `matched by ${u.match}` : '', u.packagePath]
+                    .filter(Boolean)
+                    .join('\n')}
+                  onClick={() => onOpenRun(u.runId, u.project || undefined)}
+                >
+                  <span className="min-w-0 flex-1 truncate font-medium text-accent-800">
+                    {u.graphName || `Run ${u.short}`}
+                  </span>
+                  <ShortId id={u.runId} copy={false} />
+                  {u.stageLabel ? <span className="text-ink-500">{u.stageLabel}</span> : null}
+                  {u.packageSha ? (
+                    <span className="font-mono text-[11px] text-ink-500" title={`Package sha256 ${u.packageSha}`}>
+                      sha {shortHash(u.packageSha)}
+                    </span>
+                  ) : null}
+                  {u.actor ? <ActorName actor={u.actor} verified={u.actorVerified} compact className="text-ink-600" /> : null}
+                  {u.status ? <RunStatusBadge status={u.status} /> : null}
+                  {u.archived ? <span className="text-[11px] text-ink-400">Archived</span> : null}
+                  {u.createdAt ? (
+                    <span className="text-ink-400" title={formatLocaleDateTime(u.createdAt)}>
+                      {formatRelativeTime(u.createdAt)}
+                    </span>
+                  ) : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {view.packages.length > 0 ? (
+        <div>
+          <h3 className="text-[12px] font-semibold text-ink-700">Packages</h3>
+          <ul className="mt-1 divide-y divide-ink-100 rounded-lg border border-ink-100">
+            {view.packages.map((p) => (
+              <li
+                key={p.packageId || `${p.runId}-${p.createdAt}`}
+                className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-1.5 text-[12px]"
+                title={[p.packageId, p.project ? `workspace ${p.project}` : '', p.sha256 ? `sha256 ${p.sha256}` : ''].filter(Boolean).join('\n')}
+              >
+                <span className="min-w-0 flex-1 truncate font-medium text-ink-800">
+                  {p.packageId ? shortHash(p.packageId, 12) : 'Package'}
+                </span>
+                {p.stageLabel ? <span className="text-ink-500">{p.stageLabel}</span> : null}
+                {p.env ? <span className="text-ink-500">{p.env}</span> : null}
+                {p.status ? <span className="text-ink-500">{p.status}</span> : null}
+                {p.sha256 ? <span className="font-mono text-[11px] text-ink-500">sha {shortHash(p.sha256)}</span> : null}
+                {p.runId ? (
+                  <button
+                    type="button"
+                    className="font-mono text-[11px] text-accent-800 hover:underline"
+                    title={`Open run ${p.runId}`}
+                    onClick={() => onOpenRun(p.runId, p.project || undefined)}
+                  >
+                    {p.runId.slice(0, 8)}
+                  </button>
+                ) : null}
+                {p.createdAt ? (
+                  <span className="text-ink-400" title={formatLocaleDateTime(p.createdAt)}>
+                    {formatRelativeTime(p.createdAt)}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </section>
   )
 }

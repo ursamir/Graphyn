@@ -108,8 +108,18 @@ def _run_elsewhere_error(run_id: str) -> HTTPException:
 
 
 
+def _audit_control(request: Request, action: str, run_id: str) -> None:
+    try:
+        from app.core.trust.audit import record_audit
+
+        record_audit(actor=resolve_actor(request), action=action, resource_type="run",
+                     resource_id=run_id, meta={})
+    except Exception:
+        pass
+
+
 @router.post("/{run_id}/pause")
-def pause_run(run_id: str):
+def pause_run(run_id: str, request: Request):
     """Pause an active pipeline run after the current node completes."""
     run_id = _validate_run_id(run_id)
     status = _durable_status(run_id)
@@ -137,11 +147,12 @@ def pause_run(run_id: str):
         run.pause()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to pause run: {exc}") from exc
+    _audit_control(request, "run.pause", run_id)
     return {"run_id": run_id, "status": "paused"}
 
 
 @router.post("/{run_id}/resume")
-def resume_run(run_id: str):
+def resume_run(run_id: str, request: Request):
     """Resume a paused pipeline run. Terminal statuses → 409 invalid_transition."""
     run_id = _validate_run_id(run_id)
     status = _durable_status(run_id)
@@ -162,6 +173,7 @@ def resume_run(run_id: str):
         run.resume()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to resume run: {exc}") from exc
+    _audit_control(request, "run.resume", run_id)
     return {"run_id": run_id, "status": "running"}
 
 

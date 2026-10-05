@@ -61,9 +61,10 @@ class TestUrlIngest:
                 "/api/v1/ingest/url",
                 json={"urls": ["http://example.com/a.wav"], "label": "speech"},
             )
-        svc.start_url_job.assert_called_once_with(
-            ["http://example.com/a.wav"], "speech"
-        )
+        svc.start_url_job.assert_called_once()
+        args, kwargs = svc.start_url_job.call_args
+        assert args == (["http://example.com/a.wav"], "speech")
+        assert "actor" in kwargs
 
 
 class TestStreamUrlJob:

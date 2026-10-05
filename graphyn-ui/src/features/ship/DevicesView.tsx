@@ -5,6 +5,7 @@ import { EmptyState } from '../../components/ui'
 import { WorkbenchPage } from '../../layout'
 import { paths } from '../../routes/paths'
 import { navigatePath } from '../../routes/parsePath'
+import { DEVICES_ENABLED } from './devicesFlag'
 
 /**
  * Devices inventory — honesty stub until device registry / flash / OTA APIs exist.
@@ -22,7 +23,7 @@ export default function DevicesView({
   React.useEffect(() => {
     if (embedded) return
     const W = workspaceId?.trim()
-    if (W) navigatePath(paths.shipDevices(W), true)
+    if (W) navigatePath(DEVICES_ENABLED ? paths.shipDevices(W) : paths.ship(W), true)
   }, [workspaceId, embedded])
 
   const honesty = (
@@ -62,6 +63,18 @@ export default function DevicesView({
       />
     </div>
   )
+
+  if (!DEVICES_ENABLED && !embedded) {
+    return (
+      <WorkbenchPage title="Devices">
+        <EmptyState
+          icon={EmptyCpu}
+          title="Device management isn't available yet"
+          description="Use Ship to build and download a package for your device."
+        />
+      </WorkbenchPage>
+    )
+  }
 
   if (embedded) {
     return <div className="space-y-3">{body}</div>

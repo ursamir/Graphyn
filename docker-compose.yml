@@ -43,9 +43,11 @@ services:
       # image name/tag and git commit are baked at build (BUILD_INFO.json).
       GRAPHYN_IMAGE_DIGEST: ${GRAPHYN_IMAGE_DIGEST:-}
       # Test branch: do not restore plugins that were removed from this install.
-      # The kept set is Example 06 plus deployment-packager and python-code.
-      GRAPHYN_AUTO_INSTALL_PLUGINS: "0"
-      GRAPHYN_BUNDLED_PLUGIN_ALLOWLIST: "dataset-ingest,audio-conditioner,segmenter,audio-quality-gate,augmentation-pipeline,audio-exporter,feature-frontend,dataset-builder,trainer,evaluator,edge-optimizer,realtime-inference,deployment-packager,python-code"
+      # The kept set is Example 06 plus deployment-packager and python-code,
+      # plus the workflow-automation set (Common control/IO + Agents basics)
+      # restored by user request. RAG/Vision/TinyML/MLOps stay out.
+      GRAPHYN_AUTO_INSTALL_PLUGINS: "1"
+      GRAPHYN_BUNDLED_PLUGIN_ALLOWLIST: "dataset-ingest,audio-conditioner,segmenter,audio-quality-gate,augmentation-pipeline,audio-exporter,feature-frontend,dataset-builder,trainer,evaluator,edge-optimizer,realtime-inference,deployment-packager,python-code,schedule-trigger,webhook-trigger,if-switch,merge,wait-delay,error-catch,json-transform,set-map,csv-table,http-request,http-webhook,send-email,object-store,credential-probe,eval-gate,structured-llm,hitl-approve,llm-chat,prompt-template,output-schema-validate,guardrail-filter"
       # Example datasets under workspace/datasets/input are symlinks into
       # examples/. Those resolve outside GRAPHYN_PROJECT_DIR, so Browse marks
       # every label blocked unless this is on. Set 0 to fail closed.

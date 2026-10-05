@@ -8,6 +8,7 @@ Owns:             NodeSpec, EdgeSpec, PipelineConfig (internal data structures);
                   _ir_to_pipeline_config(), _parse_pipeline_config() (parsers).
 Public Surface:   PipelineGraph, PipelineConfig, NodeSpec, EdgeSpec,
                   derive_node_seed() (shared with the distributed backend),
+                  routed_error_port_of() (IR 1.3 on_error=route port),
                   _ir_to_pipeline_config(), _parse_pipeline_config()
 Must NOT:         Execute nodes, persist state, import from app.domain,
                   import from BC5 (orchestrator/executor), or import from app.api.
@@ -57,6 +58,11 @@ class NodeSpec:
     node_id: str
     node_type: str
     config: dict[str, Any]
+    # IR 1.3 per-node policies (plain dicts; None = unset). Stamped onto the
+    # Node instance as ``_graphyn_on_error`` / ``_graphyn_retry`` for
+    # NodeExecutor (which never sees the IR).
+    on_error: dict[str, Any] | None = None
+    retry: dict[str, Any] | None = None
 
 
 @dataclass
@@ -143,6 +149,29 @@ def _parse_pipeline_config(raw: dict) -> PipelineConfig:
 
 # ── IR → PipelineConfig ────────────────────────────────────────────────────────
 
+def _policy_dict(value: Any) -> dict[str, Any] | None:
+    """IR 1.3 on_error / retry model → plain dict (None when unset)."""
+    if value is None:
+        return None
+    if hasattr(value, "model_dump"):
+        return _plain_jsonable(value.model_dump(mode="json"))
+    if isinstance(value, dict):
+        return _plain_jsonable(value)
+    return None
+
+
+def routed_error_port_of(spec_or_node: Any) -> str | None:
+    """Error port name when on_error.mode == "route" (NodeSpec or Node)."""
+    # Node instances have an ``on_error()`` hook method — read the stamped
+    # policy there; NodeSpec carries a plain dict.
+    pol = getattr(spec_or_node, "_graphyn_on_error", None)
+    if pol is None and isinstance(spec_or_node, NodeSpec):
+        pol = spec_or_node.on_error
+    if isinstance(pol, dict) and pol.get("mode") == "route":
+        return str(pol.get("port") or "error")
+    return None
+
+
 def _ir_to_pipeline_config(graph: Any) -> PipelineConfig:
     """Convert a GraphIR to a PipelineConfig. Pure — no side effects, no I/O."""
     # Finding 9 (LOW): guard against missing metadata
@@ -153,6 +182,8 @@ def _ir_to_pipeline_config(graph: Any) -> PipelineConfig:
             node_id=ir_node.id,
             node_type=ir_node.node_type,
             config=_plain_jsonable(ir_node.config),
+            on_error=_policy_dict(getattr(ir_node, "on_error", None)),
+            retry=_policy_dict(getattr(ir_node, "retry", None)),
         )
         for ir_node in graph.nodes
     ]
@@ -256,6 +287,10 @@ class PipelineGraph:
                 ) from exc
             node_config = copy.deepcopy(config_plain)
             node = node_class(config=node_config, seed=node_seed, observer=self._observer)
+            # IR 1.3 policies for NodeExecutor (instance attrs; class untouched).
+            node._graphyn_node_id = spec.node_id  # type: ignore[attr-defined]
+            node._graphyn_on_error = spec.on_error  # type: ignore[attr-defined]
+            node._graphyn_retry = spec.retry  # type: ignore[attr-defined]
             self._nodes[spec.node_id] = node
 
         for edge in self._edges:
@@ -265,6 +300,17 @@ class PipelineGraph:
                 raise PipelineGraphError(f"Edge references unknown source node '{edge.src_id}'")
             if dst_node is None:
                 raise PipelineGraphError(f"Edge references unknown destination node '{edge.dst_id}'")
+            # IR 1.3: the synthetic error port of an on_error=route node carries
+            # a plain dict ({ok, error_type, message, node_id, attempt}); only
+            # the destination port must exist.
+            err_port = routed_error_port_of(src_node)
+            if err_port is not None and edge.src_port == err_port:
+                if edge.dst_port not in getattr(dst_node, "input_ports", {}):
+                    raise PipelineGraphError(
+                        f"Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
+                        f"'{edge.dst_id}' has no input port '{edge.dst_port}'"
+                    )
+                continue
             # Finding 8 (MEDIUM): wrap compat errors so callers only need to catch PipelineGraphError
             try:
                 CompatibilityChecker.check_connection(src_node, edge.src_port, dst_node, edge.dst_port)

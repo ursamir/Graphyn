@@ -392,9 +392,15 @@ def _fmt_value(key: str, value: Any) -> str:
 
 
 def _model_configs(graph: dict[str, Any], node_ids: list[str]) -> dict[str, Any]:
-    """Merged scalar configs of model-defining nodes (builder → trainer)."""
+    """Merged scalar configs of model-defining nodes (builder → trainer).
+
+    First writer wins per key, except ``learning_rate``: a trainer's non-empty
+    ``learning_rate`` overrides the builder's (the Trainer recompiles with its
+    own LR when set and keeps the builder's compiled LR only when empty).
+    """
     by_id = {str(n["id"]): n for n in _nodes(graph)}
     merged: dict[str, Any] = {}
+    trainer_lr: Any = None
     for nid in node_ids:
         node = by_id.get(nid)
         if not node:
@@ -406,6 +412,11 @@ def _model_configs(graph: dict[str, Any], node_ids: list[str]) -> dict[str, Any]
         for k, v in cfg.items():
             if isinstance(v, (str, int, float, bool)) and not _LABEL_SKIP_KEYS.search(k):
                 merged.setdefault(k, v)
+        lr = cfg.get("learning_rate")
+        if "train" in t and trainer_lr is None and isinstance(lr, (int, float, str)) and not isinstance(lr, bool) and str(lr).strip():
+            trainer_lr = lr
+    if trainer_lr is not None:
+        merged["learning_rate"] = trainer_lr
     return merged
 
 

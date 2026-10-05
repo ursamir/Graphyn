@@ -36,12 +36,18 @@ def test_metadata(installed_cls):
     assert meta.label and meta.category and meta.version
 
 
-def test_put_list_get_local(installed_cls, tmp_path):
-    src = tmp_path / "src.txt"
+@pytest.fixture
+def ws(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path))
+    return tmp_path
+
+
+def test_put_list_get_local(installed_cls, ws):
+    src = ws / "src.txt"
     src.write_text("hello store", encoding="utf-8")
-    root = tmp_path / "store"
+    root = "artifacts/store"
     putter = installed_cls(
-        config={"backend": "local", "operation": "put", "root": str(root), "prefix": "docs"},
+        config={"backend": "local", "operation": "put", "root": root, "prefix": "docs"},
         seed=0,
     )
     refs = putter.process({"input": [str(src)]})["output"]
@@ -49,33 +55,35 @@ def test_put_list_get_local(installed_cls, tmp_path):
         refs = [refs]
     assert refs[0].key.startswith("docs/")
     assert Path(refs[0].uri).is_file()
+    assert Path(refs[0].uri).is_relative_to(ws)
+    pub = putter.take_published_file_trees()
+    assert pub and pub[0]["files"][0]["path"] == "docs/src.txt"
 
     lister = installed_cls(
-        config={"backend": "local", "operation": "list", "root": str(root), "prefix": "docs"},
+        config={"backend": "local", "operation": "list", "root": root, "prefix": "docs"},
         seed=0,
     )
     listing = lister.process({"input": None})["output"]
     assert any(k.endswith("src.txt") for k in listing.keys)
 
-    dest = tmp_path / "got.txt"
     getter = installed_cls(
         config={
             "backend": "local",
             "operation": "get",
-            "root": str(root),
+            "root": root,
             "key": refs[0].key,
-            "dest": str(dest),
+            "dest": "out/got.txt",
         },
         seed=0,
     )
     got = getter.process({"input": None})["output"]
-    assert dest.read_text(encoding="utf-8") == "hello store"
+    assert (ws / "out" / "got.txt").read_text(encoding="utf-8") == "hello store"
     assert got.backend == "local"
 
 
-def test_put_chunks(installed_cls, tmp_path):
+def test_put_chunks(installed_cls, ws):
     node = installed_cls(
-        config={"backend": "local", "operation": "put", "root": str(tmp_path / "c"), "prefix": "rag"},
+        config={"backend": "local", "operation": "put", "root": "c", "prefix": "rag"},
         seed=0,
     )
     chunks = [
@@ -85,6 +93,40 @@ def test_put_chunks(installed_cls, tmp_path):
     refs = node.process({"input": chunks})["output"]
     assert len(refs) == 2
     assert Path(refs[0].uri).read_text(encoding="utf-8") == "alpha"
+
+
+def test_default_root_is_workspace_artifacts(installed_cls, ws):
+    node = installed_cls(config={"operation": "put", "key": "note.txt"}, seed=0)
+    ref = node.process({"input": "hi"})["output"]
+    assert Path(ref.uri) == (ws / "artifacts" / "object_store" / "note.txt").resolve()
+
+
+@pytest.mark.parametrize("cfg", [
+    {"operation": "list", "root": "/tmp"},
+    {"operation": "list", "root": "../escape"},
+    {"operation": "get", "key": "../../etc/passwd"},
+    {"operation": "get", "key": "/etc/passwd"},
+    {"operation": "put", "key": "../x.txt"},
+])
+def test_jail_rejects_escapes(installed_cls, ws, cfg):
+    node = installed_cls(config={"backend": "local", **cfg}, seed=0)
+    with pytest.raises(RuntimeError, match="absolute|\\.\\.|outside|invalid|escapes"):
+        node.process({"input": "x"})
+
+
+def test_get_dest_absolute_rejected(installed_cls, ws):
+    installed_cls(config={"operation": "put", "key": "k.txt"}, seed=0).process({"input": "v"})
+    node = installed_cls(config={"operation": "get", "key": "k.txt", "dest": "/tmp/stolen.txt"}, seed=0)
+    with pytest.raises(RuntimeError, match="absolute"):
+        node.process({"input": None})
+
+
+def test_put_input_outside_workspace_rejected(installed_cls, ws, tmp_path_factory):
+    outside = tmp_path_factory.mktemp("outside") / "secret.txt"
+    outside.write_text("s")
+    node = installed_cls(config={"operation": "put"}, seed=0)
+    with pytest.raises(RuntimeError, match="outside"):
+        node.process({"input": [str(outside)]})
 
 
 def test_s3_without_boto3(installed_cls):

@@ -4,13 +4,15 @@ Bounded Context:  REST API Layer
 Responsibility:   HTTP endpoints for full project lifecycle management —
                   create, get, update, delete, clone, list versions, taxonomy,
                   contract, spec, annotations, quality reports, snapshots,
-                  and curation decisions.
+                  and curation decisions. Every workspace mutation records a
+                  ``workspace.*`` audit event (category admin) via _audit.
 Owns:             All route definitions under /api/v1/projects/.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain project storage logic — delegate to ProjectManager
                   and QualityChecker.
 Dependencies:     fastapi, app.domain.project_manager.ProjectManager,
-                  app.domain.quality_checker.QualityChecker.
+                  app.domain.quality_checker.QualityChecker,
+                  app.core.trust.audit.record_audit.
 Reason To Change: New project endpoint added, or project schema changes.
 """
 
@@ -46,6 +48,64 @@ def _handle(fn, *args, **kwargs):
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+def _audit(
+    request: Request | None,
+    action: str,
+    resource_id: str,
+    *,
+    meta: dict[str, Any] | None = None,
+    before: dict[str, Any] | None = None,
+    after: dict[str, Any] | None = None,
+    resource_type: str = "workspace",
+) -> None:
+    """Record one ``workspace.*`` audit event (best effort, never raises)."""
+    try:
+        from app.core.trust.audit import record_audit
+
+        record_audit(
+            actor=resolve_actor(request),
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            meta=meta or {},
+            before=before,
+            after=after,
+            request_id=getattr(getattr(request, "state", None), "request_id", None),
+        )
+    except Exception:
+        pass
+
+
+def _meta_snapshot(name: str) -> dict[str, Any]:
+    """Current project.json-derived fields (empty dict when unreadable)."""
+    try:
+        meta = _pm.get(name)
+    except Exception:
+        return {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def _delete_summary(name: str) -> dict[str, Any]:
+    """What a workspace delete removes (computed before the rmtree, best effort)."""
+    out: dict[str, Any] = {}
+    try:
+        from app.core.pipelines.project_pipelines import list_pipelines
+
+        project_dir = _pm._require_project(name)
+        out["pipelines"] = [p.get("name") for p in list_pipelines(project_dir)]
+    except Exception:
+        pass
+    try:
+        versions = _pm.list_versions(name)
+        if isinstance(versions, list):
+            out["dataset_versions"] = [
+                v.get("version") if isinstance(v, dict) else str(v) for v in versions
+            ]
+    except Exception:
+        pass
+    return out
 
 
 # ------------------------------------------------------------------ #
@@ -187,6 +247,7 @@ def create_project(body: CreateProjectBody, request: Request):
                 raise HTTPException(status_code=409, detail=exc.detail) from exc
             raise
         complete_idempotent(request, status_code=200, body=result)
+    _audit(request, "workspace.created", body.name)
     return result
 
 
@@ -203,8 +264,9 @@ def update_project(name: str, body: UpdateProjectBody, request: Request):
     Legacy PATCH /{name} remains for rename-only clients.
     """
     if_match = request.headers.get("If-Match") or request.headers.get("if-match")
+    before_meta = _meta_snapshot(name)
     try:
-        return _pm.update(
+        result = _pm.update(
             name,
             display_name=body.display_name,
             description=body.description,
@@ -217,42 +279,140 @@ def update_project(name: str, body: UpdateProjectBody, request: Request):
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
-        from app.api.concurrency import version_conflict_http
-        from app.core.errors import VersionConflict
-        if isinstance(exc, VersionConflict) or str(exc) == "version_conflict":
-            if isinstance(exc, VersionConflict):
-                raise version_conflict_http(exc) from exc
-            raise version_conflict_http(
-                VersionConflict(via_if_match=bool(if_match))
-            ) from exc
-        if isinstance(exc, ValueError):
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _raise_update_error(exc, if_match)
         raise
+    _audit_update(request, name, body, before_meta)
+    return result
+
+
+_UPDATE_FIELDS = (
+    "display_name",
+    "description",
+    "tags",
+    "linked_input_labels",
+    "favorite_pipelines",
+)
+
+
+def _audit_update(
+    request: Request, name: str, body: UpdateProjectBody, before_meta: dict[str, Any]
+) -> None:
+    """``workspace.updated`` with the fields whose value actually changed."""
+    before: dict[str, Any] = {}
+    after: dict[str, Any] = {}
+    for field in _UPDATE_FIELDS:
+        new = getattr(body, field)
+        if new is None:
+            continue
+        old = before_meta.get(field) if before_meta else None
+        if before_meta and old == new:
+            continue
+        before[field] = old
+        after[field] = new
+    if not after:
+        return
+    _audit(
+        request,
+        "workspace.updated",
+        name,
+        meta={"changed": sorted(after)},
+        before=before,
+        after=after,
+    )
+
+
+def _raise_update_error(exc: Exception, if_match: Optional[str]) -> None:
+    """Map known PUT /projects/{name} failures to HTTP errors.
+
+    Returns normally for unknown exceptions — the caller re-raises them.
+    """
+    from app.api.concurrency import version_conflict_http
+    from app.core.errors import VersionConflict
+
+    if isinstance(exc, VersionConflict):
+        raise version_conflict_http(exc) from exc
+    if str(exc) == "version_conflict":
+        raise version_conflict_http(VersionConflict(via_if_match=bool(if_match))) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.patch("/{name}")
-def rename_project(name: str, body: RenameProjectBody):
-    """PATCH /projects/{name} — rename a project (legacy; prefer PUT for metadata)."""
-    return _handle(_pm.rename, name, body.new_name)
+def rename_project(name: str, body: RenameProjectBody, request: Request):
+    """PATCH /projects/{name} — rename the workspace **id** (DEPRECATED).
+
+    Kept for API compatibility only. It moves the workspace folder and
+    nothing else: runs (``meta.project``), the audit chain
+    (``audit/chains/<project>.jsonl``), the model registry, schedules and
+    saved references keep the old id, so renaming orphans run history and
+    breaks the per-project audit chain. To change what people see, use
+    ``PUT /projects/{name}`` with ``display_name`` (the id stays the same).
+    Records ``workspace.renamed``.
+    """
+    result = _handle(_pm.rename, name, body.new_name)
+    _audit(
+        request,
+        "workspace.renamed",
+        name,
+        meta={
+            "deprecated": True,
+            "migrated": False,
+            "note": "runs, audit chain, models and schedules keep the old id",
+        },
+        before={"name": name},
+        after={"name": body.new_name},
+    )
+    return result
 
 
 @router.delete("/{name}")
-def delete_project(name: str, body: DeleteProjectBody = Body(...)):
-    """DELETE /projects/{name} — delete a project (requires confirm == name)."""
+def delete_project(name: str, request: Request, body: DeleteProjectBody = Body(...)):
+    """DELETE /projects/{name} — delete a project (requires confirm == name).
+
+    Removes the workspace folder (pipelines + versions, spec/taxonomy/contract,
+    links, snapshots, dataset output versions) and disables its schedules.
+    Run history, run artifacts and registered models are kept.
+    Records ``workspace.deleted`` with what was removed.
+    """
+    removed = _delete_summary(name) if body.confirm == name else {}
     _handle(_pm.delete, name, body.confirm)
+    _audit(request, "workspace.deleted", name, meta={"removed": removed})
     return {"deleted": name}
 
 
 @router.patch("/{name}/status")
-def set_project_status(name: str, body: SetStatusBody):
-    """PATCH /projects/{name}/status — update project status."""
-    return _handle(_pm.set_status, name, body.status)
+def set_project_status(name: str, body: SetStatusBody, request: Request):
+    """PATCH /projects/{name}/status — update project status.
+
+    ``archived`` hides the workspace from the default Workspaces list in the
+    console. Records ``workspace.archived`` / ``workspace.unarchived`` when
+    crossing the archived boundary, else ``workspace.status_changed``.
+    """
+    old = str(_meta_snapshot(name).get("status") or "") or None
+    result = _handle(_pm.set_status, name, body.status)
+    new = result.get("status") if isinstance(result, dict) else body.status
+    if new != old:
+        if new == "archived":
+            action = "workspace.archived"
+        elif old == "archived":
+            action = "workspace.unarchived"
+        else:
+            action = "workspace.status_changed"
+        _audit(request, action, name, before={"status": old}, after={"status": new})
+    return result
 
 
 @router.post("/{name}/clone")
-def clone_project(name: str, body: CloneProjectBody):
-    """POST /projects/{name}/clone — clone a project."""
-    return _handle(_pm.clone, name, body.new_name)
+def clone_project(name: str, body: CloneProjectBody, request: Request):
+    """POST /projects/{name}/clone — new workspace from this one's pipelines and settings.
+
+    Copies draft pipelines, description, linked datasets and
+    spec/taxonomy/contract. Not copied: runs, pipeline version history,
+    models, snapshots or dataset output versions. Records ``workspace.cloned``.
+    """
+    result = _handle(_pm.clone, name, body.new_name)
+    _audit(request, "workspace.cloned", body.new_name, meta={"source": name})
+    return result
 
 
 
@@ -267,15 +427,29 @@ def get_project_links(name: str):
 
 
 @router.post("/{name}/links")
-def add_project_links(name: str, body: ProjectLinksBody):
-    """POST /projects/{name}/links — merge linked inputs/outputs."""
-    return _handle(_pm.add_links, name, body.inputs, body.outputs)
+def add_project_links(name: str, body: ProjectLinksBody, request: Request):
+    """POST /projects/{name}/links — merge linked inputs/outputs (audited ``dataset.link``)."""
+    out = _handle(_pm.add_links, name, body.inputs, body.outputs)
+    _audit(
+        request,
+        "dataset.link",
+        name,
+        meta={"inputs": list(body.inputs or []), "outputs": list(body.outputs or [])},
+    )
+    return out
 
 
 @router.delete("/{name}/links")
-def remove_project_links(name: str, body: ProjectLinksBody = Body(...)):
-    """DELETE /projects/{name}/links — unlink specific inputs/outputs."""
-    return _handle(_pm.remove_links, name, body.inputs, body.outputs)
+def remove_project_links(name: str, request: Request, body: ProjectLinksBody = Body(...)):
+    """DELETE /projects/{name}/links — unlink specific inputs/outputs (audited ``dataset.unlink``)."""
+    out = _handle(_pm.remove_links, name, body.inputs, body.outputs)
+    _audit(
+        request,
+        "dataset.unlink",
+        name,
+        meta={"inputs": list(body.inputs or []), "outputs": list(body.outputs or [])},
+    )
+    return out
 
 
 # ------------------------------------------------------------------ #
@@ -289,9 +463,10 @@ def get_taxonomy(name: str):
 
 
 @router.put("/{name}/taxonomy")
-def set_taxonomy(name: str, body: list[dict]):
+def set_taxonomy(name: str, body: list[dict], request: Request):
     """PUT /projects/{name}/taxonomy — replace taxonomy tree."""
     _handle(_pm.set_taxonomy, name, body)
+    _audit(request, "workspace.taxonomy_updated", name, meta={"nodes": len(body)})
     return {"ok": True}
 
 
@@ -306,9 +481,10 @@ def get_contract(name: str):
 
 
 @router.put("/{name}/contract")
-def set_contract(name: str, body: dict):
+def set_contract(name: str, body: dict, request: Request):
     """PUT /projects/{name}/contract — replace data contract."""
     _handle(_pm.set_contract, name, body)
+    _audit(request, "workspace.contract_updated", name, meta={"keys": sorted(body)})
     return {"ok": True}
 
 
@@ -324,9 +500,10 @@ def get_spec(name: str):
 
 
 @router.put("/{name}/spec")
-def set_spec(name: str, body: SetSpecBody):
+def set_spec(name: str, body: SetSpecBody, request: Request):
     """PUT /projects/{name}/spec — replace spec markdown."""
     _handle(_pm.set_spec, name, body.markdown)
+    _audit(request, "workspace.spec_updated", name, meta={"chars": len(body.markdown)})
     return {"ok": True}
 
 
@@ -473,9 +650,21 @@ def get_version_lineage(name: str, version: str):
 
 
 @router.post("/{name}/versions/{version}/restore")
-def restore_version(name: str, version: str):
-    """POST /projects/{name}/versions/{version}/restore — restore a version."""
+def restore_version(name: str, version: str, request: Request):
+    """POST /projects/{name}/versions/{version}/restore — copy a version into the project root.
+
+    Legacy: the console no longer offers this (nothing reads the root
+    "working area" and it can overwrite workspace files). Records
+    ``workspace.version_restored``.
+    """
     _handle(_pm.restore_version, name, version)
+    _audit(
+        request,
+        "workspace.version_restored",
+        f"{name}/{version}",
+        resource_type="dataset_version",
+        meta={"workspace": name, "version": version},
+    )
     return {"ok": True, "restored": version}
 
 
@@ -550,9 +739,10 @@ def get_latest_lineage(name: str):
 # ------------------------------------------------------------------ #
 
 @router.post("/{name}/snapshots")
-def create_snapshot(name: str, body: CreateSnapshotBody):
+def create_snapshot(name: str, body: CreateSnapshotBody, request: Request):
     """POST /projects/{name}/snapshots — create a snapshot."""
     _handle(_pm.create_snapshot, name, body.snapshot_name)
+    _audit(request, "workspace.snapshot_created", name, meta={"snapshot": body.snapshot_name})
     return {"ok": True, "snapshot_name": body.snapshot_name}
 
 
@@ -563,9 +753,10 @@ def list_snapshots(name: str):
 
 
 @router.post("/{name}/snapshots/{snapshot_name}/restore")
-def restore_snapshot(name: str, snapshot_name: str):
+def restore_snapshot(name: str, snapshot_name: str, request: Request):
     """POST /projects/{name}/snapshots/{snapshot_name}/restore — restore a snapshot."""
     _handle(_pm.restore_snapshot, name, snapshot_name)
+    _audit(request, "workspace.snapshot_restored", name, meta={"snapshot": snapshot_name})
     return {"ok": True, "restored": snapshot_name}
 
 

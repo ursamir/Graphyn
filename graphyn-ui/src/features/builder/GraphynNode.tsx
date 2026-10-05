@@ -1,14 +1,16 @@
 import { Handle, Position, type NodeProps } from 'reactflow'
 import clsx from 'clsx'
 import type { NodePlacement, PortDef } from '../../types/graph'
-import { AudioLines, Box, Brain, Copy, GitBranch, Pencil, Sparkles, X } from 'lucide-react'
+import { AudioLines, Box, Brain, Copy, GitBranch, Pencil, Sparkles, X, Zap } from 'lucide-react'
 import { schemaFieldHint } from '../../lib/format'
 import { progressBadgeText, type NodeProgress } from '../runs/runProgress'
-import { isFieldVisible, numberInputAttrs } from './configValidation'
+import { numberInputAttrs } from './configValidation'
+import { nodeSummary } from './editorChrome'
 import { AugmentationsEditor } from './AugmentationsEditor'
 import { LayersEditor } from './LayersEditor'
 import { SplitRatiosEditor } from './SplitRatiosEditor'
 import { StringListEditor } from './StringListEditor'
+import { outputsWithErrorPort, portCaptions, type NodeOnError, type NodeRetry } from './workflowIr'
 
 export type GraphynNodeData = {
   nodeType: string
@@ -18,6 +20,10 @@ export type GraphynNodeData = {
   schemaProps?: Record<string, Record<string, unknown>>
   /** IR 1.2+ placement (Mode B). */
   placement?: NodePlacement | null
+  /** IR 1.3 failure policy (null = fail the run). Route adds a red `error` output handle. */
+  onError?: NodeOnError | null
+  /** IR 1.3 retry policy (null = node default). */
+  retry?: NodeRetry | null
   /** Opaque IR fields the Builder doesn't edit yet — preserved verbatim through load/save. */
   capabilityMetadata?: unknown
   eventTrigger?: unknown
@@ -35,10 +41,17 @@ export type GraphynNodeData = {
   pathBadge?: { letter: string; description: string } | null
   /** View-only: label disambiguated by path ("Trainer · Path B"); never saved. */
   displayLabel?: string
+  /** View-only: title line when several unlabeled nodes share a type (the node id); never saved. */
+  displayTitle?: string
+  /** View-only: secondary type text under `displayTitle` ("Set / Map"); never saved. */
+  displaySubtitle?: string
+  /** View-only: learning rate training actually uses when another node decides it (Trainer wins over Model builder). */
+  effectiveLr?: number | null
   /** View-only: latest node_progress while running; never saved. */
   progress?: NodeProgress | null
   onChangeConfig?: (key: string, value: unknown) => void
   onChangePlacement?: (next: NodePlacement | null) => void
+  onChangeErrorPolicy?: (next: { onError: NodeOnError | null; retry: NodeRetry | null }) => void
   onDelete?: () => void
   onDuplicate?: () => void
   onValidateConfig?: () => void
@@ -456,8 +469,12 @@ function fieldEditor(
   )
 }
 
-export function categoryLook(cat?: string) {
+export function categoryLook(cat?: string, nodeType?: string) {
   const c = (cat || '').toLowerCase()
+  // Triggers (webhook / schedule) are pipeline entry points, not audio inputs.
+  if (c.includes('trigger') || /(^|_)trigger$/i.test(nodeType || '')) {
+    return { bg: 'bg-[#475569]', Icon: Zap }
+  }
   if (c.includes('audio') || c.includes('input') || c.includes('speech')) {
     return { bg: 'bg-[#ff6d5a]', Icon: AudioLines }
   }
@@ -542,33 +559,30 @@ const STATUS_RING: Record<string, string> = {
 }
 
 export default function GraphynNode({ id, data, selected }: NodeProps<GraphynNodeData>) {
-  const props = data.schemaProps ?? {}
   const cfg = data.config ?? {}
-  const visibleEntries = Object.entries(props).filter(([, def]) =>
-    isFieldVisible(def as Record<string, unknown>, cfg, props as Record<string, Record<string, unknown>>),
-  )
   const inputs = data.inputs?.length ? data.inputs : [{ name: 'input' }]
-  const outputs = data.outputs?.length ? data.outputs : [{ name: 'output' }]
+  const outputs = outputsWithErrorPort(data.outputs?.length ? data.outputs : [{ name: 'output' }], data.onError)
+  const captions = portCaptions(data.nodeType, outputs)
   const status = normalizeExecStatus(data.status)
   const isolated = data.runtime === 'isolated' || data.nodeType.startsWith('Isolated_')
-  const look = categoryLook(data.category)
+  const look = categoryLook(data.category, data.nodeType)
   const Icon = look.Icon
   const failed = status === 'failed'
   const skipped = status === 'skipped'
-  const archCue =
-    data.nodeType === 'model_builder' && typeof cfg.architecture === 'string' && cfg.architecture
-      ? String(cfg.architecture)
-      : null
   const path = data.pathBadge ?? null
   const prog = status === 'running' ? data.progress ?? null : null
   const statusWord =
-    status === 'succeeded' ? 'done' : status === 'skipped' ? 'skipped (not run)' : status === 'pending' ? 'waiting' : status
+    status === 'succeeded' ? 'Done' : status === 'skipped' ? 'Skipped (not run)' : status === 'pending' ? 'Waiting' : status === 'running' ? 'Running' : status === 'cancelled' ? 'Cancelled' : status === 'failed' ? 'Failed' : ''
+  const summary = nodeSummary({ nodeType: data.nodeType, category: data.category, config: cfg, learningRate: data.effectiveLr })
+  // Quiet secondary line: status during/after a run, else a key-config summary (or category).
+  const secondary = status !== 'idle' ? statusWord : summary
+  const label = data.displayTitle || data.label || data.nodeType
 
   return (
     <div
-      title={`${data.displayLabel || data.label || data.nodeType}${path ? ` · Path ${path.letter}${path.description ? ` (${path.description})` : ''}` : ''} — ${data.nodeType}${id ? ` · id ${id}` : ''}${status !== 'idle' ? ` · ${statusWord}` : ''}`}
+      title={`${data.displayLabel || label}${path ? ` · Path ${path.letter}${path.description ? ` (${path.description})` : ''}` : ''} — ${data.nodeType}${id ? ` · id ${id}` : ''}${summary ? ` · ${summary}` : ''}${isolated ? ' · isolated runtime' : ''}${status !== 'idle' ? ` · ${statusWord.toLowerCase()}` : ''}`}
       className={clsx(
-        'graphyn-node relative w-[240px] overflow-visible rounded-[10px] border bg-white',
+        'graphyn-node group relative w-[272px] overflow-visible rounded-[10px] border bg-white',
         selected ? 'is-selected border-ink-900' : 'border-ink-200',
         STATUS_RING[status],
         status === 'running' && 'border-accent-500',
@@ -580,6 +594,7 @@ export default function GraphynNode({ id, data, selected }: NodeProps<GraphynNod
         data.configIssues ? 'border-rose-400' : null,
         path ? PATH_EDGE[path.letter] ?? PATH_EDGE.X : null,
       )}
+      style={captions ? { minHeight: Math.max(64, outputs.length * 18 + 14) } : undefined}
     >
       {inputs.flatMap((p, i) => {
         const top = `${((i + 1) / (inputs.length + 1)) * 100}%`
@@ -591,18 +606,31 @@ export default function GraphynNode({ id, data, selected }: NodeProps<GraphynNod
         ]
       })}
 
-      <div className="flex items-center gap-2.5 px-2.5 py-2.5">
-        <div className={clsx('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-white shadow-sm', look.bg)}>
-          <Icon className="h-5 w-5" />
+      <div className="flex items-start gap-2.5 px-2.5 py-2.5">
+        <div className={clsx('mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white shadow-sm', look.bg)}>
+          <Icon className="h-[18px] w-[18px]" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <div className={clsx('truncate text-[15px] font-semibold leading-tight', failed ? 'text-rose-900' : 'text-ink-950')}>
-              {data.label || data.nodeType}
+          <div className="flex items-start gap-1.5">
+            {/* Full step name — wraps to two lines instead of truncating to "Model …". */}
+            <div
+              className={clsx(
+                'line-clamp-2 min-w-0 flex-1 break-words text-[14px] font-semibold leading-snug',
+                failed ? 'text-rose-900' : 'text-ink-950',
+              )}
+            >
+              {label}
             </div>
+            <span
+              className={clsx('mt-1.5 h-2 w-2 shrink-0 rounded-full ring-2 ring-white', STATUS_DOT[status] ?? STATUS_DOT.idle)}
+              title={status}
+              aria-label={`Status ${status}`}
+            />
+          </div>
+          <div className="mt-1 flex min-w-0 items-center gap-1.5">
             {path ? (
               <span
-                className={clsx('shrink-0 rounded px-1.5 py-px text-[11px] font-semibold ring-1', PATH_BADGE[path.letter] ?? PATH_BADGE.X)}
+                className={clsx('shrink-0 rounded px-1.5 py-px text-[10px] font-semibold ring-1', PATH_BADGE[path.letter] ?? PATH_BADGE.X)}
                 title={path.description ? `Path ${path.letter} — ${path.description}` : `Path ${path.letter}`}
               >
                 Path {path.letter}
@@ -616,18 +644,17 @@ export default function GraphynNode({ id, data, selected }: NodeProps<GraphynNod
                 {data.configIssues} invalid
               </span>
             ) : null}
-            <span
-              className={clsx('h-2 w-2 shrink-0 rounded-full ring-2 ring-white', STATUS_DOT[status] ?? STATUS_DOT.idle)}
-              title={status}
-              aria-label={`Status ${status}`}
-            />
-          </div>
-          <div className={clsx('mt-0.5 truncate text-[12px]', failed ? 'text-rose-700' : 'text-ink-500')}>
-            {status !== 'idle' ? `${statusWord} · ` : ''}
-            {archCue ? `${archCue.replace(/_/g, '-')} · ` : ''}
-            {data.category || 'node'}
-            {isolated ? ' · isolated' : ''}
-            {!archCue && visibleEntries.length ? ` · ${visibleEntries.length} settings` : ''}
+            {data.displaySubtitle ? (
+              <span className="shrink-0 text-[11.5px] text-ink-500" title={data.nodeType}>
+                {data.displaySubtitle}
+                {secondary ? <span className="text-ink-300"> ·</span> : null}
+              </span>
+            ) : null}
+            {secondary ? (
+              <span className={clsx('min-w-0 truncate text-[11.5px]', failed ? 'text-rose-700' : 'text-ink-400')}>
+                {secondary}
+              </span>
+            ) : null}
           </div>
           {prog ? (
             <div className="mt-1" aria-live="polite">
@@ -643,7 +670,13 @@ export default function GraphynNode({ id, data, selected }: NodeProps<GraphynNod
             </div>
           ) : null}
         </div>
-        <div className="flex shrink-0 flex-col gap-0.5 opacity-70 hover:opacity-100">
+        {/* Node actions: quiet until hover / focus / selection (keeps the card readable). */}
+        <div
+          className={clsx(
+            'flex shrink-0 flex-col gap-0.5 transition-opacity',
+            selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100',
+          )}
+        >
           {data.onOpenInspector && (
             <button
               type="button"
@@ -692,12 +725,32 @@ export default function GraphynNode({ id, data, selected }: NodeProps<GraphynNod
       {outputs.flatMap((p, i) => {
         const top = `${((i + 1) / (outputs.length + 1)) * 100}%`
         const left = `${((i + 1) / (outputs.length + 1)) * 100}%`
-        const title = `Output “${p.name}”${p.data_type ? ` · ${p.data_type}` : ''} — drag to an input handle`
+        const title = p.isError
+          ? `Error branch “${p.name}” — runs when this step fails (on_error = route)`
+          : `Output “${p.name}”${p.data_type ? ` · ${p.data_type}` : ''} — drag to an input handle`
+        const cls = clsx('graphyn-handle graphyn-handle-out', p.isError && 'graphyn-handle-error')
         return [
-          <Handle key={`out-r-${p.name}`} id={p.name} type="source" position={Position.Right} style={{ top }} className="graphyn-handle graphyn-handle-out" title={title} aria-label={title} />,
-          <Handle key={`out-b-${p.name}`} id={`${p.name}::bottom`} type="source" position={Position.Bottom} style={{ left }} className="graphyn-handle graphyn-handle-out" title={`${title} (bottom)`} aria-label={`${title} (bottom)`} />,
+          <Handle key={`out-r-${p.name}`} id={p.name} type="source" position={Position.Right} style={{ top }} className={cls} title={title} aria-label={title} />,
+          <Handle key={`out-b-${p.name}`} id={`${p.name}::bottom`} type="source" position={Position.Bottom} style={{ left }} className={cls} title={`${title} (bottom)`} aria-label={`${title} (bottom)`} />,
         ]
       })}
+      {captions
+        ? captions.map((c, i) => (
+            <span
+              key={`cap-${c.name}`}
+              aria-hidden
+              className={clsx(
+                'pointer-events-none absolute left-full ml-2 -translate-y-full whitespace-nowrap rounded px-1 font-mono text-[9.5px] leading-[14px]',
+                c.tone === 'ok' && 'bg-emerald-50 text-emerald-800',
+                c.tone === 'bad' && 'bg-rose-50 text-rose-700',
+                c.tone === 'neutral' && 'bg-white/90 text-ink-500',
+              )}
+              style={{ top: `${((i + 1) / (captions.length + 1)) * 100}%` }}
+            >
+              {c.name}
+            </span>
+          ))
+        : null}
     </div>
   )
 }

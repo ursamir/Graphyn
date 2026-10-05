@@ -12,7 +12,8 @@ export type NormalizedRunStatus =
 const SUCCESS = new Set(['completed', 'succeeded', 'success', 'done', 'ok', 'complete'])
 const FAILED = new Set(['failed', 'error', 'errored'])
 const CANCELLED = new Set(['cancelled', 'canceled'])
-const RUNNING = new Set(['running', 'in_progress', 'in-progress', 'active'])
+// A run blocked on a human approval gate is still in flight (durable status "running").
+const RUNNING = new Set(['running', 'in_progress', 'in-progress', 'active', 'awaiting_approval', 'waiting_approval'])
 const PAUSED = new Set(['paused', 'pausing'])
 const QUEUED = new Set(['queued', 'pending', 'scheduled'])
 
@@ -28,6 +29,12 @@ export function normalizeRunStatus(raw: unknown): NormalizedRunStatus {
   if (PAUSED.has(s)) return 'paused'
   if (QUEUED.has(s)) return 'queued'
   return 'unknown'
+}
+
+/** Run waiting on an approval gate (`awaiting_approval` status overlay). */
+export function isAwaitingApproval(raw: unknown): boolean {
+  const s = String(raw ?? '').trim().toLowerCase()
+  return s === 'awaiting_approval' || s === 'waiting_approval'
 }
 
 export function isTerminalSuccess(raw: unknown): boolean {

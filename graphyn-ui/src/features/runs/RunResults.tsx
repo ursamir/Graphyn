@@ -78,8 +78,8 @@ export function RunResultsBanner({
   const regressed = regression ? isRegression(regression) : false
   const improved = regression ? !regressed && Math.abs(regression.delta) > 0.005 : false
   return (
-    <div className="rounded-lg border border-ink-200 bg-gradient-to-r from-emerald-50/70 to-white px-3 py-2" aria-label="Run results">
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+    <div className="min-w-0 rounded-lg border border-ink-200 bg-gradient-to-r from-emerald-50/70 to-white px-3 py-2 [overflow-wrap:anywhere]" aria-label="Run results">
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
         {best?.primary ? (
           <button
             type="button"
@@ -114,14 +114,12 @@ export function RunResultsBanner({
           </button>
         ))}
         {regression ? (
+          // Neutral grey text — only comparable runs (same pipeline + path count) reach here.
           <span
-            className={clsx(
-              'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold',
-              regressed ? 'bg-rose-100 text-rose-900' : improved ? 'bg-emerald-100 text-emerald-900' : 'bg-ink-100 text-ink-700',
-            )}
+            className="inline-flex items-center gap-1 text-[11px] text-ink-500"
             title={`Compared with the best earlier run of this pipeline (${metricLabel(regression.metricName)})`}
           >
-            {regressed ? <TrendingDown className="h-3 w-3" /> : improved ? <TrendingUp className="h-3 w-3" /> : null}
+            {regressed ? <TrendingDown className="h-3 w-3" aria-hidden /> : improved ? <TrendingUp className="h-3 w-3" aria-hidden /> : null}
             {regressed || improved ? '' : '= '}
             {formatMetricDelta(regression.metricName, regression.delta)}
             {regression.previousValue != null
@@ -133,14 +131,16 @@ export function RunResultsBanner({
                 {onOpenRun ? (
                   <button
                     type="button"
-                    className="font-mono underline-offset-2 hover:underline"
+                    className="font-mono underline-offset-2 hover:text-ink-800 hover:underline"
                     onClick={() => onOpenRun(regression.previousRunId!)}
-                    title="Open that run"
+                    title={`Open run ${regression.previousRunId}`}
                   >
-                    {shortRunId(regression.previousRunId)} — open
+                    {shortRunId(regression.previousRunId)}
                   </button>
                 ) : (
-                  <span className="font-mono">{shortRunId(regression.previousRunId)}</span>
+                  <span className="font-mono" title={regression.previousRunId}>
+                    {shortRunId(regression.previousRunId)}
+                  </span>
                 )}
               </>
             ) : null}
@@ -196,7 +196,8 @@ function ConfusionGrid({ matrix, labels }: { matrix: number[][]; labels: string[
   )
 }
 
-function BlobImage({ path, alt }: { path: string; alt: string }) {
+/** Output image fetched as a blob (auth header); renders nothing until loaded. */
+export function BlobImage({ path, alt, className }: { path: string; alt: string; className?: string }) {
   const [url, setUrl] = React.useState<string | null>(null)
   React.useEffect(() => {
     let created: string | null = null
@@ -213,7 +214,7 @@ function BlobImage({ path, alt }: { path: string; alt: string }) {
     }
   }, [path])
   if (!url) return null
-  return <img src={url} alt={alt} className="max-h-40 rounded border border-ink-200 bg-white" />
+  return <img src={url} alt={alt} className={className ?? 'max-h-40 rounded border border-ink-200 bg-white'} />
 }
 
 /** Evaluator detail for the step story: headline metrics, per-class table, confusion matrix. */
@@ -235,7 +236,7 @@ export function EvaluatorResult({
   return (
     <div className="mt-2 space-y-2 rounded-lg border border-ink-200 bg-white px-2.5 py-2">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+        <span className="text-[11px] font-medium text-ink-500">
           Results{path ? ` · ${pathDisplayName(path)}` : ''}
         </span>
         {scalars.map(([k, v]) => (
@@ -248,11 +249,11 @@ export function EvaluatorResult({
         {rows.length > 0 ? (
           <table className="text-[11px] tabular-nums">
             <thead>
-              <tr className="text-left text-[10px] uppercase tracking-wide text-ink-400">
-                <th className="pr-3 font-semibold">Class</th>
-                <th className="pr-3 font-semibold">Precision</th>
-                <th className="pr-3 font-semibold">Recall</th>
-                <th className="font-semibold">F1</th>
+              <tr className="text-left text-[11px] text-ink-500">
+                <th className="pr-3 font-medium">Class</th>
+                <th className="pr-3 font-medium">Precision</th>
+                <th className="pr-3 font-medium">Recall</th>
+                <th className="font-medium">F1</th>
               </tr>
             </thead>
             <tbody>

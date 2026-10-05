@@ -1,6 +1,9 @@
 # app/mcp/handlers/data_ops.py
 """MCP tools for dataset versions (Wave B leftover from Wave A §21.3).
 
+upload_dataset_file shares app.core.mlops.dataset_inputs with the REST upload
+(allowlist, sha256, archive caps) and records a ``dataset.upload`` audit event.
+
 project / version arguments are validated (project-name regex, ``v<N>``
 version regex, resolved-under-datasets/output) before any filesystem access.
 """
@@ -138,7 +141,8 @@ def get_dataset_version_handler(arguments: dict[str, Any] | None = None) -> dict
 
 
 UPLOAD_DATASET_FILE_DESCRIPTION = (
-    "Upload a text/binary payload into datasets/input/{label}/ (sanitized name)."
+    "Upload a file (audio, csv, json, txt, md, pdf, png/jpg, parquet; zip/tar unpacked) "
+    "into datasets/input/{label}/ — sha256 recorded, audited as dataset.upload."
 )
 UPLOAD_DATASET_FILE_SCHEMA = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -158,12 +162,17 @@ UPLOAD_DATASET_FILE_SCHEMA = {
 
 
 def upload_dataset_file_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Store one base64 payload under datasets/input/{label}/ (audited).
+
+    Same allowlist / sha256 / duplicate handling as POST /data/inputs/upload
+    (app.core.mlops.dataset_inputs.UploadSession); zip/tar payloads are
+    unpacked with the same caps.
+    """
     import base64
-    import re
-    from datetime import datetime, timezone
-    from pathlib import Path
+    import io
 
     from app.core.config import datasets_input_dir
+    from app.core.mlops.dataset_inputs import UploadError, UploadSession, audit_file_meta, is_valid_label
 
     args = arguments or {}
     label = str(args.get("label") or "").strip()
@@ -171,11 +180,9 @@ def upload_dataset_file_handler(arguments: dict[str, Any] | None = None) -> dict
     b64 = str(args.get("content_base64") or "")
     if not label or not filename or not b64:
         return _err("validation_failed", "label, filename, content_base64 required")
-    if not re.match(r"^[A-Za-z0-9_-]+$", label):
+    if not is_valid_label(label):
         return _err("validation_failed", "invalid label")
-    # Sanitize filename
-    safe = Path(filename).name
-    safe = re.sub(r"[^A-Za-z0-9._-]", "_", safe)
+    safe = Path(filename.replace("\\", "/")).name
     if not safe:
         return _err("validation_failed", "invalid filename")
     try:
@@ -184,16 +191,47 @@ def upload_dataset_file_handler(arguments: dict[str, Any] | None = None) -> dict
         return _err("validation_failed", "content_base64 is not valid base64")
     if len(data) > 25 * 1024 * 1024:
         return _err("validation_failed", "file too large for MCP upload (25MB max)")
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    out_name = f"{stamp}_{safe}"
-    dest_dir = datasets_input_dir() / label
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / out_name
-    dest.write_bytes(data)
+    root = datasets_input_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    session = UploadSession(input_root=root, target_label=label)
+    try:
+        session.add_files([(safe, io.BytesIO(data))])
+    except UploadError as exc:
+        session.rollback()
+        return _err("validation_failed", exc.message)
+    summary = session.summary()
+    if not summary["files"]:
+        reason = summary["skipped"][0]["reason"] if summary["skipped"] else "nothing stored"
+        if summary["skipped"] and reason.startswith("identical"):
+            return {"ok": True, "label": label, "filename": safe, "duplicate": True, "size": len(data)}
+        return _err("validation_failed", reason)
+    try:
+        from app.core.trust.audit import record_audit
+
+        record_audit(
+            actor=str(args.get("actor") or "mcp"),
+            action="dataset.upload",
+            resource_type="dataset_input",
+            resource_id=",".join(summary["labels"]) or label,
+            meta={
+                "label": label,
+                "labels": summary["labels"],
+                "count": summary["count"],
+                "total_bytes": summary["total_bytes"],
+                "content_hash": summary["content_hash"],
+                "via": "mcp",
+                **audit_file_meta(summary["files"]),
+            },
+        )
+    except Exception:
+        pass
+    first = summary["files"][0]
     return {
         "ok": True,
-        "label": label,
-        "filename": out_name,
-        "path": str(dest),
-        "size": len(data),
+        "label": first["label"],
+        "filename": first["path"].rsplit("/", 1)[-1],
+        "path": str(root / first["path"]),
+        "size": first["size"],
+        "sha256": first["sha256"],
+        "files": summary["files"],
     }

@@ -1,0 +1,20 @@
+[plugin]
+name             = "credential-probe"
+version          = "0.1.0"
+description      = "Smoke plugin: declares a credential kind and resolves an existing connection without restart."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["credentials", "smoke", "common"]
+
+dependencies = []
+optional_dependencies = []
+runtime = "inprocess"
+node_types = ["credential_probe"]
+credential_kinds = ["openai_compat", "ollama", "smtp"]
+
+[config_schema.credential_probe]
+kind = { type = "string", title = "Kind", default = "openai_compat", description = "Credential kind to resolve.", enum = ["openai_compat", "ollama", "smtp"] }
+connection_id = { type = "string", title = "Credential connection id", default = "", description = "Existing connection id to bind. Empty → workspace default → env." }

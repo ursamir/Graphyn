@@ -1,3 +1,5 @@
+import { irVersionFor, onErrorToIr, retryToIr, type NodeOnError, type NodeRetry } from '../features/builder/workflowIr'
+
 export type NodePlacement = {
   mode?: 'auto' | 'local' | 'worker' | 'pool'
   worker?: string | null
@@ -16,6 +18,10 @@ export interface GraphNode {
   event_trigger?: unknown
   /** IR 1.2+ distributed placement hint (Mode B). */
   placement?: NodePlacement | null
+  /** IR 1.3 failure policy — omitted = fail the run. */
+  on_error?: { mode: 'fail' | 'continue' | 'route'; port?: string } | null
+  /** IR 1.3 retry policy — omitted = node class default. */
+  retry?: { max_attempts: number; backoff_s?: number; max_backoff_s?: number; on?: Array<'exception' | 'timeout'> } | null
 }
 
 export interface GraphEdge {
@@ -96,6 +102,8 @@ export function buildGraphFromCanvas(
       label?: string | null
       capabilityMetadata?: unknown
       eventTrigger?: unknown
+      onError?: NodeOnError | null
+      retry?: NodeRetry | null
     }
   }>,
   edges: Array<{
@@ -123,8 +131,9 @@ export function buildGraphFromCanvas(
     if (p.min_vram_mib != null) return true
     return false
   })
+  const hasErrorPolicy = nodes.some((n) => onErrorToIr(n.data.onError) || retryToIr(n.data.retry))
   return {
-    schema_version: hasPlacement ? '1.2' : '1.1',
+    schema_version: irVersionFor(hasPlacement, hasErrorPolicy),
     metadata: {
       name,
       seed,
@@ -132,21 +141,28 @@ export function buildGraphFromCanvas(
       created_at: null,
       tags: ['workspace-artifacts'],
     },
-    nodes: nodes.map((n) => ({
-      id: n.id,
-      node_type: n.data.nodeType,
-      config: n.data.config ?? {},
-      label: n.data.label ?? null,
-      capability_metadata: n.data.capabilityMetadata ?? null,
-      event_trigger: n.data.eventTrigger ?? null,
-      placement: n.data.placement ?? null,
-    })),
+    nodes: nodes.map((n) => {
+      const onError = onErrorToIr(n.data.onError)
+      const retry = retryToIr(n.data.retry)
+      return {
+        id: n.id,
+        node_type: n.data.nodeType,
+        config: n.data.config ?? {},
+        label: n.data.label ?? null,
+        capability_metadata: n.data.capabilityMetadata ?? null,
+        event_trigger: n.data.eventTrigger ?? null,
+        placement: n.data.placement ?? null,
+        // IR 1.3 — only written when set, so 1.1/1.2 graphs stay byte-identical.
+        ...(onError ? { on_error: onError } : {}),
+        ...(retry ? { retry } : {}),
+      }
+    }),
     edges: edges.map((e) => ({
       src_id: e.source,
       src_port: canonicalPort(e.sourceHandle, 'output'),
       dst_id: e.target,
       dst_port: canonicalPort(e.targetHandle, 'input'),
-      condition: e.data?.condition ?? null,
+      condition: (e.data?.condition ?? '').trim() || null,
     })),
     parameters: parameters ?? {},
     ui: { positions },

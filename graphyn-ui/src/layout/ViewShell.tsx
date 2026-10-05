@@ -36,11 +36,11 @@ export function ViewShell({
   headerClassName,
 }: ViewShellProps) {
   return (
-    <div className={clsx('flex h-full min-h-0 flex-col bg-white', className)}>
+    <div className={clsx('flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-white', className)} data-shell-noscroll>
       <div className={clsx('page-shell-header relative z-10', inlineToolbar && '!py-1.5', headerClassName)}>
         {inlineToolbar ? (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            <div className="min-w-0 shrink-0">
+            <div className="min-w-0 max-w-full">
               <h1 className="text-[15px] font-semibold leading-tight tracking-tight text-ink-950">
                 {title}
               </h1>
@@ -48,9 +48,9 @@ export function ViewShell({
                 <p className="mt-0.5 text-type-meta text-ink-500">{description}</p>
               ) : null}
             </div>
-            {toolbar ? <div className="min-w-0">{toolbar}</div> : null}
+            {toolbar ? <div className="min-w-0 max-w-full">{toolbar}</div> : null}
             {actions ? (
-              <div className="ml-auto flex flex-wrap items-center gap-1.5">{actions}</div>
+              <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5">{actions}</div>
             ) : null}
           </div>
         ) : (
@@ -64,7 +64,9 @@ export function ViewShell({
                   <p className="mt-0.5 text-type-meta text-ink-500">{description}</p>
                 ) : null}
               </div>
-              {actions ? <div className="flex flex-wrap items-center gap-1.5">{actions}</div> : null}
+              {actions ? (
+                <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5">{actions}</div>
+              ) : null}
             </div>
             {toolbar ? <div className="mt-2">{toolbar}</div> : null}
           </>

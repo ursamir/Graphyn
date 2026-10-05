@@ -3,7 +3,11 @@
 Bounded Context:  BC5 — Execution Runtime
 Responsibility:   Drive a single node through its full lifecycle with retry.
 Owns:             NodeExecutor class — setup/teardown, on_start→process→on_end
-                  sequencing, exponential back-off retry, streaming execution.
+                  sequencing, exponential back-off retry, streaming execution;
+                  IR 1.3 per-node retry (``_graphyn_retry``) and on_error
+                  route/continue (``_graphyn_on_error``, stamped by the
+                  planner) with node_retry / node_error_routed /
+                  node_failed_continued events via the progress sink.
 Public Surface:   NodeExecutor(node, run_id), .setup(), .teardown(),
                   .execute(inputs) -> dict, .execute_stream(inputs) -> AsyncGen,
                   .request_cancel(), .set_cancel_check(), .is_cancel_requested,
@@ -25,6 +29,8 @@ from app.core.nodes.base import Node
 from app.core.nodes.metadata import stable_node_type
 from app.core.nodes.observers import NodeObserver
 from app.core.nodes.retry import RetryPolicy
+
+ERROR_PORT_DEFAULT = "error"  # mirrors app.core.ir.models.ERROR_PORT_DEFAULT
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +67,77 @@ def _continue_error_output(node: Node, exc: Exception) -> dict[str, Any] | None:
             "message": str(exc),
         }
     }
+
+
+def _error_type(exc: BaseException | None) -> str:
+    if exc is None:
+        return "Exception"
+    return str(getattr(exc, "error_type", None) or type(exc).__name__)
+
+
+def _short_message(exc: BaseException | None, limit: int = 2000) -> str:
+    text = str(exc) if exc is not None else ""
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _ir_on_error(node: Any) -> dict[str, Any] | None:
+    """IR 1.3 on_error policy stamped by PipelineGraph (plain dict) or None."""
+    pol = getattr(node, "_graphyn_on_error", None)
+    return pol if isinstance(pol, dict) else None
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    return any("timeout" in cls.__name__.lower() for cls in type(exc).__mro__)
+
+
+class _EffectiveRetry:
+    """Retry decisions for one node: IR 1.3 ``retry`` overrides RetryPolicy."""
+
+    def __init__(
+        self,
+        max_attempts: int,
+        wait_fn: Any,
+        retryable_fn: Any,
+    ) -> None:
+        self.max_attempts = max(1, int(max_attempts))
+        self._wait = wait_fn
+        self._retryable = retryable_fn
+
+    @classmethod
+    def for_node(cls, node: Any) -> "_EffectiveRetry":
+        ir = getattr(node, "_graphyn_retry", None)
+        if isinstance(ir, dict):
+            backoff = max(0.0, float(ir.get("backoff_s") or 0.0))
+            cap = max(0.0, float(ir.get("max_backoff_s") if ir.get("max_backoff_s") is not None else 60.0))
+            on = {str(x) for x in (ir.get("on") or ["exception"])}
+
+            def _wait(i: int) -> float:
+                return min(backoff * (2 ** max(0, int(i))), cap)
+
+            def _retryable(exc: BaseException) -> bool:
+                if "exception" in on:
+                    return True
+                return "timeout" in on and _is_timeout(exc)
+
+            return cls(int(ir.get("max_attempts") or 1), _wait, _retryable)
+        policy: RetryPolicy | None = getattr(node, "retry_policy", None)
+        if policy is None:
+            return cls(1, lambda i: 0.0, lambda exc: True)
+        return cls(policy.max_attempts, policy.wait_before_attempt, policy.is_retryable)
+
+    def wait_before_attempt(self, attempt_index: int) -> float:
+        try:
+            return float(self._wait(attempt_index) or 0.0)
+        except Exception:
+            return 0.0
+
+    def is_retryable(self, exc: BaseException) -> bool:
+        try:
+            return bool(self._retryable(exc))
+        except Exception:
+            return True
 
 
 class NodeExecutor:
@@ -175,11 +252,13 @@ class NodeExecutor:
             inputs: Dict mapping input port names to their values.
 
         Returns:
-            Dict mapping output port names to their produced values.
+            Dict mapping output port names to their produced values. With an
+            IR ``on_error`` policy a final failure returns ``{}`` (continue)
+            or ``{<error port>: {...}}`` (route) instead of raising.
 
         Raises:
             Exception: The last exception raised by process() after all retry
-                       attempts are exhausted.
+                       attempts are exhausted (no on_error policy).
 
         Warning:
             Must not be called directly from a coroutine — use
@@ -191,19 +270,33 @@ class NodeExecutor:
             # A previous failure tore the node down; re-acquire resources
             # instead of running process() against a torn-down node.
             self.setup()
-        policy: RetryPolicy | None = node.retry_policy
-        max_attempts = policy.max_attempts if policy else 1
+        retry = _EffectiveRetry.for_node(node)
+        max_attempts = retry.max_attempts
         node_type = stable_node_type(node)
 
         last_exc: Exception | None = None
+        attempts_made = 0
 
         for attempt in range(max_attempts):
             self._raise_if_cancelled()
-            if attempt > 0 and policy:
-                wait = policy.wait_before_attempt(attempt - 1)
+            if attempt > 0:
+                wait = retry.wait_before_attempt(attempt - 1)
+                self._emit_event(
+                    "node_retry",
+                    message=(
+                        f"retrying (attempt {attempt + 1}/{max_attempts}) after "
+                        f"{_error_type(last_exc)}"
+                    ),
+                    attempt=attempt + 1,
+                    max_attempts=max_attempts,
+                    wait_s=round(float(wait), 3),
+                    error_type=_error_type(last_exc),
+                    error=_short_message(last_exc),
+                )
                 if wait > 0:
                     self._interruptible_sleep(wait)
 
+            attempts_made = attempt + 1
             try:
                 # on_start() calls observer.on_node_start() internally (base.py).
                 # Do NOT call observer directly here — that would fire the event twice.
@@ -214,6 +307,8 @@ class NodeExecutor:
                 # on_error() calls observer.on_node_error() internally.
                 node.on_error(exc)
                 last_exc = exc
+                if not retry.is_retryable(exc):
+                    return self._final_failure(exc, attempts_made)
                 continue
 
             t0 = time.perf_counter()
@@ -244,13 +339,8 @@ class NodeExecutor:
                 last_exc = exc
                 # SA-NE4: if the policy marks this exception as non-retryable,
                 # surface it immediately without consuming remaining attempts.
-                if policy and not policy.is_retryable(exc):
-                    continued = _continue_error_output(node, exc)
-                    if continued is not None:
-                        return continued
-                    if self._setup_done:
-                        self.teardown()
-                    raise
+                if not retry.is_retryable(exc):
+                    return self._final_failure(exc, attempts_made)
                 continue
 
             if attempt > 0:
@@ -262,15 +352,83 @@ class NodeExecutor:
         # on_error() was already called inside the loop on the last failed attempt.
         # Do NOT call it again here — that would fire the event twice (BUG-6 fix).
         assert last_exc is not None
+        return self._final_failure(last_exc, attempts_made)
+
+    def _final_failure(self, exc: Exception, attempts: int) -> dict[str, Any]:
+        """Apply the failure policy after the last attempt: route / continue / raise.
+
+        Precedence: IR ``on_error`` (any node) → legacy Config
+        ``on_error_port`` continuation → re-raise. Cancellation is never
+        routed or swallowed.
+        """
+        node = self._node
+        if not self.is_cancel_requested():
+            policy = _ir_on_error(node)
+            mode = (policy or {}).get("mode")
+            if mode == "route":
+                port = str((policy or {}).get("port") or ERROR_PORT_DEFAULT)
+                payload = {
+                    "ok": False,
+                    "error_type": _error_type(exc),
+                    "message": _short_message(exc),
+                    "node_id": self._node_id(),
+                    "node_type": stable_node_type(node),
+                    "attempt": int(attempts),
+                }
+                self._emit_event(
+                    "node_error_routed",
+                    message=f"failure routed to port '{port}': {_error_type(exc)}",
+                    port=port,
+                    attempt=int(attempts),
+                    error_type=payload["error_type"],
+                    error=payload["message"],
+                )
+                return {port: payload}
+            if mode == "continue":
+                self._emit_event(
+                    "node_failed_continued",
+                    message=f"failed ({_error_type(exc)}); on_error=continue — run continues",
+                    attempt=int(attempts),
+                    error_type=_error_type(exc),
+                    error=_short_message(exc),
+                )
+                return {}
+            if mode != "fail":
+                continued = _continue_error_output(node, exc)
+                if continued is not None:
+                    return continued
         # SA-NE1 fix: only call teardown() if setup() was previously called.
-        # If on_start() raised on every attempt, setup() may have succeeded but
-        # teardown() should still be guarded by _setup_done.
-        continued = _continue_error_output(node, last_exc)
-        if continued is not None:
-            return continued
         if self._setup_done:
             self.teardown()
-        raise last_exc
+        raise exc
+
+    def _node_id(self) -> str:
+        return str(
+            self._progress_node_id or getattr(self._node, "_graphyn_node_id", "") or ""
+        )
+
+    def _emit_event(self, event_type: str, **fields: Any) -> None:
+        """Journal a retry / routed-error event through the progress sink.
+
+        The orchestrator's sink records it in logs.json + the NDJSON stream
+        (``type`` is preserved) and mirrors the latest event per node into
+        ``meta.json["node_progress"]``. Never raises.
+        """
+        event = {
+            "type": event_type,
+            "node_id": self._node_id(),
+            "node_type": stable_node_type(self._node),
+            "run_id": self._run_id,
+            **fields,
+        }
+        log.info("%s node=%s %s", event_type, event["node_id"], fields.get("message", ""))
+        sink = self._progress_sink
+        if sink is None:
+            return
+        try:
+            sink(event)
+        except Exception:
+            log.debug("node event sink failed", exc_info=True)
 
     def _node_type_name(self, node: Node) -> str | None:
         name = stable_node_type(node)

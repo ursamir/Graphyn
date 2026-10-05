@@ -3,7 +3,20 @@
 All endpoints are under `/api/v1/`. The old root-path endpoints (`/schemas`, `/runs`, `/validate`, `/run-stream`, etc.) no longer exist and return 404.
 
 **Base URL:** `http://localhost:8001` (default)  
-**Auth:** Bearer token via `GRAPHYN_API_TOKEN`. When set, include `Authorization: Bearer <token>`. Fail-closed when `GRAPHYN_AUTH_REQUIRED=1` or `GRAPHYN_ENV=production|staging` (empty token rejected). Local development may leave the token unset.
+**Auth:** Bearer token via `GRAPHYN_API_TOKEN` and/or the named-token map `GRAPHYN_API_TOKENS` / `GRAPHYN_API_TOKENS_FILE` (see [DEPLOYMENT.md](./DEPLOYMENT.md#named-tokens--audit-identity)). When any is set, include `Authorization: Bearer <token>`; every mapped token and the single token are accepted. Fail-closed when `GRAPHYN_AUTH_REQUIRED=1` or `GRAPHYN_ENV=production|staging` (no token configured → rejected). Local development may leave tokens unset.
+
+**Audit identity.** The actor recorded on audit events, run meta and the sealed run record is bound to the bearer token: a token mapped to a name → `actor` = that name, `actor_verified: true`; an `X-Actor` header (or body `actor`) that differs is kept only as `claimed_actor`. Unmapped token (or no auth) → `actor` = `X-Actor` / body actor, else `"unidentified"`, `actor_verified: false`. HTTP actions never record `"system"` — that is reserved for internal background jobs (`origin: "internal"`).
+
+### `GET /api/v1/me`
+
+Who the audit trail records the caller as (Access page).
+
+```json
+{"actor": "alice", "actor_verified": true, "token_mapped": true, "claimed_actor": null,
+ "auth_configured": true, "token_map_configured": true}
+```
+
+`claimed_actor` is the differing `X-Actor` when the token is mapped, else `null`.
 
 ---
 
@@ -195,6 +208,18 @@ Runs never create or overwrite saved project pipelines. The executed graph is st
 
 **503 `draining`:** the only 503 this route (and `/run-async`) returns. It means the control plane is shutting down. Body: `{"error": {"code": "draining", "retryable": true, …}}` with a `Retry-After: 30` header. Retry after the API restarts. There is no concurrency 503: runs beyond the 4-thread stream executor queue (`pending`) instead of being refused.
 
+
+#### Run inputs and parameters (both `/run` and `/run-async`)
+
+Optional body keys next to the graph (`{"graph": {...}, "inputs": …, "parameters": …}`):
+
+| Key | Shape | Effect |
+|---|---|---|
+| `inputs` | `{node_id: {port: value}}` | Passed to `get_backend().execute(..., input_overrides=…)`. Each value is fed to that node's **input** port (overrides any edge into it). Unknown node → 422; port not declared by the node class → 422. Canonical JSON size cap `GRAPHYN_RUN_INPUTS_MAX_BYTES` (default 1 MiB) → **413**. |
+| `parameters` | `{name: value}` | Only for graphs that declare `parameters` (`GraphIR.parameters`). Values are type-checked against `IRParameter.type` (int, float/number, str/string, bool/boolean, list/array, dict/object); missing names take `default`. Every config string equal to `"${params.NAME}"` becomes the typed value; strings containing `${params.NAME}` get it interpolated. Unknown name / wrong type / parameters on a graph without declared parameters → 422. |
+
+Run meta records fingerprints, never values: `inputs_sha256` (SHA-256 of the canonical JSON), `input_keys` (`["node.port", …]`), `inputs_bytes`, `parameters_sha256`, `parameter_names`. They are **not** yet part of the sealed `prove.json` record (needs `audit_record.py`).
+
 #### Streaming Protocol
 
 Each line is a JSON object. Two types of objects are interleaved:
@@ -226,13 +251,13 @@ Each line is a JSON object. Two types of objects are interleaved:
 
 **Error field.** `error` is the canonical error text on `node_error` and the terminal `error` event (`error_message` / `message` are kept for older clients). When the run failed because a node failed, that failure was already streamed as `node_error`; the terminal `error` event then carries `already_reported: true` plus `node_id` / `node_type`. Render the error once (from `node_error`) and treat that terminal event only as end-of-stream. Without `already_reported` (backend / planner errors), the terminal event is the only report.
 
-The stream starts with `run_started` (and `X-Run-Id`). It **always** ends with either `{"type": "done", "run_id": "…"}` (success — synthesized if the backend emitted none) or `{"type": "error", "run_id": "…"}` (failure), then closes. Back-pressure: at most 512 events are buffered per stream; when a slow client lets the buffer fill, the **oldest non-terminal** events are dropped (the terminal event is never dropped) and the execution thread never blocks. A disconnected client stops buffering; the run itself continues and is visible via `GET /runs/{run_id}`. The `run.start` audit actor is `X-Actor` (default `api`).
+The stream starts with `run_started` (and `X-Run-Id`). It **always** ends with either `{"type": "done", "run_id": "…"}` (success — synthesized if the backend emitted none) or `{"type": "error", "run_id": "…"}` (failure), then closes. Back-pressure: at most 512 events are buffered per stream; when a slow client lets the buffer fill, the **oldest non-terminal** events are dropped (the terminal event is never dropped) and the execution thread never blocks. A disconnected client stops buffering; the run itself continues and is visible via `GET /runs/{run_id}`. The `run.start` audit actor is the token-bound identity (mapped token name, else `X-Actor`, else `unidentified`).
 
 All timestamps are UTC-aware ISO 8601 strings ending in `+00:00`.
 
 ---
 
-**Audit inputs (both run endpoints; body may be the wrapper `{graph, project?, trigger?, pipeline?, pipeline_env?, pipeline_version?}`):** optional body keys `trigger` (`ui|api|…`, default `api`; the console sends `ui`), `pipeline` (saved pipeline name), `pipeline_env` (`draft|staging|prod`), `pipeline_version` (`vN`). `X-Actor` sets the actor; it is written to `meta.actor` before execution and reused by the sealed record and every `run.*` audit event.
+**Audit inputs (both run endpoints; body may be the wrapper `{graph, project?, trigger?, pipeline?, pipeline_env?, pipeline_version?}`):** optional body keys `trigger` (`ui|api|…`, default `api`; the console sends `ui`), `pipeline` (saved pipeline name), `pipeline_env` (`draft|staging|prod`), `pipeline_version` (`vN`). The token-bound actor (mapped token name, else `X-Actor`, else `unidentified`) plus `actor_verified` / `claimed_actor` are written to `meta` before execution and reused by the sealed record and every `run.*` audit event.
 
 ### `POST /api/v1/pipelines/run-async`
 
@@ -240,12 +265,13 @@ Start a pipeline run in a background thread and return the `run_id` immediately.
 
 **Request body:**
 ```json
-{"graph": {...}}
+{"graph": {...}, "inputs": {"node_id": {"port": "value"}}, "parameters": {"name": "value"}}
 ```
+`inputs` / `parameters` are optional — see *Run inputs and parameters* above.
 
 **Response:**
 ```json
-{"run_id": "a1b2c3d4e5f6..."}
+{"run_id": "a1b2c3d4e5f6...", "status": "pending"}
 ```
 
 `run_id` is a full 32-char UUID4 hex string. Poll `GET /api/v1/runs/{run_id}/status` to check progress. Status is read from `meta.json` on disk — not from an in-memory dict.
@@ -441,7 +467,8 @@ Get a run's config YAML and log entries.
 ```json
 {
   "run_id": "a1b2c3d4",
-  "meta": {"run_id": "a1b2c3d4", "status": "completed", ...},
+  "meta": {"run_id": "a1b2c3d4", "status": "completed", "actor": "alice", "actor_verified": true, ...},
+  "last_verify": {"checked_at": "…", "actor": "alice", "actor_verified": true, "ok": true, "status": "pass", "passed": 9, "total": 9},
   "config_yaml": "pipeline:\n  seed: 42\n  ...",
   "logs": [
     {"time": "2024-01-01T00:00:00+00:00", "level": "INFO", "message": "Pipeline starting — 5 nodes"},
@@ -465,7 +492,7 @@ Get a run's config YAML and log entries.
 
 **Run-level metrics.** `meta.metrics` on run rows / detail (and experiment rows) is the **best path's** metrics for multi-path runs — the same pick as the results banner (`summary.best_path_id`; primary metric from `PRIMARY_METRICS`, accuracy-like higher-is-better, loss/error-like lower-is-better). Extra fields: `metrics_path: {path_id, label}`, `metrics_by_path: [{path_id, label, metrics, best}]`, and `metrics_first_found` (the finalize-time `metrics.json` of the first node folder, previously returned as `metrics`).
 
-**Audit fields** (see [Run audit record](#run-audit-record--prove-json)): `record` (the sealed `prove.json`, `null` while the run is not terminal), `record_status` (`sealed` | `pending`), `pipeline_drift` (below, `null` for ad-hoc graphs). `meta` carries `actor`, `trigger` (`ui|api|cli|sdk|mcp|schedule|replay|agent|webhook|ship` — run payload `trigger`; unknown values → `api`), `lineage_request` (sanitized payload `lineage`), `node_labels` (`{node_id: "Trainer · Path C (MobileNet · lr 0.002)"}`), `replay_of`, `pipeline_ref`, `pipeline_source`, `external_inputs`, `node_implementations`, `environment_info`, `archived*`, and for failed runs `error` (`"<ExceptionType>: <message>"`), `error_type`, `error_traceback`, `failed_node_id`. `meta.node_stats[]` rows carry `node_label` and, on cache hits, `cache_key` + `cache_source_run_id` (the run that produced the cache entry). Log events `node_start` / `node_end` / `node_error` / `node_progress` / `node_skip` carry `node_label`; `node_error` carries the real `error_type` and `traceback` (isolated plugin workers report the worker exception, not stderr noise).
+**Audit fields** (see [Run audit record](#run-audit-record--prove-json)): `record` (the sealed `prove.json`, `null` while the run is not terminal), `record_status` (`sealed` | `pending`), `pipeline_drift` (below, `null` for ad-hoc graphs). `meta` carries `actor`, `actor_verified`, `claimed_actor?`, `trigger` (`ui|api|cli|sdk|mcp|schedule|replay|agent|webhook|ship` — run payload `trigger`; unknown values → `api`), `lineage_request` (sanitized payload `lineage`), `node_labels` (`{node_id: "Trainer · Path C (MobileNet · lr 0.002)"}`; a path's `lr` is the Trainer's `learning_rate` when set, else the Model builder's — matching what the Trainer compiles with), `replay_of`, `pipeline_ref`, `pipeline_source`, `external_inputs`, `node_implementations`, `environment_info`, `archived*`, and for failed runs `error` (`"<ExceptionType>: <message>"`), `error_type`, `error_traceback`, `failed_node_id`. `meta.node_stats[]` rows carry `node_label` and, on cache hits, `cache_key` + `cache_source_run_id` (the run that produced the cache entry). Log events `node_start` / `node_end` / `node_error` / `node_progress` / `node_skip` carry `node_label`; `node_error` carries the real `error_type` and `traceback` (isolated plugin workers report the worker exception, not stderr noise).
 
 `pipeline_drift`: `{project, pipeline, env, run_graph_hash, current_hash, drifted, layout_only, checked_at}` — compares the run's logical `graph_hash` with the **current** saved pipeline of the same name/env (prepared like a run: path rewire + project stamp). `drifted: null` when the saved pipeline is gone; `layout_only: true` when only canvas `ui` positions differ.
 
@@ -590,7 +617,9 @@ Get the current status of a run.
 
 `node_progress` maps `node_id` → latest progress event (`{}` when no node reported progress).
 
-`status` values: `"running"`, `"completed"`, `"failed"`, `"cancelled"`, `"unknown"`
+`status` values: `"pending"`, `"running"`, `"awaiting_approval"`, `"paused"`, `"succeeded"` (legacy `"completed"`), `"failed"`, `"cancelled"`, `"unknown"`
+
+`awaiting_approval` is a display status: the durable meta status stays `running` while a `hitl_approve` gate waits for a decision. The response then also carries `durable_status: "running"`, `awaiting_approval: true` and `pending_gates: ["<node_id>", …]`. The same overlay is applied to `GET /runs` rows and `GET /runs/{run_id}` meta.
 
 `progress_pct` is `null` when `num_nodes` is absent from `meta.json` (e.g. run failed before metadata was written).
 
@@ -693,7 +722,7 @@ Pipeline graphs should write under `workspace/artifacts/<name>/` or other jailed
 
 ### `GET /api/v1/runs/{run_id}/outputs/zip`
 
-Zip of prioritised output files (higher file cap than the UI listing; ArtifactStore inventories are expanded without the UI’s 32-sample preview cap) as an attachment. Members are packed under ``<node_id>/<filename>`` (``run/`` when unattributed) so same basenames from dual Trainers do not collide. Headers: ``X-Graphyn-Outputs-Zip-Truncated: true|false``, ``X-Graphyn-Outputs-Zip-Count`` (members packed). Truncation means the prioritised selection or the 512 MiB zip budget omitted some files — not a guaranteed full dump of every wav when a node has thousands.
+Audited as `run.outputs_zip` (size + sha256 of the returned bytes, member count, truncated flag). Zip of prioritised output files (higher file cap than the UI listing; ArtifactStore inventories are expanded without the UI’s 32-sample preview cap) as an attachment. Members are packed under ``<node_id>/<filename>`` (``run/`` when unattributed) so same basenames from dual Trainers do not collide. Headers: ``X-Graphyn-Outputs-Zip-Truncated: true|false``, ``X-Graphyn-Outputs-Zip-Count`` (members packed). Truncation means the prioritised selection or the 512 MiB zip budget omitted some files — not a guaranteed full dump of every wav when a node has thousands.
 
 ---
 
@@ -706,13 +735,50 @@ Point `workspace/artifacts/<slug>/<alias>` at this run’s artifact tree.
 { "alias": "latest" }
 ```
 
-`alias` defaults to `latest`. Allowed form: lowercase letter, then letters/digits/hyphens (`staging`, `prod`, …). Audits as `run.promote` (actor from `X-Actor` or `api`).
+`alias` defaults to `latest`. Allowed form: lowercase letter, then letters/digits/hyphens (`staging`, `prod`, …). Audits as `run.promote` (token-bound actor).
 
 **Response:** `{ "slug", "run_id", "alias", "path", "latest" }` (`latest` mirrors `path` for backward compatibility).
 
 **Errors:** `404` missing run (or its artifact run dir vanished before the alias was published), `409` no slug/artifacts, `422` invalid alias.
 
 ---
+
+### Approval gates — `GET /api/v1/runs/{run_id}/gates`
+
+Human approval gates are `hitl_approve` nodes. The node writes a request file and polls for a decision file (`{decision_dir}/{run_id}__{gate_id}.decision.json`); these routes read and write that contract.
+
+**Query:** `?pending_only=true` returns only waiting gates.
+
+**Response:**
+```json
+{
+  "run_id": "…",
+  "run_status": "running",
+  "awaiting_approval": true,
+  "gates": [{
+    "node_id": "approve_ship", "gate_id": "approve_ship", "label": "Ship to prod?",
+    "prompt": "Ship to prod?", "status": "pending", "pending": true,
+    "request_id": "…", "requested_at": "2026-10-05T10:00:00+00:00",
+    "waiting_since": "2026-10-05T10:00:00+00:00", "timeout_s": 3600.0,
+    "expires_at": "2026-10-05T11:00:00+00:00", "approver_roles": [], "reason_required": true,
+    "decision": null, "outcome": null
+  }]
+}
+```
+
+`status`: `not_reached` (no request yet) · `pending` · `decided` (decision written, node not yet polled) · `approved` · `rejected` · `expired` (timeout passed; the node rejects) · `unattended` (`unattended_approve=true`). `prompt` is the node config `prompt`/`message`, else the node label, else `Approve gate '<gate_id>'`. `decision` (when present): `{approved, approver, role, decided_at, actor_verified, source, comment_sha256}`.
+
+### `POST /api/v1/runs/{run_id}/gates/{node_id}/decision`
+
+**Body:** `{"decision": "approve"|"reject", "comment": "LGTM", "role": "release-manager"?}`
+
+The approver is the token-bound actor (`resolve_identity`: mapped `GRAPHYN_API_TOKENS` name → `actor_verified: true`; otherwise X-Actor / `unidentified`, unverified). The decision file is created atomically and **create-only** (`{request_id, approved, approver, role, reason, decided_at, actor_verified, source: "api", comment_sha256}`).
+
+**Response:** `{"run_id": "…", "gate": {<gate view with status "decided">}}`
+
+**Errors:** 404 unknown gate · 409 `gate_not_pending` (not reached / already decided / expired) or `gate_already_decided` · 422 bad `decision`, missing `comment` when `reason_required`, or `role` not in `approver_roles` when approving. Audited as `gate.decision` with the actor, decision, role and `comment_sha256` (the comment text is not in the audit log).
+
+MCP: `list_pending_gates`, `decide_gate` (approve requires `GRAPHYN_MCP_HUMAN_APPROVAL=1`).
 
 ### Run control — `POST /api/v1/runs/{run_id}/pause|resume|cancel`
 
@@ -753,7 +819,7 @@ Every terminal run (succeeded / failed / cancelled) seals an immutable `runs/<id
 | `outputs`, `outputs_manifest_hash` | per-node output folder hashes (+ `outputs_manifest.json` per-file sidecar used for verify diffs) |
 | `cache` | `[{node_id, node_type, cache_key, source_run_id}]` for cache hits |
 | `environment` | python, OS, machine, hostname, key host `libraries` (numpy, tensorflow, keras, librosa, torch, onnx, …); `image` (display: `name@digest`, else name, else `"docker container <id12> (image not recorded)"`), `image_name` / `image_tag` / `image_digest` (env `GRAPHYN_IMAGE` / `GRAPHYN_IMAGE_DIGEST`, else `BUILD_INFO.json`), `container_image_digest` (= `image_digest`), `container_id`, `container: {in_container, runtime: docker|podman|kubernetes|…, container_id, signals}` (`/.dockerenv`, `/run/.containerenv`, `KUBERNETES_SERVICE_HOST`, `/proc/1/cgroup` / `/proc/self/cgroup`, `/proc/self/mountinfo` bind mounts on `/etc/hostname|hosts|resolv.conf`, docker short-id `HOSTNAME`); `git_commit` + `git_source` (`env:GRAPHYN_GIT_SHA` → `BUILD_INFO.json` (`/app/BUILD_INFO.json`, repo root, or `GRAPHYN_BUILD_INFO`) → `.git`); `build_info`; `plugin_environments: {plugin → {venv, python, libraries (key libs: tensorflow, keras, numpy, onnx, h5py, protobuf, …), package_count, freeze_hash (sha256 of the sorted name==version list), plugin_version}}` for the isolated plugins the run used (dist-info scan of the venv itself — never the interpreter symlink target; cached per venv path + site-packages mtime); `graphyn_version`, backend |
-| `actor`, `trigger`, `replay_of`, `node_labels`, `seed`, `status`, `error*` | identity / linkage |
+| `actor`, `actor_verified`, `claimed_actor`, `trigger`, `replay_of`, `node_labels`, `seed`, `status`, `error*` | identity / linkage (`actor_verified` true only when the API bearer token mapped to `actor`) |
 | `chain`, `previous_record_hash`, `record_hash` | per-project hash chain (`workspace/audit/chains/<project>.jsonl`, `_global` without a project); `record_hash` = sha256 of the canonical record without itself |
 
 **Declaring the shipped model (run payload `lineage`).** `POST /pipelines/run` / `run-async` accept an optional top-level field next to the graph:
@@ -768,9 +834,45 @@ Every terminal run (succeeded / failed / cancelled) seals an immutable `runs/<id
 
 Directory trees above `GRAPHYN_AUDIT_HASH_MAX_BYTES` (default 512 MiB) or `GRAPHYN_AUDIT_HASH_MAX_FILES` (20000) are hashed in `manifest` mode (relative paths + sizes). Legacy runs keep their 1.0 record.
 
-### `GET /api/v1/runs/{run_id}/verify`
+### `GET|POST /api/v1/runs/{run_id}/verify`
 
-Re-hashes the graph snapshot, the logical graph, external inputs (current content), stored output folders, the outputs manifest, the record hash and its chain position. Response `{run_id, verified_at, status: pass|changed|fail|unsealed, ok, record_hash, checks: [{check, status: pass|fail|changed|missing|skipped, expected, actual, target?, node_id?, details?}]}`. `fail` = tamper / hash mismatch / broken chain; `changed` = inputs or outputs differ now (output rows list `added` / `removed` / `modified` files).
+Re-hashes the graph snapshot, the logical graph, external inputs (current content), stored output folders, the outputs manifest, the record hash and its chain position. Response `{run_id, verified_at, status: pass|changed|fail|unsealed, ok, record_hash, checks: [{check, status: pass|fail|changed|missing|skipped, expected, actual, target?, node_id?, details?}], checked_at, actor, actor_verified, claimed_actor, summary: {passed, failed, changed, missing, skipped, total}, history_count}`. `fail` = tamper / hash mismatch / broken chain; `changed` = inputs or outputs differ now (output rows list `added` / `removed` / `modified` files). `total` excludes `skipped` checks.
+
+Every call (GET or POST) is **recorded**: appended to `runs/<id>/verify.json` (`{run_id, history: [{checked_at, actor, actor_verified, claimed_actor, ok, status, record_hash, checks, summary}]}`, oldest first, last 200 kept) and audited as `run.verified` (`result: failure` when not ok; `metadata {ok, status, passed, total, record_hash}`). Verification never modifies `prove.json`, the outputs manifest or the chain. `GET /runs/{id}` and every `GET /runs` row carry `last_verify: {checked_at, actor, actor_verified, ok, status, passed, total} | null`.
+
+### `GET /api/v1/runs/{run_id}/verify/history`
+
+`?limit=50` (≤ 200). `{run_id, total, history: [entry…]}` newest first (entry shape above).
+
+### `GET /api/v1/runs/compare/diff`
+
+What changed between runs (Compare page). Query `ids=a,b[,c…]` — 2–5 distinct run ids (full or unique prefix ≥ 8; 404/409/400 as for path ids; wrong count → `422 bad_run_count`); `all=1` also returns equal rows. Settings come from each run's **logical** graph snapshot (`graph.logical.json`, else de-scoped `graph.json`), so per-run output scoping is not a change; data / code / environment come from the sealed record (`prove.json`, meta fallback). Every row's per-run lists are aligned with `runs`.
+
+```json
+{
+  "runs": [{"run_id": "…", "short": "a1b2c3d4", "name": "Speech commands · train", "started_at": "…",
+            "status": "succeeded", "graph_hash": "sha256:…", "seed": 7, "sealed": true}],
+  "summary": {"settings_changed": 2, "data_same": true, "code_same": true,
+              "environment_same": true, "graph_same": false, "seed_same": true},
+  "settings": [{"node_id": "trainer_b", "node_type": "trainer", "node_label": "Trainer · Path B (MobileNet)",
+                "path_id": "path-b", "path_label": "MobileNet", "key": "architecture",
+                "values": ["mobilenet", "crnn"], "present": [true, true], "differs": true, "default": "ds_cnn"}],
+  "data": [{"node_id": "reader", "key": "path", "label": "Reader · path", "paths": ["…", "…"],
+            "content_hashes": ["sha256:…", "sha256:…"], "file_counts": [3, 3], "dataset_versions": [null, null], "differs": false}],
+  "code": [{"node_type": "trainer", "plugins": ["trainer", "trainer"], "versions": ["1.2.0", "1.3.0"],
+            "code_hashes": ["sha256:…", "sha256:…"], "version_differs": true, "code_differs": true, "differs": true}],
+  "environment": [{"key": "library:tensorflow", "values": ["2.15.0", "2.16.1"], "differs": true}],
+  "metrics": {
+    "paths": [{"path_id": "path-a", "path_label": "DS-CNN", "path_labels": ["DS-CNN", "DS-CNN"],
+               "best": [true, false], "metric": "test_accuracy", "values": [0.91, 0.88], "differs": true}],
+    "headline": [{"metric": "test_accuracy", "values": [0.91, 0.93], "path_labels": ["DS-CNN", "CRNN"]}],
+    "primary_metric": {"name": "test_accuracy", "value": 0.91}
+  },
+  "include_all": false
+}
+```
+
+`default` is present only when the node class declares a default for the key (a key missing from a run's config shows the default). `present[i] = false` when the node does not exist in run *i* (value `null`; always reported). Environment keys: `python`, `implementation`, `os`, `machine`, `image`, `graphyn_version`, `git_commit`, `backend`, `library:<name>` (`os` differences are shown but do not flip `environment_same`). `metrics.paths` uses the same best-path / path-label logic as run summaries (`headline_metrics`); rows align by `path_id`; `headline` is each run's best-path metrics.
 
 ### `POST /api/v1/runs/{run_id}/replay`
 
@@ -780,9 +882,9 @@ Body `{check_inputs?: false, force?: false}`. Starts a new run from the run's **
 
 ### `GET /api/v1/outputs/file`
 
-Download one file as an attachment. Query: `path`.
+Return one jailed file. Query: `path`, optional `download=1` — an explicit user download: `Content-Disposition: attachment` and an audit event (`model.download` / `run.output_download`, see Audit). Without it (previews, thumbnails, existence probes) images/audio/json/text are served inline and nothing is audited. The console's Download buttons (`downloadOutputFile`) send `download=1`.
 
-Resolved path must sit under `project_dir()`, `graphyn_home()`, or repo `examples/`. `..` is rejected. Allowed types: images, json, csv, markdown, audio (wav/flac/mp3/webm), keras, tflite, onnx, zip (plus SavedModel companions: pb/h5/txt/npy).
+Resolved path must sit under `project_dir()`, `graphyn_home()`, or repo `examples/`. `..` is rejected. Allowed types: images, json, csv, markdown, audio (wav/flac/mp3/webm), keras, tflite, onnx, zip, gz/tgz (deployment_packager `.tar.gz` packages), h (MCU header) (plus SavedModel companions: pb/h5/txt/npy).
 
 **Errors:** `400` traversal or directory, `403` outside jail (e.g. `/etc/passwd`), `404` missing, `415` disallowed type.
 
@@ -835,135 +937,167 @@ Audited as `secret.set` / `secret.delete` when audit is enabled.
 
 ## Data — `/api/v1/data`
 
-### `GET /api/v1/data/inputs`
+Every mutation (upload, label delete, snapshot, merge, version delete, zip
+download, workspace link/unlink, ingest start/finish, exporter version write)
+records a `dataset.*` audit event (category **`data`** in `GET /audit`) with the
+caller identity, file counts and sha256 / content hashes.
 
-List input dataset labels with file counts.
+### `GET /api/v1/data/capabilities`
 
-**Response:**
+Upload caps / allowlist and which import sources the API host can run.
+
 ```json
-[
-  {"label": "speech", "file_count": 42},
-  {"label": "noise", "file_count": 10}
-]
+{
+  "upload": {"max_request_bytes": 104857600, "max_files": 1000, "max_extract_bytes": 2147483648,
+             "max_archive_files": 20000, "allowed_extensions": [".csv", ".wav", "…"],
+             "archive_extensions": [".zip", ".tar", ".tar.gz", ".tgz"]},
+  "ingest": {"url": true, "huggingface": false,
+             "huggingface_reason": "The 'datasets' package is not installed on the API host …",
+             "huggingface_default_max_rows": 10000}
+}
 ```
 
----
+Caps are env-configurable: `GRAPHYN_UPLOAD_MAX_BYTES` (per request, default 100 MB),
+`GRAPHYN_UPLOAD_MAX_FILES` (1000), `GRAPHYN_UPLOAD_MAX_EXTRACT_BYTES` (2 GiB unpacked),
+`GRAPHYN_UPLOAD_MAX_ARCHIVE_FILES` (20 000).
+
+### `GET /api/v1/data/inputs`
+
+List input labels (`workspace/datasets/input/<label>`). `file_count` counts **every**
+file (any type, hidden files excluded); `audio_count` the audio subset.
+
+```json
+[{"label": "speech", "file_count": 44, "audio_count": 42, "accessible": true}]
+```
 
 ### `GET /api/v1/data/inputs/{label}`
 
-List audio files for a specific input label.
+Every file in the label:
 
-**Response:**
 ```json
-[
-  {"path": "speech/file1.wav", "label": "speech"},
-  {"path": "speech/file2.mp3", "label": "speech"}
-]
+[{"path": "speech/yes/a.wav", "label": "speech", "kind": "audio", "ext": ".wav",
+  "size_bytes": 32044, "modified_at": "2026-10-05T07:00:00+00:00"}]
 ```
 
-**Errors:** `404` if label not found.
+`kind` ∈ `audio | table | json | text | image | pdf | archive | other`. Preview /
+download one file with `GET /data/inputs/file?path=<path>`. **Errors:** `404`.
 
----
+### `GET /api/v1/data/inputs/{label}/stats`
+
+File counts by kind / extension, total bytes, per-class counts (first subfolder;
+files at the label root are `(root)`), and an audio summary read from the
+headers of at most `max_audio_probe` (default 400, evenly sampled, 5 s cap) files:
+`audio: {count, probed, sampled, sample_rates, channels, duration_s: {min,max,mean},
+estimated_total_duration_s}`.
+
+### `POST /api/v1/data/inputs/{label}/snapshot`
+
+Freeze the label as an **immutable** version
+`workspace/datasets/output/_inputs/<label>/vN` (copy + `manifest.json` with per-file
+sha256, `content_hash`, `source`). Listed under `GET /data/outputs` as project
+`_inputs/<label>` (`kind: "input_snapshot"`); runs that read it record that dataset
+version in their audit record. Audited `dataset.snapshot`.
+
+```json
+{"project": "_inputs/speech", "label": "speech", "version": "v2", "file_count": 44,
+ "total_bytes": 1410000, "content_hash": "…", "created_at": "…"}
+```
+
+### `GET /api/v1/data/inputs/{label}/zip`
+
+Streamed zip (`<label>/…`) plus `<label>/manifest.json` (sha256 per file, computed
+while streaming — the `content_hash` equals the one a snapshot of the same files
+records). Audited `dataset.download`.
+
+### `DELETE /api/v1/data/inputs/{label}`
+
+Delete the label folder. Response and audit (`dataset.label_delete`) carry the
+`file_count`, `total_bytes` and `content_hash` it had before the delete.
 
 ### `POST /api/v1/data/inputs/upload`
 
-Upload an audio file to `workspace/datasets/input/uploads/`.
+`multipart/form-data`:
 
-**Request:** `multipart/form-data` with `file` field.
+| Field | Meaning |
+|---|---|
+| `files` (repeatable) / `file` (legacy) | Files; a filename may carry a relative folder path (`webkitdirectory`) |
+| `label` | Target label, existing or new (`[A-Za-z0-9_-]{1,64}`, default `uploads`) |
+| `folders_as_labels` | `true`: first folder of each path names the label; `false`: keep sub-folders under `label`; empty: false for plain files, true for archive members |
+| `strip_root` | default `true`: drop one shared top folder (the picked folder / archive wrapper); `false`: keep paths as sent (batched clients) |
 
-**Response:**
+`.zip / .tar / .tar.gz / .tgz` are unpacked server-side: symlinks, hard links,
+devices, absolute / `..` / hidden members and non-allowlisted types are skipped
+(reported); exceeding a cap returns `413` and rolls the whole request back.
+Allowlist: audio (`wav mp3 m4a ogg webm flac`), `csv tsv json jsonl txt md pdf png jpg
+jpeg parquet`. An identical file already in the label is skipped; a name clash with
+different bytes is stored as `name_1.ext`.
+
 ```json
-{"file_path": "/abs/path/to/upload_20240101_120000_000000.wav", "filename": "upload_20240101_120000_000000.wav"}
+{"label": "uploads", "labels": ["no", "yes"], "count": 2, "total_bytes": 64088,
+ "content_hash": "…",
+ "files": [{"path": "yes/a.wav", "label": "yes", "size": 32044, "sha256": "…"}],
+ "skipped": [{"name": "set.zip:no/run.exe", "reason": "file type .exe not allowed"}],
+ "archives": ["set.zip"], "file_path": "/abs/…/yes/a.wav", "filename": "a.wav"}
 ```
 
-**Errors:** `400` if file extension is not supported (`.wav`, `.mp3`, `.m4a`, `.ogg`, `.webm`, `.flac`).
-
----
+**Errors:** `400` nothing storable (all skipped) / unsafe path, `413` over a cap,
+`422` invalid label or no files. Audited `dataset.upload` (per-file sha256, capped at 500 rows).
 
 ### `GET /api/v1/data/outputs`
 
-List output dataset projects and their versions.
-
-**Response:**
-```json
-[
-  {"project": "my-project", "versions": ["v1", "v2"]}
-]
-```
-
----
+Output projects and their versions (envelope by default; `?envelope=0` for a bare
+array). Frozen inputs follow the workspaces as `{"project": "_inputs/<label>",
+"label": "<label>", "versions": [...], "kind": "input_snapshot"}`.
 
 ### `GET /api/v1/data/outputs/{project}/{version}`
 
-Get one project/version dataset: manifest files plus the sample list.
-
-**Response:** an **object** (not an array):
+`project` may be `_inputs/<label>`. Returns an **object**:
 
 ```json
 {
-  "project": "my-project",
-  "version": "v1",
-  "files": [{"name": "a1b2c3d4.wav", "path": "train/speech/a1b2c3d4.wav", "size": 32044, "sha256": "…"}],
-  "file_count": 1,
-  "content_hash": "64c1…",
-  "created_at": "2026-10-02T18:00:00+00:00",
-  "samples": [
-    {"path": "my-project/v1/train/speech/a1b2c3d4.wav", "split": "train", "label": "speech"}
-  ]
+  "project": "my-project", "version": "v1",
+  "files": [{"name": "a1b2.wav", "path": "train/speech/a1b2.wav", "size": 32044, "sha256": "…", "kind": "audio"}],
+  "file_count": 1, "content_hash": "64c1…", "created_at": "…",
+  "source": {"kind": "audio_exporter", "run_id": "…"},
+  "samples": [{"path": "my-project/v1/train/speech/a1b2.wav", "split": "train", "label": "speech"}]
 }
 ```
 
-`files` is always a list of `{name, path, size, sha256}` rows (`path` relative to the version dir, `name` its basename). `samples` comes from `labels.csv`, else the `train|val|test/<label>/*.wav` tree.
-
-**Errors:** `404` if dataset not found.
-
----
+`samples` comes from `labels.csv`, else the `train|val|test/<label>/*.wav` tree.
 
 ### `GET /api/v1/data/outputs/{project}/{version}/stats`
 
-Get split counts and per-label distribution for a dataset.
+Split counts and per-label distribution from `labels.csv` (`404` when missing).
 
-**Response:**
-```json
-{
-  "project": "my-project",
-  "version": "v1",
-  "total": 100,
-  "splits": {
-    "train": {"speech": 64, "noise": 16},
-    "val": {"speech": 8, "noise": 2},
-    "test": {"speech": 8, "noise": 2}
-  }
-}
-```
+### `GET /api/v1/data/outputs/{project}/{version}/zip`
 
-**Errors:** `404` if dataset or `labels.csv` not found.
+Streamed zip of the version folder (`<project>_<version>/…`, including its
+`manifest.json`). Audited `dataset.download`.
 
----
+### `DELETE /api/v1/data/outputs/{project}/{version}`
+
+`409` when runs / lineage / ship packages reference the version unless
+`?force=true`. Audited `dataset.version_delete`.
 
 ### `POST /api/v1/data/merge`
 
-Copy audio files from multiple source versions into a target version.
+Copy **all** files of several source versions (relative paths kept) into a **new**
+target version; `labels.csv` is rebuilt for audio files, `lineage.json` lists the
+sources and `manifest.json` is recomputed.
 
-**Request body:**
 ```json
-{
-  "sources": [
-    {"project": "project-a", "version": "v1"},
-    {"project": "project-b", "version": "v2"}
-  ],
-  "target_project": "merged",
-  "target_version": "v1"
-}
+{"sources": [{"project": "a", "version": "v1"}, {"project": "_inputs/kw", "version": "v1"}],
+ "target_project": "merged", "target_version": "v1", "overwrite": false}
 ```
 
-**Response:**
+Dataset versions are immutable: an existing target returns `409`
+(`code: version_exists`, `suggested_version`) unless `overwrite: true`, and even then
+`409` when the target is referenced. A path already written by an earlier source with
+different bytes is stored as `<stem>__<project>_<version><ext>` (listed in `renamed`).
+
 ```json
-{
-  "target": "merged/v1",
-  "files_copied": 150,
-  "errors": []
-}
+{"target": "merged/v1", "files_copied": 150, "renamed": [], "errors": [],
+ "labels_written": 148, "content_hash": "…"}
 ```
 
 ---
@@ -1024,13 +1158,14 @@ This endpoint always recomputes. The PERS-020 guard on critical list GETs (`/run
 
 ### `GET /api/v1/system/auth-status`
 
-Auth honesty for the console (no secrets). Reports whether Bearer auth is required and whether `GRAPHYN_API_TOKEN` is configured.
+Auth honesty for the console (no secrets). Reports whether Bearer auth is required and whether any token (`GRAPHYN_API_TOKEN` or a `GRAPHYN_API_TOKENS[_FILE]` map) is configured.
 
 **Response:**
 ```json
 {
   "auth_required": false,
   "token_configured": true,
+  "token_map_configured": false,
   "env": "development",
   "ok": true
 }
@@ -1132,19 +1267,19 @@ Terminal run statuses fire `pipeline_complete` / `pipeline_failed` / `pipeline_c
 
 ### `GET /api/v1/system/schedules`
 
-List interval schedules that run project pipelines while the API process is up.
+List interval or cron schedules that run project pipelines while the API process is up.
 
 **Query:** `?project=<name>` returns only that project's schedules.
 
-**Response:** `{ "schedules": [ { "id", "name", "project", "pipeline", "interval_minutes", "enabled", "next_run_at", "last_run_id", "last_error", "last_error_at"?, "orphaned", "disabled_reason", "orphaned_at", … } ] }`
+**Response:** `{ "schedules": [ { "id", "name", "project", "pipeline", "interval_minutes", "cron", "enabled", "next_run_at", "last_run_id", "last_error", "last_error_at"?, "orphaned", "disabled_reason", "orphaned_at", … } ] }`
 
-`orphaned` (bool), `disabled_reason`, and `orphaned_at` are always present (`false` / `null` when unset). The same shape is returned by `POST /system/schedules` and `POST /system/schedules/{id}/enable`. `next_run_at` is `null` while a schedule is disabled or orphaned, because a disabled schedule never fires. Enabling it recomputes `next_run_at` as now + `interval_minutes`. A manual `…/run` on a disabled schedule does not re-arm it.
+`orphaned` (bool), `disabled_reason`, and `orphaned_at` are always present (`false` / `null` when unset). The same shape is returned by `POST /system/schedules` and `POST /system/schedules/{id}/enable`. `next_run_at` is `null` while a schedule is disabled or orphaned, because a disabled schedule never fires. Enabling it recomputes `next_run_at` (next cron match, else now + `interval_minutes`). A manual `…/run` on a disabled schedule does not re-arm it.
 
 **Orphans and permanent errors.** Deleting a project (`DELETE /projects/{name}`) disables every schedule for it. The schedule is kept, not deleted, with `orphaned: true`, `orphaned_at`, and `disabled_reason: "Project deleted: <name>"`. If a tick (or `…/run`) fails with a permanent error (`Project not found: …` or `Pipeline '…' not found`), the schedule is also auto-disabled. It records `last_error`, `last_error_at`, `disabled_reason`, and `orphaned: true` when the project is gone. Other start errors (a missing published env version, a busy backend) only set `last_error`, and the schedule retries on the next tick. Re-enabling clears `orphaned` / `disabled_reason`. The next tick disables it again if the target is still missing.
 
 ### `POST /api/v1/system/schedules`
 
-Create a schedule. Body: `{ "name", "project", "pipeline", "interval_minutes", "enabled", "env" }`. `env` is `draft`, `staging`, or `prod` (default `prod` when omitted). Draft runs the saved pipeline. Staging and prod require a published version.
+Create a schedule. Body: `{ "name", "project", "pipeline", "interval_minutes", "cron"?, "enabled", "env" }`. `cron` is an optional 5-field expression evaluated in **UTC** (`minute hour day-of-month month day-of-week`; `*`, `N`, `A-B`, `*/S`, `A-B/S`, lists, `jan…dec` / `sun…sat`, macros `@hourly @daily @weekly @monthly @yearly`; Vixie OR rule when both day fields are set). When set it overrides `interval_minutes`; invalid → 422. `cron` is `null` for interval schedules. `env` is `draft`, `staging`, or `prod` (default `prod` when omitted). Draft runs the saved pipeline. Staging and prod require a published version.
 
 ### `POST /api/v1/system/schedules/{id}/env`
 
@@ -1156,7 +1291,57 @@ Fire due schedules now (also runs on a 60s background ticker).
 
 ### `POST /api/v1/system/schedules/{id}/run` · `…/enable` · `DELETE …/{id}`
 
-Run immediately, toggle enabled, or delete. Mutations audit with actor from `X-Actor` when present.
+Run immediately, toggle enabled, or delete. Mutations audit with the token-bound actor.
+
+---
+
+## Inbound webhooks — `/api/v1/hooks`
+
+External systems start a saved project pipeline by POSTing JSON. The pipeline must contain a `webhook_trigger` node; the request body / allow-listed headers / query are injected into it (`input_overrides`) and the run starts asynchronously.
+
+### `POST /api/v1/hooks/{workspace}/{pipeline}[?env=draft|staging|prod]`
+
+**Not** behind the global bearer dependency — it authenticates itself, in this order:
+
+1. **HMAC signature** (preferred): headers `X-Graphyn-Timestamp: <unix seconds>` and `X-Graphyn-Signature: sha256=<hex>` where `hex = HMAC_SHA256(secret, "<timestamp>." + raw_body)`. The timestamp must be within ±`GRAPHYN_WEBHOOK_TOLERANCE_S` (default 300 s); a signature already accepted inside that window is refused (409 `replay_detected`). Actor `webhook:<hook_id>`, `actor_verified: true`.
+2. **Bearer token**: `Authorization: Bearer <GRAPHYN_API_TOKEN or a GRAPHYN_API_TOKENS token>`. Actor `webhook:<hook_id>`; `actor_verified` is true only for a mapped token (the mapped name is kept as `claimed_actor`).
+
+Other rules: the hook must exist and be `enabled` (else 404 `hook_not_found`); body ≤ `GRAPHYN_WEBHOOK_MAX_BYTES` (default 1 MiB, 413); body must be JSON (empty → `{}`; else 400 `invalid_body`); per-hook token bucket (`GRAPHYN_WEBHOOK_RATE_BURST` default 10, refill `GRAPHYN_WEBHOOK_RATE_PER_MIN` default 60/min → 429 with `Retry-After`); `env` defaults to the hook `env` and must be in `allowed_envs` (403 `env_not_allowed`); optional `Idempotency-Key` header — the same key within 24 h returns the original run (`200`, `idempotent_replay: true`).
+
+Forwarded headers: `content-type`, `user-agent`, `x-request-id`, `x-github-event`, `x-github-delivery`, `x-gitlab-event`, `x-event-type`, `x-graphyn-timestamp`, `idempotency-key` + the hook's `header_allowlist`. `authorization`, `cookie`, `proxy-authorization`, `x-graphyn-signature` are never forwarded. `query` = all query params except `env` (max 50).
+
+**Response `202`** (header `X-Run-Id`):
+```json
+{"run_id": "…", "status": "pending", "hook_id": "3f9c…", "env": "prod", "idempotent_replay": false}
+```
+
+**Errors:** 401 `unauthorized` / `invalid_signature` / `timestamp_out_of_window` / `no_secret` · 403 `env_not_allowed` · 404 `hook_not_found` / `not_found` · 409 `replay_detected` / `env_not_published` · 413 `payload_too_large` · 422 `no_webhook_trigger` / `graph_invalid` · 429 `rate_limited` · 503 `draining`.
+
+**Run identity / audit:** meta `trigger: "webhook"`, `actor: "webhook:<hook_id>"`, `actor_verified`, `project`, `pipeline_name`, `pipeline_env`, `inputs_sha256`, `input_keys`, and `webhook: {hook_id, auth: "hmac"|"bearer", payload_sha256, payload_bytes, idempotency_key, source_ip, content_type, trigger_nodes, received_at}`. Audit events `webhook.received` (resource `pipeline` `<ws>/<pipeline>`, with `source_ip`, `payload_sha256`, `run_id`) and `run.start` (mode `webhook`); refused deliveries (401/403/409/429) → `webhook.rejected` (`result: denied`).
+
+### Hook management — `/api/v1/projects/{workspace}/pipelines/{pipeline}/hook` (bearer auth)
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `…/hook` | — | hook view (`exists: false` when none) |
+| PUT | `…/hook` | `{enabled?, env?, allowed_envs?, header_allowlist?}` | hook view (creates the hook on first PUT; audited `hook.create` / `hook.update`) |
+| DELETE | `…/hook` | — | `{ok, deleted, hook_id}` — also deletes the secret connection (audited `hook.delete`; 404 when none) |
+| POST | `…/hook/rotate` | — | hook view + `{"secret": "whsec_…", "secret_shown_once": true}` — creates or rotates the signing secret; **the secret is returned only here, once** (audited `hook.rotate`) |
+
+Hook view:
+```json
+{
+  "workspace": "acme", "pipeline": "onpush", "exists": true, "hook_id": "3f9c2a…",
+  "enabled": true, "env": "prod", "allowed_envs": ["prod"], "header_allowlist": [],
+  "url_path": "/api/v1/hooks/acme/onpush",
+  "secret_connection_id": "uuid", "has_secret": true,
+  "created_by": "alice", "created_at": "…", "updated_at": "…", "rotated_at": "…",
+  "signature_header": "X-Graphyn-Signature", "timestamp_header": "X-Graphyn-Timestamp",
+  "signature_scheme": "sha256=HMAC_SHA256(secret, '<timestamp>.' + raw_body)"
+}
+```
+
+The secret lives only in the encrypted credentials store as a connection of kind `inbound_webhook` (field `secret`); `hook.json` (next to the pipeline's `environments.json`) stores only its id. Errors: 404 project / pipeline missing, 422 invalid `env` / names.
 
 ---
 
@@ -1181,7 +1366,7 @@ Start a background job to download audio files from URLs.
 {"job_id": "a1b2c3d4e5f6"}
 ```
 
-Files are saved to `workspace/datasets/input/{label}/`. Supported extensions: `.wav`, `.mp3`, `.flac`, `.ogg`, `.m4a`.
+Files are saved to `workspace/datasets/input/{label}/`. Supported extensions: `.wav`, `.mp3`, `.flac`, `.ogg`, `.m4a`. Start and finish are audited (`dataset.ingest_start` / `dataset.ingest_finish` with URLs, file sha256s and `content_hash`); provenance is written to `workspace/datasets/input/.ingest/<job_id>.json`.
 
 ---
 
@@ -1214,14 +1399,27 @@ Start a background job to stream a HuggingFace dataset and save audio samples.
   "split": "train",
   "audio_col": "audio",
   "label_col": "sentence",
-  "label_override": null
+  "label_override": null,
+  "max_rows": 10000,
+  "revision": null
 }
 ```
+
+Labels come from `label_col` (ClassLabel ints are mapped to their names) unless
+`label_override` is set (blank = unset). At most `max_rows` rows are read (default
+10 000). `revision` pins a branch / tag / commit; the resolved commit sha, repo,
+split, per-file sha256 and `content_hash` are written to
+`workspace/datasets/input/.ingest/<job_id>.json` and the `dataset.ingest_finish`
+audit event (the start is audited as `dataset.ingest_start`). The summary SSE event
+carries `rows_read`, `resolved_sha` and `content_hash`.
 
 **Response:**
 ```json
 {"job_id": "b2c3d4e5f6a1"}
 ```
+
+**Errors:** `503` when the `datasets` package (extra `hf`) is not installed on the
+API host — check `GET /data/capabilities` first.
 
 ---
 
@@ -1236,6 +1434,18 @@ Stream progress events for a HuggingFace ingestion job (same SSE format as URL s
 ## Projects — `/api/v1/projects`
 
 Full project lifecycle management. See `app/api/routers/projects.py` for the complete endpoint list. Key operations include create, get, update, delete, clone, list versions, manage taxonomy, contract, spec, annotations, quality reports, and snapshots. `POST /projects` returns `409` when the name already exists.
+
+A project is a **workspace**; its `name` is the immutable workspace id used by runs (`meta.project`), the audit chain (`audit/chains/<id>.jsonl`), schedules and the model registry.
+
+| Method | Path | Notes |
+|---|---|---|
+| PUT | `/api/v1/projects/{name}` | Update `display_name`, `description`, `tags`, `linked_input_labels`, `favorite_pipelines` (`If-Match` / `resource_version`). The id stays the same. Audit `workspace.updated` with `meta.changed` + `before`/`after` of changed fields only (no-op PUT → no event). |
+| PATCH | `/api/v1/projects/{name}/status` | `{status: draft\|in-progress\|ready\|archived}`. `archived` hides the workspace from the console's default Workspaces list. Audit `workspace.archived` / `workspace.unarchived` when crossing `archived`, else `workspace.status_changed` (`before`/`after.status`). |
+| POST | `/api/v1/projects/{name}/clone` | `{new_name}` → new workspace with the source's draft pipelines (`pipelines/*.graph.json`, `metadata.project` re-stamped), description, tags, links and spec/taxonomy/contract. **Not copied:** runs, models, pipeline version history/environments, snapshots, dataset output versions. Audit `workspace.cloned` (`resource_id` = new id, `meta.source`). |
+| DELETE | `/api/v1/projects/{name}` | Body `{confirm: "<name>"}`. Removes the workspace folder (pipelines + versions, dataset output versions, snapshots, links, spec/taxonomy/contract) and disables its schedules (kept, `orphaned: true`). Run history, artifacts, models and the audit log are kept. Audit `workspace.deleted` with `meta.removed {pipelines, dataset_versions}`. |
+| PATCH | `/api/v1/projects/{name}` | **Deprecated** `{new_name}` rename of the id. Moves only the folder — runs, the audit chain, models and schedules keep the old id, so it orphans run history. Kept for API compatibility; use `PUT` `display_name` instead. Audit `workspace.renamed` (`meta.deprecated: true, migrated: false`). |
+
+Other workspace mutations are audited too: `POST /projects` → `workspace.created`; `PUT …/spec|taxonomy|contract` → `workspace.spec_updated` / `workspace.taxonomy_updated` / `workspace.contract_updated`; `POST …/snapshots` and `…/snapshots/{s}/restore` → `workspace.snapshot_created` / `workspace.snapshot_restored`; legacy `POST …/versions/{v}/restore` (not offered in the console) → `workspace.version_restored` (`resource_type: dataset_version`, `resource_id: <name>/<v>`). All `workspace.*` actions have `category: "admin"` and plain-words labels in `GET /audit`. Failed calls record nothing.
 
 ### Project pipelines (versions)
 
@@ -1269,7 +1479,8 @@ Versions: `pipelines/{name}/versions/vN.graph.json`. Envs: `pipelines/{name}/env
 | GET | `/api/v1/models/{name}` |
 | POST | `/api/v1/models` — `{ name, run_id, slug?, stage?, description?, model_path?, node_id?, allow_untrained? }` |
 | POST | `/api/v1/models/{name}/request-prod` |
-| POST | `/api/v1/models/{name}/approve-prod` |
+| POST | `/api/v1/models/{name}/approve-prod` (audits `model.register` + `model.approve_prod`) |
+| GET | `/api/v1/models/{name}/lineage` — made from / used in |
 
 Promoting a run to `staging` in the Runs UI also auto-registers a model row when a slug is returned.
 
@@ -1294,6 +1505,43 @@ Promoting a run to `staging` in the Runs UI also auto-registers a model row when
 
 `path` is the model file/dir itself (do not append `/saved_model`); the alias directory the stage still points at is `alias_path`. Entries written before this change (whose `path` was the alias dir) are resolved at read time — by stored `node_id`, else a node id equal to the model name, else the run's best path — so they also return a real `path`. `pending_prod` is tagged `kind: "model_stage"`, and `request-prod` → `approve-prod` carry the staging artifact into `prod`.
 
+
+### `GET /api/v1/models/{name}/lineage`
+
+Both directions for one registered model (`app/core/mlops/model_lineage.py`). 404 unknown model, 422 invalid name.
+
+```json
+{
+  "name": "kws", "description": null,
+  "stages": {
+    "staging": {
+      "stage": "staging", "run_id": "2280…", "node_id": "trainer_0", "path_id": "path-a",
+      "artifact_path": "workspace/artifacts/kws/runs/2280…/trainer_0/model.keras", "format": "keras",
+      "model_hash": "sha256:…", "model_file_count": 1, "updated_at": "…",
+      "made_from": {
+        "run_id": "2280…", "sealed": true, "record_hash": "…", "graph_hash": "sha256:…", "graph_name": "…", "seed": 42,
+        "datasets": [{"node_id": "dataset_ingest_0", "key": "path", "label": "Dataset ingest · path",
+                      "path": "workspace/datasets/output/kws/v1", "content_hash": "sha256:…", "file_count": 1200,
+                      "dataset_version": {"project": "kws", "version": "v1"}}],
+        "node": {"node_id": "trainer_0", "node_type": "trainer", "label": "Trainer", "plugin": "trainer",
+                 "plugin_version": "1.3.0", "code_hash": "sha256:…"},
+        "step_config": {"epochs": 50, "learning_rate": 0.001, "...": "…"},
+        "environment": {"python": "3.11.9", "image": "…", "graphyn_version": "…", "git_commit": "…"}
+      }
+    }
+  },
+  "pending_prod": null,
+  "used_in": [{"run_id": "9a1f…", "short": "9a1f2b3c", "created_at": "…", "status": "succeeded", "trigger": "ship",
+               "actor": "alice", "actor_verified": true, "graph_name": "kws-ship", "project": "kws", "archived": false,
+               "stage": "staging", "match": "declared",
+               "package": {"path": "workspace/artifacts/kws-ship/runs/9a1f…/packager_0/kws.zip", "node_id": "packager_0",
+                           "sha256": "…", "content_hash": "sha256:…"}}],
+  "packages": [{"package_id": "…", "project": "kws", "status": "validated", "env": "staging", "stage": "staging",
+                "run_id": "2280…", "created_at": "…", "sha256": "…"}]
+}
+```
+
+`made_from` is `null` when the source run directory is gone; `step_config` is the node's config from `runs/<id>/graph.json`; `node` is `null` without a recorded `node_id`. `used_in` scans sealed run records: `match: "declared"` / `"input_path"` from the record's `lineage.models[].name`, or `"input_path"` when a recorded external input path is (inside) a stage's artifact path (catches models registered after the run). The stage's own source run is not listed. `package.sha256` is the file digest of a single-file output or of the first `*.zip` in the run's output folder, else `null`. The record scan is cached by the runs-dir mtime plus each `prove.json` mtime. `packages` are ship packages (all projects) whose `model_ref.name` / `lineage.model_name` is this model.
 
 ### Ship packages
 
@@ -1392,11 +1640,27 @@ Reuses ProvenanceStore, ArtifactStore, and run `meta.json` (including `distribut
 
 Newest-first append-only audit events from `{project}/audit/events.jsonl`.
 
-**Query:** `limit` (default 100, max 1000), `offset` (paging over **all** matching events, not just the newest 1000), `run_id` (events of a run — full id or prefix ≥ 8 — incl. `run.replay` events whose `metadata.replay_of` is that run), `resource_id` (exact or prefix ≥ 8), `action` (exact, or `run.*` prefix), `q` (case-insensitive free text over the event JSON).
+**Query:** `limit` (default 100, max 1000), `offset` (paging over **all** matching events, not just the newest 1000), `run_id` (events of a run — full id or prefix ≥ 8 — incl. `run.replay` events whose `metadata.replay_of` is that run), `resource_id` (exact or prefix ≥ 8), `action` (exact, or `run.*` prefix), `q` (case-insensitive free text over the event JSON and its `label`), `category` (comma list — only these), `exclude_category` (comma list, e.g. `ui,system`).
 
 **Response:** `{events, limit, offset, total, has_more}`.
 
+**Event fields** (besides raw `action`, `resource_type`, `resource_id`, `metadata`, `result`, `timestamp`, …): `actor`, `actor_verified` (token mapped to the actor), `claimed_actor` (differing X-Actor / body actor, else null), `origin` (`http` | `internal`; absent on legacy events), and read-time `label` + `category` computed from `action` (raw values unchanged):
+
+| category | actions (label examples) |
+|---|---|
+| `run` | `run.*` — "Run started", "Run finished", "Run failed", "Run cancelled", "Run paused", "Run resumed", "Run archived", "Run restored", "Run permanently deleted", "Run replayed", "Run verified", "Run promoted", `run.output_download` "Output file downloaded", `run.outputs_zip` "Run outputs downloaded (zip)" |
+| `model` | `model.register` "Model registered", `model.promote_request` "Model prod requested", `model.approve_prod` "Model approved for prod", `model.download` "Model / package file downloaded", `ship.*` "Ship package …" (incl. `ship.download` "Ship package downloaded") |
+| `admin` | `system.cleanup` "Workspace cleaned up", `credential.*`, `plugin.install/uninstall/enable/disable/install_deps`, `webhook.*`, `schedule.*` (except tick), `pipeline.*`, `template.save`, `proposal.*`, `dataset.*`, `workspace.*` ("Workspace created / deleted / archived / unarchived / cloned / details updated", "Workspace id renamed (legacy)", spec/taxonomy/contract/snapshot events, "Dataset version restored into workspace") |
+| `system` | `ops.*` "Server shutdown", `worker.register`, `schedule.tick` "Schedules checked", unknown actions |
+| `ui` | `notifications.*` "Notifications marked read" |
+
+Unknown actions get a humanized label (`foo.bar_baz` → "Foo bar baz").
+
 Seed hooks: template save, async run start, worker register.
+
+Audited API mutations (actor via the token-bound identity): runs archive / restore / purge / replay / verify / pause / resume / cancel / promote, models register / request-prod / approve-prod, ship create / promote / transitions, cleanup, credentials, plugins install / uninstall / enable / disable / dependency install, schedules, webhooks, proposals create / accept / reject, pipeline publish / promote / rollback, workspace create / update / status (archive) / clone / delete / rename / spec / taxonomy / contract / snapshot / version restore, notifications mark-read.
+
+Downloads (explicit only — previews, thumbnails and existence probes are not audited): `GET /outputs/file?download=1` → `model.download` (model / package suffixes: tflite, onnx, keras, h5, pb, pt, pkl, tar.gz, tgz, zip, h) or `run.output_download` (`resource_type: "file"`, `resource_id` = requested path); `GET /runs/{id}/outputs/zip` → `run.outputs_zip` (`resource_type: "run"`); `GET /projects/{name}/ship/packages/{id}/download` → `ship.download` (`resource_type: "ship_package"`). Metadata: `path`/`file`, `size_bytes`, `sha256` (from the deployment_packager sidecar `<file>.manifest.json` when present, else hashed for files ≤ 64 MiB, `null` above; zip = hash of the streamed bytes; ship = manifest checksum), `run_id` (from a `runs/<id>/` path segment), plus `files`/`truncated` for zips and `project` for ship packages. Actor = token-bound identity (`app/api/download_audit.py`).
 
 Run lifecycle actions (`resource_type: "run"`, `resource_id` = the **full** run id, `actor` = the run's `meta.actor`, `metadata.project` set when the run has a project): `run.start` (REST / SDK / CLI / MCP / schedule / replay), `run.finish` / `run.fail` (`result: failure`) / `run.cancel` (sealed at the terminal transition, `metadata.record_hash`), `run.archive`, `run.restore`, `run.purge` (`record_hash`), `run.replay` (`metadata.replay_of`), plus `run.promote`.
 

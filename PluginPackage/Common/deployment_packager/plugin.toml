@@ -1,7 +1,7 @@
 [plugin]
 name             = "deployment-packager"
-version          = "1.0.0"
-description      = "Bundle optimized models into deployment-ready packages: mobile ZIP, MCU C header, Docker image, or edge TAR."
+version          = "1.1.1"
+description      = "Bundle optimized models into runnable deployment packages (edge TAR, Docker context, mobile ZIP, MCU header) with the source run's preprocessing.json, a real-audio run_inference.py, README, provenance and a self-test."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
 entry_points     = ["nodes.py"]
@@ -18,6 +18,9 @@ node_types = ["deployment_packager"]
 [config_schema.deployment_packager]
 target = { type = "string", title = "Target", default = "mobile", description = "One of: mobile, mcu, docker, edge, cmsis_pack, arduino, zephyr, pte_bundle.", enum = ["mobile", "mcu", "docker", "edge", "cmsis_pack", "arduino", "zephyr", "pte_bundle"] }
 output_path = { type = "string", title = "Output path", default = "workspace/artifacts/packages", description = "Folder for the deployment package.", ui = { group = "Advanced", help_advanced = "Relative to the Graphyn workspace (workspace/artifacts/...)." } }
-include_inference_script = { type = "boolean", title = "Include inference script", default = true, description = "Bundle a minimal inference script with the package (On/Off)." }
+include_inference_script = { type = "boolean", title = "Include inference script", default = true, description = "Bundle run_inference.py (real audio → prediction) and the optional serve.py endpoint (On/Off)." }
 include_metadata = { type = "boolean", title = "Include metadata", default = true, description = "Bundle model metadata / labels JSON with the package (On/Off)." }
 package_name = { type = "string", title = "Package name", default = "", description = "Name of the deployment package artifact (empty = derive from model)." }
+source_run_id = { type = "string", title = "Source training run", default = "", description = "Run whose Feature Frontend / Dataset Builder settings go into preprocessing.json (empty = the run declared by Ship, else read from the model path).", ui = { group = "Advanced" } }
+selftest = { type = "string", title = "Self-test", default = "strict", description = "strict = fail the run when the shipped preprocessing or input shape does not match training; warn = record only; off = skip.", enum = ["strict", "warn", "off"] }
+selftest_samples = { type = "integer", title = "Self-test clips", default = 3, minimum = 0, maximum = 10, description = "Real clips from the source dataset the shipped script is verified on (0 = shape checks only).", ui = { group = "Advanced" } }

@@ -1,10 +1,11 @@
 import React from 'react'
 import { Puzzle as EmptyPuzzle } from 'lucide-react'
 import clsx from 'clsx'
-import { Download, RefreshCw, PackagePlus, MoreHorizontal, Search, Trash2 } from 'lucide-react'
+import { Download, RefreshCw, PackagePlus, MoreHorizontal, Search } from 'lucide-react'
 import { ApiError, apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { useMenuDismiss } from '../../lib/menus'
+import { goView } from '../../routes/nav'
 import {
   ConfirmButton,
   EmptyState,
@@ -16,6 +17,9 @@ import {
 } from '../../components/ui'
 import { WorkbenchPage } from '../../layout'
 import { formatLocaleDateTime, formatRelativeTime, isIsolatedRuntime } from '../../lib/format'
+
+const ENV_SHARED_TIP = 'Shared environment — dependencies install into the API’s own Python (runtime=inprocess)'
+const ENV_OWN_TIP = 'Own environment — dependencies install into a per-plugin virtualenv at ~/.graphyn/plugins/venvs/<name> (runtime=isolated)'
 
 interface DepSummary {
   missing_required?: string[]
@@ -143,8 +147,8 @@ function installProgressCopy(opts: {
     ? `Installing ${what}: ${pkgs}…`
     : `Installing ${what}…`
   const detail = isolated
-    ? 'Into this plugin’s isolated venv — large wheels can take several minutes.'
-    : 'Into the shared API Python — large wheels can take several minutes.'
+    ? 'Into this plugin’s own environment — large wheels can take several minutes.'
+    : 'Into the shared environment (API Python) — large wheels can take several minutes.'
   return { title, detail }
 }
 
@@ -222,7 +226,6 @@ export default function PluginsView() {
   const [pkgInstalling, setPkgInstalling] = React.useState<string | null>(null)
   const [pkgInstallError, setPkgInstallError] = React.useState<string | null>(null)
   const [elapsedTick, setElapsedTick] = React.useState(0)
-  const [venvGcBusy, setVenvGcBusy] = React.useState(false)
   const pollRef = React.useRef<number | null>(null)
   const depPollRef = React.useRef<number | null>(null)
 
@@ -622,30 +625,14 @@ export default function PluginsView() {
       }
       actions={
         <div className="flex flex-wrap gap-1.5">
+          {/* Environment cleanup lives in Ops → Maintenance only (was duplicated here). */}
           <button
             type="button"
-            className="btn-secondary"
-            disabled={venvGcBusy}
-            onClick={() => {
-              setVenvGcBusy(true)
-              void apiJson<{ removed?: string[] }>('/plugins/venvs/gc', { method: 'POST' })
-                .then((res) => {
-                  const n = Array.isArray(res?.removed) ? res.removed.length : 0
-                  pushToast(
-                    n
-                      ? `Removed ${n} unused plugin venv${n === 1 ? '' : 's'}`
-                      : 'No unused plugin venvs to remove',
-                    'success',
-                  )
-                })
-                .catch((err) =>
-                  pushToast(err instanceof Error ? err.message : String(err), 'error'),
-                )
-                .finally(() => setVenvGcBusy(false))
-            }}
+            className="btn-quiet"
+            title="Clean unused plugin environments — Ops → Maintenance"
+            onClick={() => goView('system')}
           >
-            <Trash2 className="h-3.5 w-3.5" />
-            {venvGcBusy ? 'Cleaning…' : 'Clean unused venvs'}
+            Maintenance in Ops
           </button>
           <button type="button" className="btn-secondary" onClick={() => void load()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -655,12 +642,12 @@ export default function PluginsView() {
     >
       <div className="space-y-3">
       <details className="rounded-lg border border-ink-100 bg-white px-3 py-2 text-[12px] text-ink-600">
-        <summary className="cursor-pointer select-none font-medium text-ink-800">Deps & runtime</summary>
+        <summary className="cursor-pointer select-none font-medium text-ink-800">Dependencies and environments</summary>
         <p className="mt-1.5 leading-relaxed">
-          <span className="rounded bg-ink-100 px-1 font-mono text-[11px] text-ink-600">shared env</span>{' '}
+          <span className="rounded bg-ink-100 px-1 text-[11px] text-ink-600" title={ENV_SHARED_TIP}>Shared environment</span>{' '}
           plugins (<span className="font-mono text-[11px]">runtime=inprocess</span>) install into the API’s own
           Python;{' '}
-          <span className="rounded bg-accent-50 px-1 font-mono text-[11px] text-accent-900">isolated venv</span>{' '}
+          <span className="rounded bg-accent-50 px-1 text-[11px] text-accent-900" title={ENV_OWN_TIP}>Own environment</span>{' '}
           plugins (<span className="font-mono text-[11px]">runtime=isolated</span>) get their own{' '}
           <span className="font-mono text-[11px]">~/.graphyn/plugins/venvs/&lt;name&gt;</span> (heavy ML
           stacks). Reinstall/upgrade a plugin after changing its runtime. Mode B workers need the same
@@ -805,8 +792,8 @@ export default function PluginsView() {
               value={runtimeFilter}
               options={[
                 { id: 'all', label: 'Any' },
-                { id: 'isolated', label: 'Isolated' },
-                { id: 'inprocess', label: 'Shared' },
+                { id: 'isolated', label: 'Own environment' },
+                { id: 'inprocess', label: 'Shared environment' },
               ]}
               onChange={setRuntimeFilter}
             />
@@ -845,7 +832,7 @@ export default function PluginsView() {
               was to read all 48 names. */}
           {tagFacets.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-ink-400">
+              <span className="text-[11px] font-medium text-ink-500">
                 Tag
               </span>
               {tagFacets.map(([t, n]) => {
@@ -951,7 +938,7 @@ export default function PluginsView() {
                       )}
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="font-medium text-[13px] text-ink-950">
+                        <div className="break-words font-medium text-[13px] text-ink-950">
                           {p.name} {p.version ? `v${p.version}` : ''}
                         </div>
                         {/* Every installed plugin ships a description and this page
@@ -966,16 +953,12 @@ export default function PluginsView() {
                           <StatusBadge status={p.enabled === false ? 'disabled' : p.status ?? 'enabled'} />
                           <span
                             className={clsx(
-                              'rounded px-1.5 py-0.5 font-mono text-type-mono',
+                              'rounded px-1.5 py-0.5 text-type-meta',
                               isolated ? 'bg-accent-50 text-accent-900' : 'bg-ink-50 text-ink-600',
                             )}
-                            title={
-                              isolated
-                                ? 'Optional/required deps install into a per-plugin venv'
-                                : 'Deps install into the shared API Python environment'
-                            }
+                            title={isolated ? ENV_OWN_TIP : ENV_SHARED_TIP}
                           >
-                            {isolated ? 'isolated venv' : 'shared env'}
+                            {isolated ? 'Own environment' : 'Shared environment'}
                           </span>
                           {/* Only the exceptional state is loud. "required deps ok"
                               used to print in green on all 48 rows, which is the
@@ -1012,7 +995,7 @@ export default function PluginsView() {
                                   thing but rendered as one undifferentiated row of
                                   chips, so `alignment_node` read as just another tag. */}
                               {nodeTypes.length ? (
-                                <span className="mr-0.5 text-[10px] uppercase tracking-wide text-ink-400">
+                                <span className="mr-0.5 text-[10px] font-medium text-ink-500">
                                   Nodes
                                 </span>
                               ) : null}
@@ -1077,12 +1060,12 @@ export default function PluginsView() {
                                 onClick={() => void installDeps(p.name, true)}
                                 title={
                                   isolated
-                                    ? 'Install optional extras into this plugin’s isolated venv — not into the API image'
-                                    : 'Installs into the shared API Python — heavy ML extras often fail here; prefer isolated runtime'
+                                    ? 'Install optional extras into this plugin’s own environment — not into the API image'
+                                    : 'Installs into the shared environment (API Python) — heavy ML extras often fail here; prefer an own environment (runtime=isolated)'
                                 }
                               >
                                 <PackagePlus className="h-3.5 w-3.5" />
-                                {isolated ? 'Install optional (venv)' : 'Install optional (shared)'}
+                                {isolated ? 'Install optional (own environment)' : 'Install optional (shared)'}
                               </button>
                             ) : (
                               <button
@@ -1201,9 +1184,9 @@ export default function PluginsView() {
                         </p>
                         {!isolated ? (
                           <p className="text-[11px] text-ink-500">
-                            Shared-env installs often fail for heavy ML extras. After upgrading this
-                            plugin to <span className="font-mono">runtime=isolated</span>, use{' '}
-                            <span className="font-medium">Install optional (venv)</span>.
+                            Shared-environment installs often fail for heavy ML extras. After switching this
+                            plugin to its own environment (<span className="font-mono">runtime=isolated</span>), use{' '}
+                            <span className="font-medium">Install optional (own environment)</span>.
                           </p>
                         ) : null}
                       </div>
@@ -1256,14 +1239,14 @@ export default function PluginsView() {
                               onClick={() => void installDeps(p.name, true)}
                             >
                               <PackagePlus className="h-3.5 w-3.5" />
-                              {isolated ? 'Install optional (venv)' : 'Install optional (shared)'}
+                              {isolated ? 'Install optional (own environment)' : 'Install optional (shared)'}
                             </button>
                           )}
                         </div>
                         {isolated && (
                           <p className="text-type-meta text-ink-500">
-                            Optional packages listed above install into this plugin’s isolated venv — not into the API
-                            image.
+                            Optional packages listed above install into this plugin’s own environment — not into the
+                            API image.
                           </p>
                         )}
                       </div>

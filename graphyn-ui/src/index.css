@@ -9,18 +9,31 @@
   --shadow-lg: 0 12px 40px rgba(26, 33, 41, 0.10);
   --border-soft: rgba(26, 33, 41, 0.08);
   --surface-muted: #f7f9fb;
+  /* Spacing scale (4px base) — cards, stacks, page gutters. */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
   /* Distance of the global toast stack from the viewport bottom. Pages with a
      critical bottom panel (Editor execution log, …) raise it via
      lib/toastInset.ts `useToastBottomInset(px)`. */
   --toast-bottom-inset: 1rem;
 }
 
+/* App shell is fixed to the viewport and never scrolls as a document — each
+   pane scrolls itself (see frontend-canvas.md "Responsive shell").
+   `overflow: clip` (not just hidden) also blocks programmatic scrolling
+   (scrollIntoView / focus), which used to push the header off-screen. */
 html,
 body,
 #root {
   height: 100%;
   max-height: 100dvh;
   overflow: hidden;
+  overflow: clip;
+  overscroll-behavior: none;
 }
 
 body {
@@ -190,8 +203,28 @@ textarea:focus-visible {
   .ide-section {
     @apply border-t border-ink-100 pt-4;
   }
+  /* Sentence-case section heading (was an 11px uppercase eyebrow). Same
+     footprint (12px / leading-snug) so existing rows keep their height. */
   .ide-section-title {
-    @apply text-[11px] font-semibold uppercase tracking-wide text-ink-400;
+    @apply text-[12px] font-semibold leading-snug text-ink-600;
+    letter-spacing: -0.005em;
+  }
+  /* The one card style — border + subtle shadow, 8px radius, spacing scale. */
+  .ui-card {
+    @apply rounded-lg border border-ink-200/70 bg-white shadow-sm;
+    padding: var(--space-3) var(--space-4);
+  }
+  .ui-card-sm {
+    padding: var(--space-2) var(--space-3);
+  }
+  .ui-card-flush {
+    padding: 0;
+  }
+  .ui-stack > * + * {
+    margin-top: var(--space-3);
+  }
+  .ui-stack-sm > * + * {
+    margin-top: var(--space-2);
   }
   .ide-quiet-btn {
     @apply inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium text-ink-600 hover:bg-ink-50 hover:text-ink-900;
@@ -240,6 +273,10 @@ textarea:focus-visible {
 .graphyn-handle-out {
   background: #159288 !important;
 }
+/* Routed error branch (on_error = route) — red so it reads as the failure path. */
+.graphyn-handle-out.graphyn-handle-error {
+  background: #e11d48 !important;
+}
 .react-flow__edge-path {
   stroke-linecap: round;
   stroke-linejoin: round;
@@ -281,4 +318,37 @@ textarea:focus-visible {
 .code-field .field-control:focus-visible {
   outline: 2px solid #71e6d6;
   outline-offset: -2px;
+}
+
+/* ── Responsive overflow hygiene (shared) ───────────────────────────────── */
+@layer components {
+  /* Horizontal-scroll wrapper for tables inside cards/panes. The first column
+     sticks so row identity stays visible while scrolling wide metric tables.
+     Usage: <div className="responsive-table"><table>…</table></div>
+     (or components/ResponsiveTable.tsx). Opt out of the sticky column with
+     `responsive-table-plain`. */
+  .responsive-table {
+    @apply relative min-w-0 max-w-full overflow-x-auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+  .responsive-table > table {
+    @apply min-w-full;
+  }
+  .responsive-table:not(.responsive-table-plain) > table th:first-child,
+  .responsive-table:not(.responsive-table-plain) > table td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background-color: #fff;
+    box-shadow: inset -1px 0 0 rgba(26, 33, 41, 0.06);
+  }
+  .responsive-table:not(.responsive-table-plain) > table thead th:first-child {
+    z-index: 2;
+  }
+
+  /* Action rows wrap instead of clipping (see components/ActionBar.tsx). */
+  .action-bar {
+    @apply flex min-w-0 flex-wrap items-center justify-end gap-1.5;
+  }
 }

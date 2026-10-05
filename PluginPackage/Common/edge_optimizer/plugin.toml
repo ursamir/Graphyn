@@ -1,6 +1,6 @@
 [plugin]
 name             = "edge-optimizer"
-version          = "1.0.0"
+version          = "1.1.0"
 description      = "Optimize models for edge deployment via TFLite or ONNX quantization."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"

@@ -31,7 +31,7 @@ A package's public names are the ones without a leading underscore, exported fro
 │                                                                     │
 │  app/api/          app/core/sdk.py    app/cli/      app/mcp/        │
 │  FastAPI REST       Pipeline class    argparse CLI  stdio JSON-RPC  │
-│  18 routers         PipelineNode      CLI + worker  77 tools (+1)   │
+│  18 routers         PipelineNode      CLI + worker  79 tools (+1)   │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │ intended: get_backend().execute()
                                │ (see docs/KNOWN_ISSUES for exceptions)

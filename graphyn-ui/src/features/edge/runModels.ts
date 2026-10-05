@@ -6,7 +6,7 @@
  * scans `GET /runs/{id}/outputs` entries for model-like files
  * (`.keras` / `.h5` / `.tflite` / `.onnx` / `saved_model` dirs).
  */
-import { formatBytes } from '../../lib/format'
+import { formatBytes, humanNodeLabel } from '../../lib/format'
 import { formatMetric, isRatioMetric, metricLabel, pickPrimaryMetric } from '../../lib/metrics'
 
 export type RunModelKind = 'trained' | 'compiled_untrained' | 'optimized' | string
@@ -174,11 +174,69 @@ export function runModelSummary(m: RunModel): string {
   return parts.join(' · ')
 }
 
-/** Short title for a model row: path label, else node, else file name. */
+/** Machine-generated file names (`compiled_<hash>.keras`, bare hashes) say nothing to a person. */
+export function isGeneratedModelFileName(file: string): boolean {
+  const stem = file.replace(/\.[a-z0-9]+$/i, '')
+  return /^compiled_[0-9a-f]{6,}$/i.test(stem) || /^compiled_untrained/i.test(stem) || /^[0-9a-f]{12,}$/i.test(stem)
+}
+
+const KIND_NOUN: Record<string, string> = {
+  trained: 'Trained model',
+  compiled_untrained: 'Untrained model',
+  optimized: 'Optimized model',
+}
+
+/**
+ * Short title for a model row: path label + file name, where a generated file
+ * name (`compiled_<hash>.keras`) is replaced by a friendly one
+ * ("Trained model · Keras trainer"). The raw path belongs in a tooltip.
+ */
 export function runModelTitle(m: RunModel): string {
   const file = m.path.replace(/\/+$/, '').split('/').pop() || m.path
-  if (m.path_label) return `${m.path_label} — ${file}`
-  return file
+  let base = file
+  if (isGeneratedModelFileName(file)) {
+    const noun = (m.kind && KIND_NOUN[m.kind]) || 'Model'
+    const node = m.node_type || m.node_id
+    base = node ? `${noun} · ${humanNodeLabel(node)}` : noun
+  }
+  if (m.path_label) return `${m.path_label} — ${base}`
+  return base
+}
+
+/** Primary metric value of the model's own metrics (null for untrained/converted). */
+function ownMetricValue(m: RunModel): number | null {
+  const pm = pickPrimaryMetric(runModelOwnMetrics(m))
+  if (!pm) return null
+  return /loss|error|mae|mse/i.test(pm.name) ? -pm.value : pm.value
+}
+
+/**
+ * Ship model list split: `main` = shippable trained models, best first (the
+ * run's best path, then by own primary metric, then API order); `rest` =
+ * everything else (untrained, already converted, other formats) for the
+ * "Show all files (N)" fold.
+ */
+export function splitShipModels(
+  models: readonly RunModel[],
+  bestPathId?: string | null,
+): { main: RunModel[]; rest: RunModel[] } {
+  const isMain = (m: RunModel) => isShippableSource(m) && (!m.kind || m.kind === 'trained')
+  const indexed = models.map((m, i) => ({ m, i }))
+  const main = indexed
+    .filter(({ m }) => isMain(m))
+    .sort((a, b) => {
+      const ab = bestPathId && a.m.path_id === bestPathId ? 0 : 1
+      const bb = bestPathId && b.m.path_id === bestPathId ? 0 : 1
+      if (ab !== bb) return ab - bb
+      const av = ownMetricValue(a.m)
+      const bv = ownMetricValue(b.m)
+      if (av != null && bv != null && av !== bv) return bv - av
+      if ((av == null) !== (bv == null)) return av == null ? 1 : -1
+      return a.i - b.i
+    })
+    .map(({ m }) => m)
+  const rest = models.filter((m) => !isMain(m))
+  return { main, rest }
 }
 
 export function parseLabelsCsv(csv: string): string[] {

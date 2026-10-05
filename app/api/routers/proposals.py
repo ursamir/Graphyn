@@ -6,7 +6,8 @@ Owns:             POST/GET /proposals, GET /proposals/{id},
                   POST /proposals/{id}/accept, POST /proposals/{id}/reject.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain storage logic — delegate to app.core.agentic.proposals.
-Dependencies:     fastapi, pydantic, app.core.agentic.proposals.
+Dependencies:     fastapi, pydantic, app.core.agentic.proposals, app.api.actor
+                  (token-bound actor for create / accept / reject).
 Reason To Change: Proposal API schema changes.
 """
 from __future__ import annotations
@@ -46,15 +47,16 @@ class ResolveBody(BaseModel):
 
 
 @router.post("", summary="Create a graph change proposal")
-def create_proposal_endpoint(body: CreateProposalBody):
+def create_proposal_endpoint(body: CreateProposalBody, request: Request):
     """Store a pending GraphIR proposal for human approval."""
+    from app.api.actor import resolve_actor
     from app.core.agentic.proposals import create_proposal
 
     try:
         return create_proposal(
             body.graph,
             body.summary,
-            actor=body.actor or "api",
+            actor=resolve_actor(request, body.actor),
             base_graph=body.base_graph,
             base_graph_hash=body.base_graph_hash,
             kind=body.kind,
@@ -91,14 +93,14 @@ def get_proposal_endpoint(proposal_id: str):
 
 
 def _resolver_actor(request: Request, body: "ResolveBody | None") -> str:
-    """Body actor > X-Actor header > ``human`` (accept/reject are human decisions)."""
+    """Token-mapped name > body actor > X-Actor > ``unidentified`` (app.api.actor).
+
+    With a mapped bearer token a differing body / header actor is recorded
+    only as ``claimed_actor`` on the audit event.
+    """
     from app.api.actor import resolve_actor
 
-    explicit = body.actor if body else None
-    header = request.headers.get("x-actor")
-    if not (explicit and explicit.strip()) and not (header and header.strip()):
-        return "human"
-    return resolve_actor(request, explicit)
+    return resolve_actor(request, body.actor if body else None)
 
 
 @router.post("/{proposal_id}/accept", summary="Accept a proposal")

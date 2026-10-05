@@ -1,6 +1,6 @@
 [plugin]
 name             = "dataset-ingest"
-version          = "1.1.0"
+version          = "1.2.0"
 description      = "Universal audio dataset ingestion from filesystem, archives (ZIP, TAR), HuggingFace, S3, and manifests."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
@@ -36,3 +36,5 @@ lazy = { type = "boolean", title = "Lazy load", default = false, description = "
 resume_from = { type = "string", title = "Resume from", default = "", description = "Optional checkpoint or manifest to resume an interrupted ingest from.", ui = { group = "Advanced" } }
 validate_integrity = { type = "boolean", title = "Validate integrity", default = false, description = "Verify checksum files (.sha256) next to the audio when present (On/Off).", ui = { group = "Advanced" } }
 deduplicate = { type = "boolean", title = "Deduplicate", default = false, description = "Skip duplicate waveforms by content hash (On/Off)." }
+max_archive_files = { type = "integer", title = "Max archive files", default = 100000, minimum = 1, description = "ZIP / TAR only: refuse archives with more files than this (protects against archive bombs).", ui = { group = "Advanced", visible_if = { source_type = ["zip", "tar"] } } }
+max_archive_mb = { type = "integer", title = "Max archive size (MB)", default = 20480, minimum = 1, description = "ZIP / TAR only: stop extracting once this many MB have been unpacked.", ui = { group = "Advanced", visible_if = { source_type = ["zip", "tar"] } } }

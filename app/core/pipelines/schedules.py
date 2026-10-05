@@ -1,8 +1,11 @@
 # app/core/pipelines/schedules.py
 """
 Bounded Context:  BC6 — Observability & Storage / ops
-Responsibility:   Persist interval-based schedule jobs that execute project
-                  pipelines (always-on lite — API process ticks while running).
+Responsibility:   Persist interval- or cron-based schedule jobs that execute
+                  project pipelines (always-on lite — API process ticks while
+                  running). A row with ``cron`` (5-field, UTC; see
+                  app.core.pipelines.cron) fires on the cron; otherwise every
+                  ``interval_minutes``.
 Owns:             list/create/update/delete/run_due schedules helpers;
                   orphan handling (project deleted → schedules disabled with
                   ``orphaned: true``) and auto-disable on permanent start
@@ -11,7 +14,7 @@ Owns:             list/create/update/delete/run_due schedules helpers;
                   :func:`normalize_schedule` gives the API view with stable
                   ``orphaned``, ``disabled_reason``, ``orphaned_at`` keys.
 Public Surface:   Same helpers used by /system/schedules routes.
-Must NOT:         Import app.api; must not require croniter.
+Must NOT:         Import app.api; must not require croniter (own parser in cron.py).
 Dependencies:     json, uuid, datetime, pathlib, app.core.persist.file_lock; project_pipelines; runtime_backend lazy.
 Reason To Change: Schedule schema or tick policy changes.
 """
@@ -174,12 +177,33 @@ def normalize_schedule(item: dict[str, Any]) -> dict[str, Any]:
     out["orphaned"] = bool(out.get("orphaned"))
     out["disabled_reason"] = out.get("disabled_reason") or None
     out["orphaned_at"] = out.get("orphaned_at") or None
+    out["cron"] = out.get("cron") or None
     return out
 
 
 def _next_run_iso(item: dict[str, Any], now: datetime | None = None) -> str:
+    base = now or _now()
+    cron = str(item.get("cron") or "").strip()
+    if cron:
+        from app.core.pipelines.cron import CronError, next_fire
+
+        try:
+            return next_fire(cron, base).isoformat()
+        except CronError:
+            logger.warning("schedule %s has an invalid cron %r; using interval", item.get("id"), cron)
     mins = int(item.get("interval_minutes") or 60)
-    return ((now or _now()) + timedelta(minutes=mins)).isoformat()
+    return (base + timedelta(minutes=mins)).isoformat()
+
+
+def validate_cron(cron: str | None) -> str | None:
+    """Normalise an optional cron expression; ValueError when invalid."""
+    text = str(cron or "").strip()
+    if not text:
+        return None
+    from app.core.pipelines.cron import parse_cron
+
+    parse_cron(text)  # CronError is a ValueError
+    return text
 
 
 # Start errors that will never succeed on retry — the schedule is disabled
@@ -256,6 +280,7 @@ def create_schedule(
     enabled: bool = True,
     env: str = "prod",
     base_dir: str | Path | None = None,
+    cron: str | None = None,
 ) -> dict[str, Any]:
     if not _SAFE_NAME.match(name or ""):
         raise ValueError("Invalid schedule name")
@@ -267,6 +292,7 @@ def create_schedule(
     if env_s not in ("draft", "staging", "prod"):
         raise ValueError("env must be draft, staging, or prod")
     minutes = max(1, min(int(interval_minutes), 60 * 24 * 30))
+    cron_s = validate_cron(cron)
     now = _now()
     item = {
         "id": str(uuid.uuid4()),
@@ -275,13 +301,16 @@ def create_schedule(
         "pipeline": pipeline,
         "env": env_s,
         "interval_minutes": minutes,
+        "cron": cron_s,
         "enabled": bool(enabled),
         "created_at": now.isoformat(),
         "last_run_at": None,
         "last_run_id": None,
         "last_error": None,
-        "next_run_at": (now + timedelta(minutes=minutes)).isoformat() if enabled else None,
+        "next_run_at": None,
     }
+    if enabled:
+        item["next_run_at"] = _next_run_iso(item, now)
     path = schedules_path(base_dir)
 
     def _add(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -367,7 +396,9 @@ def _execute_pipeline(project: str, pipeline: str, env: str = "prod") -> str:
                 "Publish that environment, or set this schedule to draft to run the saved pipeline."
             ) from exc
         raise
-    graph = load_ir(data)
+    from app.core.execution.dataset_refs import resolve_latest_refs
+
+    graph, _ = resolve_latest_refs(load_ir(data))
     run_mgr = RunManager()
     run_mgr._write_meta_field("project", project)
     run_mgr._write_meta_field("schedule", True)
@@ -505,8 +536,7 @@ def tick_due_schedules(base_dir: str | Path | None = None) -> list[dict[str, Any
             due = _parse_due(item.get("next_run_at"), now)
             if due > now:
                 continue
-            mins = int(item.get("interval_minutes") or 60)
-            item["next_run_at"] = (now + timedelta(minutes=mins)).isoformat()
+            item["next_run_at"] = _next_run_iso(item, now)
             claimed.append(dict(item))
         return items, claimed
 

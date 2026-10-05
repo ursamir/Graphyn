@@ -1,5 +1,5 @@
 /**
- * Pure helpers for the Runs detail: the run's node list (PipelineStack) and
+ * Pure helpers for the Runs detail: the run's node list (step picker / What happened) and
  * the failure summary used by "Ask agent to fix".
  *
  *  - `pipelineNodesFromRun` builds the node list from the run's graph in
@@ -74,7 +74,7 @@ export function topoOrderGraph(graph: RunGraphLike, rank: Map<string, number> = 
   return order
 }
 
-/** node_stats / event status strings → the vocabulary PipelineStack colors. */
+/** node_stats / event status strings → the vocabulary the step views colour. */
 export function normalizeNodeStatus(raw: unknown): string | undefined {
   const s = str(raw).toLowerCase()
   if (!s) return undefined

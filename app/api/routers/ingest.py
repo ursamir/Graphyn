@@ -8,18 +8,21 @@ Owns:             Route definitions for POST /ingest/url,
                   POST /ingest/huggingface,
                   GET /ingest/huggingface/{job_id}/stream.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
+                  Job starts are audited (``dataset.ingest_start``); the
+                  service audits the finish with provenance.
 Must NOT:         Contain ingestion logic — delegate to IngestionService.
-Dependencies:     fastapi, app.domain.ingestion.IngestionService.
+Dependencies:     fastapi, app.domain.ingestion.IngestionService,
+                  app.api.actor, app.core.trust.audit.
 Reason To Change: New ingestion source type added, or SSE protocol changes.
 """
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.domain.ingestion import IngestionService
+from app.domain.ingestion import DEFAULT_HF_MAX_ROWS, IngestionService
 import json
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
@@ -42,6 +45,33 @@ class HFIngestBody(BaseModel):
     audio_col: Optional[str] = "audio"
     label_col: Optional[str] = None
     label_override: Optional[str] = None
+    max_rows: int = Field(DEFAULT_HF_MAX_ROWS, ge=1, le=1_000_000)
+    revision: Optional[str] = None
+
+
+def _actor(request: Request) -> str:
+    try:
+        from app.api.actor import resolve_actor
+
+        return resolve_actor(request)
+    except Exception:
+        return "unknown"
+
+
+def _audit_start(request: Request, job_id: str, resource_id: str, meta: dict) -> None:
+    try:
+        from app.core.trust.audit import record_audit
+
+        record_audit(
+            actor=_actor(request),
+            action="dataset.ingest_start",
+            resource_type="dataset_input",
+            resource_id=resource_id,
+            meta={"job_id": job_id, **meta},
+            request_id=getattr(getattr(request, "state", None), "request_id", None),
+        )
+    except Exception:
+        pass
 
 
 # ------------------------------------------------------------------ #
@@ -49,7 +79,7 @@ class HFIngestBody(BaseModel):
 # ------------------------------------------------------------------ #
 
 @router.post("/url")
-def start_url_job(body: UrlIngestBody):
+def start_url_job(body: UrlIngestBody, request: Request):
     """POST /ingest/url — start a URL download job.
 
     Returns ``{"job_id": "<id>"}`` immediately.
@@ -67,7 +97,8 @@ def start_url_job(body: UrlIngestBody):
         except HttpEgressError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    job_id = _svc.start_url_job(body.urls, body.label)
+    job_id = _svc.start_url_job(body.urls, body.label, actor=_actor(request))
+    _audit_start(request, job_id, body.label, {"source": {"kind": "url", "urls": list(body.urls)}})
     return {"job_id": job_id}
 
 
@@ -91,20 +122,53 @@ def stream_url_job(job_id: str):
 # ------------------------------------------------------------------ #
 
 @router.post("/huggingface")
-def start_hf_job(body: HFIngestBody):
+def start_hf_job(body: HFIngestBody, request: Request):
     """POST /ingest/huggingface — start a HuggingFace dataset ingestion job.
 
-    Returns ``{"job_id": "<id>"}`` immediately.
+    Labels come from ``label_col`` (ClassLabel ints are mapped to names)
+    unless ``label_override`` is set; at most ``max_rows`` rows (default
+    10 000) are read. ``revision`` pins a branch / tag / commit; the resolved
+    commit sha is recorded in the job provenance and audit event.
+    Returns ``{"job_id": "<id>"}`` immediately; 503 when the ``datasets``
+    package is not installed on the API host (see GET /data/capabilities).
     """
-    if not body.repo_id:
-        raise HTTPException(status_code=422, detail="repo_id must not be empty")
+    import importlib.util
 
+    if not body.repo_id or not body.repo_id.strip():
+        raise HTTPException(status_code=422, detail="repo_id must not be empty")
+    if importlib.util.find_spec("datasets") is None:
+        raise HTTPException(
+            status_code=503,
+            detail="HuggingFace import is unavailable: the 'datasets' package is not installed "
+            "on the API host (pip install -e '.[hf]').",
+        )
+    repo_id = body.repo_id.strip()
+    split = (body.split or "train").strip() or "train"
     job_id = _svc.start_hf_job(
-        repo_id=body.repo_id,
-        split=body.split or "train",
-        audio_col=body.audio_col or "audio",
-        label_col=body.label_col,
-        label_override=body.label_override,
+        repo_id=repo_id,
+        split=split,
+        audio_col=(body.audio_col or "audio").strip() or "audio",
+        label_col=(body.label_col or "").strip() or None,
+        label_override=(body.label_override or "").strip() or None,
+        max_rows=body.max_rows,
+        revision=(body.revision or "").strip() or None,
+        actor=_actor(request),
+    )
+    _audit_start(
+        request,
+        job_id,
+        (body.label_override or "").strip() or repo_id,
+        {
+            "source": {
+                "kind": "huggingface",
+                "repo_id": repo_id,
+                "split": split,
+                "revision": (body.revision or "").strip() or None,
+                "label_col": body.label_col,
+                "label_override": body.label_override,
+                "max_rows": body.max_rows,
+            }
+        },
     )
     return {"job_id": job_id}
 

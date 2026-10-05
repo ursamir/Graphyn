@@ -7,6 +7,7 @@
  */
 import { formatBytes, humanNodeLabel, shortRunId } from '../../lib/format'
 import { formatMetric, isRatioMetric, metricLabel, pickPrimaryMetric } from '../../lib/metrics'
+import { modelStageLabel } from './modelLineage'
 
 export type ModelStage = {
   run_id?: string
@@ -160,4 +161,136 @@ export function findModelForRoute<T extends { name: string }>(rows: T[], routeNa
   const want = String(routeName || '').trim()
   if (!want) return null
   return rows.find((r) => r.name === want) ?? rows.find((r) => r.name.toLowerCase() === want.toLowerCase()) ?? null
+}
+
+/**
+ * Second line of a Models list row — what tells two same-named models apart:
+ * the preferred stage's source run (8-char id) and its date. Parts are
+ * returned separately so the id can render in mono.
+ */
+export function modelRowSubtitle(row: ListRow): { runId: string | null; shortId: string | null; date: string } {
+  const key = preferredStageKey(row.stages)
+  const st = key ? row.stages?.[key] : null
+  const run = stageRunId(st)
+  return {
+    runId: run,
+    shortId: run ? shortRunId(run) : null,
+    date: shortDate(st?.created_at || st?.updated_at || row.updated_at || row.created_at),
+  }
+}
+
+/**
+ * Both model stages with their headline metric, e.g. "Production 73.9% · Staging 75.6%"
+ * (a stage without a metric is listed by name only). '' when neither stage is set.
+ */
+export function modelStageSummary(stages: Record<string, ModelStage | null | undefined> | null | undefined): string {
+  const s = stages || {}
+  const parts: string[] = []
+  for (const key of ['prod', 'staging'] as const) {
+    const st = s[key]
+    if (!st) continue
+    const pm = pickPrimaryMetric(st.metrics)
+    const label = modelStageLabel(key)
+    parts.push(pm ? `${label} ${formatMetric(pm.value, { percent: isRatioMetric(pm.name, pm.value) })}` : label)
+  }
+  return parts.join(' · ')
+}
+
+/**
+ * Model to open by default on the Models page: one in production first, then
+ * the most recently updated (registry `updated_at` / newest stage time), so the
+ * page never opens on an old leftover entry just because it sorts first.
+ */
+export function defaultModelName(
+  rows: ReadonlyArray<{ name: string; stages?: Record<string, ModelStage | null | undefined> | null; updated_at?: string }>,
+): string | null {
+  if (rows.length === 0) return null
+  const newest = (r: (typeof rows)[number]): string => {
+    let t = r.updated_at || ''
+    for (const st of Object.values(r.stages || {})) {
+      const s = st as (ModelStage & { updated_at?: string }) | null | undefined
+      const v = s?.updated_at || s?.created_at || ''
+      if (v > t) t = v
+    }
+    return t
+  }
+  const ranked = [...rows].sort((a, b) => {
+    const pa = a.stages?.prod ? 1 : 0
+    const pb = b.stages?.prod ? 1 : 0
+    if (pa !== pb) return pb - pa
+    return newest(b).localeCompare(newest(a))
+  })
+  return ranked[0].name
+}
+
+/** A run that declared (or whose record lists) this model in its lineage — e.g. a Ship package run. */
+export type ModelUsage = {
+  runId: string
+  stage: string | null
+  label: string
+  status: string
+  createdAt: string
+}
+
+type UsageRunRow = {
+  run_id?: unknown
+  status?: unknown
+  graph_name?: unknown
+  display_name?: unknown
+  created_at?: unknown
+  lineage_request?: unknown
+  lineage?: unknown
+}
+
+function rec(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+}
+
+function str(v: unknown): string {
+  return typeof v === 'string' ? v.trim() : ''
+}
+
+/**
+ * Models → "Used in": runs from GET /runs rows whose lineage names this model.
+ * Rows carry meta `lineage_request.model` (what Ship declares when packaging a
+ * registered model); a `lineage.models` array is honoured too if a row has one.
+ * The model's own source run is excluded. Newest first.
+ */
+export function modelUsedInRuns(
+  rows: readonly UsageRunRow[] | null | undefined,
+  modelName: string,
+  opts: { excludeRunIds?: Iterable<string | null | undefined> } = {},
+): ModelUsage[] {
+  const name = modelName.trim()
+  if (!name || !rows?.length) return []
+  const exclude = new Set(Array.from(opts.excludeRunIds ?? []).filter(Boolean) as string[])
+  const out: ModelUsage[] = []
+  for (const row of rows) {
+    const runId = str(row?.run_id)
+    if (!runId || exclude.has(runId)) continue
+    let stage: string | null = null
+    let hit = false
+    const declared = rec(rec(row.lineage_request)?.model)
+    if (declared && str(declared.name) === name) {
+      hit = true
+      stage = str(declared.stage) || str(declared.version) || null
+    }
+    const listed = rec(row.lineage)?.models
+    if (!hit && Array.isArray(listed)) {
+      const m = listed.map(rec).find((x) => x && str(x.name) === name)
+      if (m) {
+        hit = true
+        stage = str(m.stage) || str(m.version) || null
+      }
+    }
+    if (!hit) continue
+    out.push({
+      runId,
+      stage,
+      label: str(row.display_name) || str(row.graph_name) || `Run ${shortRunId(runId)}`,
+      status: str(row.status),
+      createdAt: str(row.created_at),
+    })
+  }
+  return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
 }

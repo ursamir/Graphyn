@@ -16,7 +16,7 @@ from app.mcp.handlers.journey.common import handler_error, meta_props, require_p
 
 # ── Schedules / webhooks (J3) ─────────────────────────────────────────────────
 
-LIST_SCHEDULES_DESCRIPTION = "List interval schedules."
+LIST_SCHEDULES_DESCRIPTION = "List interval / cron schedules."
 LIST_SCHEDULES_SCHEMA = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -36,6 +36,7 @@ UPSERT_SCHEDULE_SCHEMA = {
         "project": {"type": "string"},
         "pipeline": {"type": "string"},
         "interval_minutes": {"type": "integer"},
+        "cron": {"type": "string", "description": "Optional 5-field cron (UTC); overrides interval_minutes"},
         "enabled": {"type": "boolean"},
         "env": {"type": "string"},
         **meta_props(),
@@ -145,6 +146,7 @@ def upsert_schedule_handler(arguments: dict[str, Any] | None = None) -> dict[str
             interval_minutes=int(args.get("interval_minutes") or 60),
             enabled=bool(args.get("enabled") if args.get("enabled") is not None else True),
             env=str(args.get("env") or "prod"),
+            cron=(str(args.get("cron")).strip() or None) if args.get("cron") else None,
         )
         return {"ok": True, "schedule": item, "upsert": "create"}
     except ValueError as exc:

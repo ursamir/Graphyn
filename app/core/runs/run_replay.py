@@ -38,6 +38,10 @@ class ReplayGraphMissing(FileNotFoundError):
     """The run has no stored graph."""
 
 
+class ReplayInputsUnavailable(RuntimeError):
+    """The run was started with inputs (webhook body / run inputs) that were not retained."""
+
+
 class InputsChanged(RuntimeError):
     """Recorded external inputs differ from the current content."""
 
@@ -106,6 +110,22 @@ def start_replay(
             raise InputsChanged(changes)
     graph = load_replay_graph(run_dir)
     old_meta = _read_json(run_dir / "meta.json") or {}
+    # Runs started with inputs (webhook body, POST inputs) replay with exactly
+    # those inputs — verified against the recorded sha256 — or not at all.
+    replay_inputs = None
+    if old_meta.get("inputs_sha256"):
+        from app.core.execution.run_inputs import load_retained_inputs
+
+        try:
+            replay_inputs = load_retained_inputs(run_dir, str(old_meta.get("inputs_sha256")))
+        except ValueError as exc:
+            raise ReplayInputsUnavailable(f"Run inputs failed verification: {exc}") from exc
+        if replay_inputs is None:
+            raise ReplayInputsUnavailable(
+                "This run was started with inputs (e.g. a webhook payload) that were not retained "
+                "(GRAPHYN_RETAIN_RUN_INPUTS=0 or a run from before inputs were kept), so it cannot be "
+                "replayed exactly."
+            )
 
     if run_manager is None:
         from app.core.runs.run_journal import RunManager
@@ -114,7 +134,16 @@ def start_replay(
     new_id = run_manager.run_id
     writer = getattr(run_manager, "_write_meta_field", None)
     if callable(writer):
-        fields: dict[str, Any] = {"replay_of": old_id, "actor": actor, "trigger": "replay"}
+        try:
+            from app.core.trust.identity import bind_actor
+
+            actor, verified, claimed, _origin = bind_actor(actor)
+        except Exception:
+            verified, claimed = False, None
+        fields: dict[str, Any] = {"replay_of": old_id, "actor": actor, "actor_verified": bool(verified),
+                                  "trigger": "replay"}
+        if claimed:
+            fields["claimed_actor"] = claimed
         for key in ("project", "version_tag"):
             if old_meta.get(key):
                 fields[key] = old_meta[key]
@@ -125,11 +154,19 @@ def start_replay(
                 fields["pipeline_env"] = ref.get("env")
             if ref.get("version"):
                 fields["pipeline_version_id"] = ref.get("version")
+        if replay_inputs is not None:
+            for key in ("inputs_sha256", "input_keys", "inputs_bytes"):
+                if old_meta.get(key) is not None:
+                    fields[key] = old_meta[key]
         for key, value in fields.items():
             try:
                 writer(key, value)
             except Exception:
                 pass
+        if replay_inputs is not None:
+            from app.core.execution.run_inputs import persist_run_inputs
+
+            persist_run_inputs(run_manager, replay_inputs)
 
     try:
         from app.core.trust.audit import record_audit
@@ -148,7 +185,10 @@ def start_replay(
         from app.core.execution.runtime_backend import get_backend
 
         try:
-            get_backend().execute(graph, run_manager=run_manager)
+            if replay_inputs is not None:
+                get_backend().execute(graph, run_manager=run_manager, input_overrides=replay_inputs)
+            else:
+                get_backend().execute(graph, run_manager=run_manager)
         except Exception as exc:  # recorded on the run
             log.error("replay of %s (new run %s) failed: %s", old_id, new_id, exc)
             try:

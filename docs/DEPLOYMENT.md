@@ -14,9 +14,65 @@ export GRAPHYN_API_TOKEN=change-me
 
 Put the same token in the UI **Settings** dialog (Bearer) after `docker compose up`.
 
+### Named tokens & audit identity
+
+To make the audit trail attributable, give each person / agent their own token and map it to a name. The single `GRAPHYN_API_TOKEN` keeps working (its callers are recorded as their `X-Actor` header, unverified).
+
+| Variable | Format | Purpose |
+|---|---|---|
+| `GRAPHYN_API_TOKENS` | JSON object `{"<token>": "<name>", …}` **or** `name:token,name:token` (commas or newlines) | Extra accepted bearer tokens, each bound to an identity name |
+| `GRAPHYN_API_TOKENS_FILE` | path to a file in either format (`#` comment lines allowed) | Same, from a file (re-read when its mtime changes — rotate without restart). Env entries win on conflicts |
+
+```bash
+export GRAPHYN_API_TOKENS='alice:3f9c…,ci-bot:91ab…'
+# or: echo '{"3f9c…": "alice", "91ab…": "ci-bot"}' > /run/secrets/graphyn-tokens.json
+#     export GRAPHYN_API_TOKENS_FILE=/run/secrets/graphyn-tokens.json
+```
+
+A request with a mapped token is recorded as that name with `actor_verified: true` on every audit event, in run `meta` and in the sealed run record (`prove.json`); an `X-Actor` that differs is stored only as `claimed_actor`. Unmapped token → `X-Actor` or `"unidentified"`, `actor_verified: false`. `"system"` only appears for internal background jobs. `GET /api/v1/me` returns `{actor, actor_verified, token_mapped, claimed_actor, auth_configured, token_map_configured}`; `/system/auth-status` adds `token_map_configured`. Configuring only the map (no `GRAPHYN_API_TOKEN`) also turns auth on and satisfies fail-closed mode. MCP accepts mapped tokens in `_meta.auth_token` too (MCP actor attribution is unchanged).
+
 Unauthenticated dev (token unset): requests whose `Host` is not `localhost` / `*.localhost` / an IP literal / `graphyn-api` get **403** (DNS-rebinding guard). Reaching a tokenless API by LAN hostname needs `GRAPHYN_ALLOWED_HOSTS=gpu-box,…` (or set a token).
 
 Public honesty (no Bearer required): `GET /api/v1/system/auth-status`, `/system/health`, `/system/readiness` — so the console can show **Auth on** / Mode before you paste a token.
+
+## Inbound webhooks (external triggers)
+
+1. Add a `webhook_trigger` node to the pipeline (its `body` / `headers` / `query` outputs feed the rest of the graph), save it and publish the env the hook will run (`prod` by default; `draft` runs the saved head).
+2. Enable the hook and create the signing secret (bearer-authenticated):
+
+```bash
+API=http://127.0.0.1:8001/api/v1; AUTH="Authorization: Bearer $GRAPHYN_API_TOKEN"
+curl -sX PUT  "$API/projects/acme/pipelines/onpush/hook" -H "$AUTH" -H 'Content-Type: application/json' \
+     -d '{"enabled": true, "env": "prod", "allowed_envs": ["prod"]}'
+SECRET=$(curl -sX POST "$API/projects/acme/pipelines/onpush/hook/rotate" -H "$AUTH" | jq -r .secret)   # shown ONCE
+```
+
+3. The sender signs `"<unix timestamp>." + raw body` with HMAC-SHA256:
+
+```bash
+BODY='{"event":"push","ref":"main"}'
+TS=$(date +%s)
+SIG=$(printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.* //')
+curl -sX POST "$API/hooks/acme/onpush" \
+     -H 'Content-Type: application/json' \
+     -H "X-Graphyn-Timestamp: $TS" \
+     -H "X-Graphyn-Signature: sha256=$SIG" \
+     -H 'Idempotency-Key: delivery-123' \
+     --data-binary "$BODY"
+# → 202 {"run_id": "…", "status": "pending", "hook_id": "…", "env": "prod", "idempotent_replay": false}
+```
+
+Sign the exact bytes you send (`--data-binary`, no re-serialisation). Systems that cannot sign can send `Authorization: Bearer <token>` instead (prefer a named `GRAPHYN_API_TOKENS` entry such as `github-ci:<token>` so runs are attributed). Rotate with `…/hook/rotate` (old secret stops working immediately); `DELETE …/hook` removes the hook and its secret.
+
+| Env | Default | Meaning |
+|---|---|---|
+| `GRAPHYN_WEBHOOK_MAX_BYTES` | `1048576` | Max request body (413 above) |
+| `GRAPHYN_WEBHOOK_TOLERANCE_S` | `300` | ± timestamp window / replay-cache window |
+| `GRAPHYN_WEBHOOK_RATE_BURST` | `10` | Token-bucket capacity per hook |
+| `GRAPHYN_WEBHOOK_RATE_PER_MIN` | `60` | Refill rate per hook (429 + `Retry-After` when empty) |
+| `GRAPHYN_RUN_INPUTS_MAX_BYTES` | `1048576` | Max `inputs` JSON on `/pipelines/run*` (413 above) |
+
+With no `GRAPHYN_API_TOKEN` set, the DNS-rebinding host guard (TRUST_MODEL §1) answers 403 to senders that use a DNS name — set a token or `GRAPHYN_ALLOWED_HOSTS`. Behind a reverse proxy, forward the raw body unchanged and the client IP (the run meta records `request.client.host`). Rate limit, replay cache and idempotency lock are per API process. The `webhook_trigger` node comes from plugin `webhook-trigger` (`PluginPackage/Common/webhook_trigger`); when `GRAPHYN_BUNDLED_PLUGIN_ALLOWLIST` is set it must list `webhook-trigger` (and `hitl-approve` for approval gates).
 
 ## Docker Compose (API :8001 + UI :5173)
 
@@ -156,11 +212,14 @@ Full runbook, env vars, cancel/lease, and UI (**Deploy → Workers**): [DISTRIBU
 | Variable | Default | Where | Purpose |
 |---|---|---|---|
 | `GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS` | unset in the process; Compose `1` | `app/api/routers/data.py` | When unset, input-label symlinks that resolve outside `datasets/input` are listed as `accessible: false` and cannot be browsed. Compose defaults to `1` so the bundled `examples/` dataset links work. Set `0` to fail closed. |
-| `GRAPHYN_BUNDLED_PLUGIN_ALLOWLIST` | unset | `app/core/config.py` | Comma-separated plugin slugs startup may install. Branch `test/example-06-plugins` sets Example 06 plus `deployment-packager` and `python-code`, and Compose sets `GRAPHYN_AUTO_INSTALL_PLUGINS=0` so a restart does not restore removed plugins. |
+| `GRAPHYN_UPLOAD_MAX_BYTES` / `GRAPHYN_UPLOAD_MAX_FILES` / `GRAPHYN_UPLOAD_MAX_EXTRACT_BYTES` / `GRAPHYN_UPLOAD_MAX_ARCHIVE_FILES` | 100 MB / 1000 / 2 GiB / 20000 | `app/core/mlops/dataset_inputs.py` | Caps for `POST /data/inputs/upload` (per request; archive members unpacked; exceeding one → 413 and the request is rolled back). Reported by `GET /data/capabilities`. The UI batches uploads under these caps. HuggingFace import additionally needs the `hf` extra (`datasets`) — not in the default image, so the console hides it. |
+| `GRAPHYN_BUNDLED_PLUGIN_ALLOWLIST` | unset | `app/core/config.py` | Comma-separated plugin slugs startup may install. Branch `test/example-06-plugins` sets Example 06 plus `deployment-packager` and `python-code`, plus the restored workflow-automation plugins (see `docs/PLUGIN_GUIDE.md`), and Compose sets `GRAPHYN_AUTO_INSTALL_PLUGINS=0` so a restart does not restore removed plugins. |
 | `GRAPHYN_ISOLATED_DETERMINISTIC` | on | `app/core/config.py`, `app/core/plugins/isolated_executor.py`, `worker.py` | Isolated plugin workers run with `PYTHONHASHSEED=<node seed>`, `TF_DETERMINISTIC_OPS=1`, `TF_CUDNN_DETERMINISTIC=1` and seeded `random`/`np.random`; the trainer plugin also enables TF op determinism. `0` opts out. Startup also re-copies bundled plugin code whose content hash changed at the same version (venv kept) — see `PLUGIN_GUIDE.md` → Bundled auto-install. |
 | `GRAPHYN_SECRET_ENV_ALLOWLIST` | empty | `app/core/trust/secrets.py` | Comma-separated env names that node-selected secret names may read even if not secret-shaped / `GRAPHYN_*` (default: only `*_API_KEY`, `*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_DSN`, `*_URL`, `*_URI` not starting with `GRAPHYN_`) |
 | `GRAPHYN_LLM_BASE_URL_ALLOWLIST` | empty | `app/core/ml/llm_client.py` | Comma-separated hosts an env/secret LLM key may be sent to when a node `base_url` differs from the provider default (connections bind to their own `base_url`) |
-| `GRAPHYN_ALLOWED_HOSTS` | empty | `app/api/main.py` | Extra `Host` names accepted while `GRAPHYN_API_TOKEN` is unset; `*` disables the guard |
+| `GRAPHYN_ALLOWED_HOSTS` | empty | `app/api/main.py` | Extra `Host` names accepted while no bearer token (`GRAPHYN_API_TOKEN` / `GRAPHYN_API_TOKENS[_FILE]`) is configured; `*` disables the guard |
+| `GRAPHYN_API_TOKENS` | empty | `app/core/trust/identity.py` | Named bearer tokens (`{"token": "name"}` JSON or `name:token,…`); binds the audit actor — see [Named tokens](#named-tokens--audit-identity) |
+| `GRAPHYN_API_TOKENS_FILE` | empty | `app/core/trust/identity.py` | File with the same formats (mtime-cached) |
 | `GRAPHYN_JOB_RESULT_TTL_S` | `3600` | `distributed/queue.py` | Unread job results protected from history trim for this long |
 | `GRAPHYN_JOB_EVENTS_MAX` | `500` | `distributed/queue.py` | Events kept per job (newest) |
 | `GRAPHYN_WORKER_COMPLETE_RETRIES` | `6` | worker CLI | Retries (exp. backoff) for `complete` / blob upload on network errors / 5xx; 4xx is final |
@@ -171,3 +230,12 @@ Full runbook, env vars, cancel/lease, and UI (**Deploy → Workers**): [DISTRIBU
 See [TRUST_MODEL.md](./TRUST_MODEL.md) for the security rationale and [DISTRIBUTED_EXECUTION.md § Env reference](./DISTRIBUTED_EXECUTION.md) for the full Mode B list.
 
 Helm / K8s backend remain future (P3) — not shipped.
+
+### HuggingFace import in the API image
+
+The API image installs the `hf` extra (`datasets`, `huggingface_hub`) in its own layer so
+Datasets → Import → HuggingFace works out of the box. Build a lean image without it with
+`docker compose build --build-arg GRAPHYN_INSTALL_HF=0 graphyn-api`; the console then hides
+HuggingFace import (`GET /api/v1/data/capabilities` reports it unavailable).
+
+| `GRAPHYN_RETAIN_RUN_INPUTS` | `1` | Keep run inputs / webhook payloads in `runs/<id>/inputs.json` so "Replay exactly" reproduces input-driven runs. `0` stores fingerprints only (privacy) — such runs can then not be replayed exactly. |

@@ -6,7 +6,7 @@ import { useAppStore } from '../../store/appStore'
 import { stampProjectOnGraph } from '../../lib/projectStamp'
 import type { GraphIR } from '../../types/graph'
 import { EmptyState, ErrorBanner } from '../../components/ui'
-import { MasterDetail } from '../../layout'
+import { MasterDetail, MasterDetailToggle } from '../../layout'
 import {
   filterMarketplaceCatalog,
   loadMarketplaceCatalog,
@@ -261,6 +261,8 @@ export function MarketplaceBrowse({
         <MasterDetail
           className="min-h-0 flex-1"
           listLabel="marketplace templates"
+          storageKey="graphyn.marketplace"
+          selectedKey={selectedId ?? null}
           collapsible
           defaultSize={300}
           masterClassName="!bg-transparent"
@@ -296,7 +298,10 @@ export function MarketplaceBrowse({
           }
           detail={
             selected ? (
-              renderDetail(selected)
+              <>
+                <MasterDetailToggle className="mb-2" label="Templates" />
+                {renderDetail(selected)}
+              </>
             ) : (
               <p className="text-sm text-ink-500">Select a marketplace template.</p>
             )

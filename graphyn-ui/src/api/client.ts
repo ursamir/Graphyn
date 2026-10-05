@@ -70,6 +70,10 @@ export function configuredActor(): string {
   }
 }
 
+/**
+ * Auth headers for EVERY request (GET included): bearer token + `X-Actor` when a
+ * name is set, so read-side recorded actions (e.g. Verify) carry the actor too.
+ */
 function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = {}
   const token = getApiToken()
@@ -217,10 +221,12 @@ export async function fetchInputBlobUrl(
 /** Authenticated blob URL for a jailed output file (caller must revoke). */
 export async function fetchOutputBlobUrl(
   filePath: string,
-  init?: { signal?: AbortSignal },
+  init?: { signal?: AbortSignal; download?: boolean },
 ): Promise<string> {
   const res = await apiFetch('/outputs/file', {
-    query: { path: filePath },
+    // download=1 marks an explicit user download (audited server-side);
+    // previews / thumbnails / probes omit it.
+    query: init?.download ? { path: filePath, download: 1 } : { path: filePath },
     timeoutMs: 120000,
     signal: init?.signal,
   })
@@ -276,7 +282,7 @@ function triggerBlobDownload(url: string, filePath: string, filename?: string): 
 }
 
 export async function downloadOutputFile(filePath: string, filename?: string): Promise<void> {
-  const url = await fetchOutputBlobUrl(filePath)
+  const url = await fetchOutputBlobUrl(filePath, { download: true })
   try {
     triggerBlobDownload(url, filePath, filename)
   } finally {

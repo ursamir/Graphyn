@@ -58,9 +58,10 @@ def test_post_json_mocked(installed_cls):
     assert b"hello" in kwargs["content"]
 
 
-def test_hmac_header(installed_cls):
+def test_hmac_header(installed_cls, monkeypatch):
+    monkeypatch.setenv("HOOK_HMAC_KEY", "s3cret")
     node = installed_cls(
-        config={"url": "https://example.com/hook", "hmac_secret": "s3cret"},
+        config={"url": "https://example.com/hook", "hmac_env": "HOOK_HMAC_KEY"},
         seed=0,
     )
     mock_resp = MagicMock()
@@ -98,3 +99,55 @@ def test_restricted_egress_blocks_metadata(installed_cls, monkeypatch):
         with pytest.raises(RuntimeError, match="egress|blocked|private|link-local"):
             node.process({"input": {"x": 1}})
     mocked.assert_not_called()
+
+
+# ── review fixes: no inline secret, no urllib fallback, connection, audit ─────
+
+def test_inline_hmac_secret_field_removed(installed_cls):
+    with pytest.raises((ValidationError, ValueError, TypeError)):
+        installed_cls(config={"url": "https://example.com/hook", "hmac_secret": "s3cret"}, seed=0)
+
+
+def test_no_urllib_fallback_when_httpx_missing(installed_cls, monkeypatch):
+    import builtins
+    real_import = builtins.__import__
+
+    def _imp(name, *a, **k):
+        if name == "httpx":
+            raise ImportError("no httpx")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _imp)
+    node = installed_cls(config={"url": "https://example.com/hook"}, seed=0)
+    with patch("urllib.request.urlopen") as uo:
+        with pytest.raises(RuntimeError, match="httpx is required"):
+            node.process({"input": {}})
+    uo.assert_not_called()
+
+
+def test_redirects_not_followed_and_audited(installed_cls):
+    node = installed_cls(config={"url": "https://example.com/hooks/T0K3N?sig=abc"}, seed=0)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 302
+    mock_resp.text = ""
+    with patch("httpx.post", return_value=mock_resp) as mocked:
+        with pytest.raises(RuntimeError, match="HTTP 302") as ei:
+            node.process({"input": {}})
+    assert mocked.call_args.kwargs["follow_redirects"] is False
+    assert "T0K3N" not in str(ei.value)
+    calls = node.take_external_calls()
+    assert calls[0]["url"] == "https://example.com/***" and calls[0]["status"] == 302
+
+
+def test_connection_id_webhook_kind(installed_cls, monkeypatch):
+    import app.core.credentials.resolve as res
+    monkeypatch.setattr(res, "get_payload", lambda cid: ("webhook", {"url": "https://hooks.example.com/services/SECRET"}))
+    node = installed_cls(config={"connection_id": "wh1"}, seed=0)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = "ok"
+    with patch("httpx.post", return_value=mock_resp) as mocked:
+        out = node.process({"input": {"a": 1}})["output"]
+    assert mocked.call_args.args[0] == "https://hooks.example.com/services/SECRET"
+    assert "SECRET" not in out.url
+    assert node.take_external_calls()[0]["connection_id"] == "wh1"

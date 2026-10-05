@@ -51,11 +51,15 @@ import {
   pickDefaultRunModel,
   runModelSummary,
   runModelTitle,
+  splitShipModels,
   runModelsFromOutputs,
   shipLineageModel,
   type RunModel,
 } from './runModels'
 import DevicesView from '../ship/DevicesView'
+import { ShipPackageSummary } from './ShipPackageSummary'
+import { useShipManifest } from './useShipManifest'
+import { DEVICES_ENABLED } from '../ship/devicesFlag'
 import { paths } from '../../routes/paths'
 import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 
@@ -118,7 +122,8 @@ function parseEdgeLocation(): {
     project: (params.get('project') || '').trim() || projectFromPath || undefined,
     version: (params.get('version') || '').trim() || undefined,
     runId: (params.get('run_id') || '').trim() || undefined,
-    tab: devicesPath ? 'devices' : 'package',
+    // Devices tab is hidden until a device API exists (DEVICES_ENABLED).
+    tab: devicesPath && DEVICES_ENABLED ? 'devices' : 'package',
     // Carried from Models → "Use in Ship" so Configure preselects that model.
     model: (params.get('model') || '').trim() || undefined,
     stage: (params.get('stage') || '').trim() || undefined,
@@ -153,6 +158,10 @@ export default function EdgeWizardView() {
   const initialEdge = React.useMemo(() => parseEdgeLocation(), [])
   const [shipTab, setShipTab] = React.useState<ShipTab>(initialEdge.tab ?? 'package')
   const [linkedProject, setLinkedProject] = React.useState(initialEdge.project ?? '')
+  /** "Paste ID" toggle in the Ship from bar (raw run-id input hidden by default). */
+  const [pasteIdOpen, setPasteIdOpen] = React.useState(false)
+  /** Model list fold: untrained / converted files behind "Show all files (N)". */
+  const [showAllModelFiles, setShowAllModelFiles] = React.useState(false)
   const [linkedVersion, setLinkedVersion] = React.useState(initialEdge.version ?? '')
   const [sourceRunId, setSourceRunId] = React.useState(initialEdge.runId ?? '')
   const [projectRuns, setProjectRuns] = React.useState<
@@ -224,6 +233,12 @@ export default function EdgeWizardView() {
 
   const resolvedPackagePath = downloadPath || guessPackagePath(target, packageName)
   const runFailed = Boolean(runId && runStatus && isTerminalFailure(runStatus))
+  /** deployment_packager ≥ 1.1 sidecar: contents + sha256, how to run, self-test. */
+  const { manifest: shipManifest } = useShipManifest(
+    packageExists ? resolvedPackagePath : null,
+    runStatus,
+  )
+  const shownChecksum = shipManifest?.sha256 || packageChecksum || null
 
   React.useEffect(() => {
     void apiJson<{ models?: RegistryModel[] }>('/models')
@@ -348,7 +363,7 @@ export default function EdgeWizardView() {
   React.useEffect(() => {
     const apply = () => {
       const h = parseEdgeLocation()
-      if (h.tab) setShipTab(h.tab)
+      if (h.tab) setShipTab(DEVICES_ENABLED ? h.tab : 'package')
       if (h.project) setLinkedProject(h.project)
       if (h.version) setLinkedVersion(h.version)
       if (h.runId) setSourceRunId(h.runId)
@@ -847,8 +862,9 @@ export default function EdgeWizardView() {
       quantization,
       target,
       packageName,
+      sourceRunId,
     })
-  }, [graph, modelPath, labelsCsv, backend, quantization, target, packageName])
+  }, [graph, modelPath, labelsCsv, backend, quantization, target, packageName, sourceRunId])
 
   const useEdgeTemplate = () => {
     if (!linkedProject.trim()) {
@@ -1053,7 +1069,7 @@ export default function EdgeWizardView() {
           {runStatus ? (
             <>
               {' '}
-              · <StatusBadge status={runStatus} />
+              · <StatusBadge kind="run" status={runStatus} />
             </>
           ) : null}
         </p>
@@ -1078,9 +1094,9 @@ export default function EdgeWizardView() {
   return (
     <WorkbenchPage
       title="Ship"
-      description="Deploy — package a trained run for on-device delivery, or browse the device fleet."
+      description="Package a trained model for on-device delivery."
       toolbar={
-        <SegmentedTabs
+        !DEVICES_ENABLED ? undefined : <SegmentedTabs
           aria-label="Ship mode"
           value={shipTab}
           options={[
@@ -1103,7 +1119,7 @@ export default function EdgeWizardView() {
       }
     >
       <div className="space-y-6">
-      {shipTab === 'devices' ? (
+      {DEVICES_ENABLED && shipTab === 'devices' ? (
         <DevicesView workspaceId={activeProject || linkedProject || null} embedded />
       ) : (
         <>
@@ -1112,44 +1128,61 @@ export default function EdgeWizardView() {
               model list never shows through above or behind the bar when scrolled. */}
           <div className="sticky -top-3 z-20 -mx-4 -mt-3 border-b border-ink-100 bg-white px-4 pb-2 pt-3">
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm shadow-sm">
-            <span className="text-ink-500" title="The workspace and the training run whose model you are shipping">
+            <span className="text-ink-500" title="The training run whose model you are shipping">
               Ship from
             </span>
-            <input
-              className="rounded-lg border border-ink-200 px-2 py-1 font-mono text-[12px]"
-              placeholder="workspace"
-              value={linkedProject}
-              onChange={(e) => setLinkedProject(e.target.value.trim())}
-              aria-label="Workspace"
-            />
+            {/* Workspace is implicit (the open workspace); only ask for it when none is open. */}
+            {linkedProject ? null : (
+              <input
+                className="rounded-lg border border-ink-200 px-2 py-1 text-[12px]"
+                placeholder="Workspace"
+                value={linkedProject}
+                onChange={(e) => setLinkedProject(e.target.value.trim())}
+                aria-label="Workspace"
+              />
+            )}
             <FieldSelect
               className="min-w-[14rem] max-w-[22rem] flex-1"
               triggerClassName="!mt-0 rounded-lg border border-ink-200 px-2 py-1 font-mono text-[12px]"
               value={sourceRunId}
               onChange={setSourceRunId}
               aria-label="Source run"
-              placeholder="Select source run…"
-              emptyLabel="Select source run…"
-              mono
+              placeholder="Select a training run…"
+              emptyLabel="Select a training run…"
               options={(modelRuns.length > 0 ? modelRuns : projectRuns).map((r) => ({
                 value: r.run_id,
                 label: runDisplayName(r),
                 description: [
-                  r.status,
-                  modelRuns.length > 0 ? 'has a model' : 'no model files found',
-                  `id ${r.run_id.slice(0, 8)}`,
+                  r.run_id.slice(0, 8),
+                  modelRuns.length > 0 ? null : 'no model files found',
+                  r.status && !isTerminalSuccess(r.status) ? r.status : null,
                 ]
                   .filter(Boolean)
                   .join(' · '),
               }))}
             />
-            <input
-              className="min-w-[12rem] flex-1 rounded-lg border border-ink-200 px-2 py-1 font-mono text-[12px]"
-              placeholder="or paste a run id"
-              value={sourceRunId}
-              onChange={(e) => setSourceRunId(e.target.value.trim())}
-              aria-label="Source run id"
-            />
+            {pasteIdOpen ? (
+              <input
+                autoFocus
+                className="min-w-[12rem] flex-1 rounded-lg border border-ink-200 px-2 py-1 font-mono text-[12px]"
+                placeholder="Run id"
+                value={sourceRunId}
+                onChange={(e) => setSourceRunId(e.target.value.trim())}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape' || e.key === 'Enter') setPasteIdOpen(false)
+                }}
+                aria-label="Source run id"
+              />
+            ) : (
+              <button
+                type="button"
+                className="text-[12px] text-ink-500 hover:text-accent-800 hover:underline"
+                title={linkedProject ? `Workspace ${linkedProject} — paste the id of a run that isn't listed` : 'Paste a run id'}
+                onClick={() => setPasteIdOpen(true)}
+              >
+                Paste ID
+              </button>
+            )}
             {sourceRunId ? (
               <button type="button" className="btn-secondary" onClick={() => openRun(sourceRunId)}>
                 Open source run
@@ -1330,7 +1363,7 @@ export default function EdgeWizardView() {
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-2 sm:col-span-2">
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <span className="block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                    <span className="block text-[12px] font-medium text-ink-700">
                       Model to ship
                     </span>
                     {carriedModel.name ? (
@@ -1343,12 +1376,14 @@ export default function EdgeWizardView() {
                   {runModelsLoading || (sourceRunId.trim() && runModelsRun !== sourceRunId.trim()) ? (
                     <LoadingBlock label="Looking for this run’s models…" />
                   ) : runModels.length > 0 ? (
-                    <ul
-                      role="radiogroup"
-                      aria-label="Model to ship"
-                      className="divide-y divide-ink-100 overflow-hidden rounded-xl border border-ink-200"
-                    >
-                      {runModels.map((m) => {
+                    (() => {
+                      /* Main list: shippable trained models, best first. Untrained /
+                         already-converted files sit behind "Show all files (N)" (opened
+                         automatically when the current pick is one of them). */
+                      const { main, rest } = splitShipModels(runModels, bestPathId)
+                      const pickedInRest = rest.some((m) => m.path === modelPath.trim())
+                      const showRest = showAllModelFiles || pickedInRest || main.length === 0
+                      const renderRow = (m: (typeof runModels)[number]) => {
                         const shippable = isShippableSource(m)
                         const active = m.path === modelPath.trim()
                         return (
@@ -1377,9 +1412,7 @@ export default function EdgeWizardView() {
                                 <span className="flex flex-wrap items-center gap-2 text-[13px] font-medium text-ink-900">
                                   <span className="truncate">{runModelTitle(m)}</span>
                                   {bestPathId && m.path_id === bestPathId && shippable ? (
-                                    <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800">
-                                      Best result
-                                    </span>
+                                    <span className="text-[11px] font-normal text-emerald-700">Best result</span>
                                   ) : null}
                                 </span>
                                 <span className="block text-[11px] text-ink-500">
@@ -1398,8 +1431,35 @@ export default function EdgeWizardView() {
                             </button>
                           </li>
                         )
-                      })}
-                    </ul>
+                      }
+                      return (
+                        <div className="space-y-1.5">
+                          <ul
+                            role="radiogroup"
+                            aria-label="Model to ship"
+                            className="divide-y divide-ink-100 overflow-hidden rounded-xl border border-ink-200"
+                          >
+                            {main.map(renderRow)}
+                            {showRest ? rest.map(renderRow) : null}
+                          </ul>
+                          {main.length === 0 ? (
+                            <p className="text-[11px] text-amber-800">
+                              No trained model in this run — the files below can’t be shipped as-is.
+                            </p>
+                          ) : null}
+                          {rest.length > 0 && main.length > 0 && !pickedInRest ? (
+                            <button
+                              type="button"
+                              className="text-[12px] text-ink-500 hover:text-accent-800 hover:underline"
+                              aria-expanded={showRest}
+                              onClick={() => setShowAllModelFiles((v) => !v)}
+                            >
+                              {showRest ? 'Hide other files' : `Show all files (${runModels.length})`}
+                            </button>
+                          ) : null}
+                        </div>
+                      )
+                    })()
                   ) : (
                     <EmptyState
                       compact
@@ -1420,7 +1480,7 @@ export default function EdgeWizardView() {
                   ) : null}
                 </div>
                 <label className="block text-sm sm:col-span-2">
-                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                  <span className="mb-1 block text-[12px] font-medium text-ink-700">
                     Class labels, in the model's output order
                   </span>
                   <input
@@ -1467,7 +1527,7 @@ export default function EdgeWizardView() {
                   </summary>
                   <div className="mt-3 space-y-3">
                 <div className="block text-sm">
-                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                  <span className="mb-1 block text-[12px] font-medium text-ink-700">
                     Registered model (model registry)
                   </span>
                   <FieldSelect
@@ -1535,7 +1595,7 @@ export default function EdgeWizardView() {
                   )}
                 </div>
                 <div className="block text-sm">
-                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                  <span className="mb-1 block text-[12px] font-medium text-ink-700">
                     Model file path
                   </span>
                   {sourceArtifacts.length > 0 ? (
@@ -1619,7 +1679,7 @@ export default function EdgeWizardView() {
                   </div>
                 </details>
                 <label className="block text-sm">
-                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                  <span className="mb-1 block text-[12px] font-medium text-ink-700">
                     Optimizer backend
                   </span>
                   <FieldSelect
@@ -1631,7 +1691,7 @@ export default function EdgeWizardView() {
                   />
                 </label>
                 <label className="block text-sm">
-                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                  <span className="mb-1 block text-[12px] font-medium text-ink-700">
                     Quantization
                   </span>
                   <FieldSelect
@@ -1643,7 +1703,7 @@ export default function EdgeWizardView() {
                   />
                 </label>
                 <label className="block text-sm">
-                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                  <span className="mb-1 block text-[12px] font-medium text-ink-700">
                     Package target
                   </span>
                   <FieldSelect
@@ -1655,7 +1715,7 @@ export default function EdgeWizardView() {
                   />
                 </label>
                 <label className="block text-sm">
-                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                  <span className="mb-1 block text-[12px] font-medium text-ink-700">
                     Package name
                   </span>
                   <input
@@ -1705,7 +1765,7 @@ export default function EdgeWizardView() {
                 <div className="flex flex-wrap items-center gap-2 text-sm">
                   <span className="text-ink-500">Run</span>
                   <code className="font-mono text-xs text-ink-800">{runId}</code>
-                  {runStatus && <StatusBadge status={runStatus} />}
+                  {runStatus && <StatusBadge kind="run" status={runStatus} />}
                 </div>
               )}
               {running && <LoadingBlock label="Starting run…" />}
@@ -1767,7 +1827,7 @@ export default function EdgeWizardView() {
                     name):
                   </p>
                   <label className="block text-sm">
-                    <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                    <span className="mb-1 block text-[12px] font-medium text-ink-700">
                       Artifact path
                     </span>
                     <input
@@ -1778,15 +1838,15 @@ export default function EdgeWizardView() {
                   </label>
                   <div className="rounded-xl border border-ink-100 bg-ink-50/70 px-3 py-2 text-xs text-ink-700">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-semibold uppercase tracking-wide text-ink-400 text-[10px]">
+                      <span className="font-medium text-ink-500 text-[11px]">
                         Package checksum (sha256)
                       </span>
-                      {packageChecksum ? (
+                      {shownChecksum ? (
                         <button
                           type="button"
                           className="btn-quiet text-[11px]"
                           onClick={() => {
-                            void navigator.clipboard?.writeText(packageChecksum)
+                            void navigator.clipboard?.writeText(shownChecksum)
                             pushToast('Checksum copied', 'success')
                           }}
                         >
@@ -1795,9 +1855,9 @@ export default function EdgeWizardView() {
                       ) : null}
                     </div>
                     <div className="mt-0.5 font-mono text-[11px] break-all" data-testid="ship-package-checksum">
-                      {packageChecksum ? (
+                      {shownChecksum ? (
                         <>
-                          <span className="text-ink-400">sha256:</span> {packageChecksum}
+                          <span className="text-ink-400">sha256:</span> {shownChecksum}
                         </>
                       ) : (
                         <span className="text-ink-500">
@@ -1824,6 +1884,9 @@ export default function EdgeWizardView() {
                   </div>
                 </>
               )}
+              {packageExists && shipManifest ? (
+                <ShipPackageSummary manifest={shipManifest} onOpenRun={(id) => openRun(id)} />
+              ) : null}
               {runError && !runFailed && <ErrorBanner message={runError} />}
               {failureDiagnostics}
               <div className="flex flex-wrap gap-2">

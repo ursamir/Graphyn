@@ -3,8 +3,10 @@
 Bounded Context:  REST API Layer
 Responsibility:   FastAPI application factory. Wires auth, CORS, routers,
                   static mounts, and domain serializer registration at startup.
-Owns:             App instance, auth dependency (_auth_dep), CORS middleware,
-                  router inclusion, static file mounts.
+Owns:             App instance, auth dependency (_auth_dep — accepts
+                  GRAPHYN_API_TOKEN or any GRAPHYN_API_TOKENS mapped token),
+                  request identity middleware (token → audit actor ContextVar),
+                  CORS middleware, router inclusion, static file mounts.
 Public Surface:   app (FastAPI instance) — imported by uvicorn entry point.
 Must NOT:         Contain business endpoint logic — /api/v1 routes live in
                   app/api/routers/. Unauthenticated landing/health may live here.
@@ -18,7 +20,8 @@ Authenticated routes are served under /api/v1/.
 Unauthenticated GET / and GET /health exist so operators hitting :8001
 are not met with a bare 404.
 
-DNS-rebinding guard: while GRAPHYN_API_TOKEN is unset, requests whose Host is
+DNS-rebinding guard: while no bearer token is configured
+(GRAPHYN_API_TOKEN / GRAPHYN_API_TOKENS[_FILE]), requests whose Host is
 not localhost / *.localhost / an IP literal / graphyn-api (compose) /
 GRAPHYN_ALLOWED_HOSTS (comma-separated, ``*`` disables) get 403.
 """
@@ -57,8 +60,13 @@ from app.api.routers.experiments import router as experiments_router
 from app.api.routers.proposals import router as proposals_router
 from app.api.routers.models import router as models_router
 from app.api.routers.ship import router as ship_router
+from app.api.routers.identity import router as identity_router
+from app.api.routers.hooks import public_router as hooks_public_router
+from app.api.routers.hooks import router as hooks_router
+from app.api.routers.gates import router as gates_router
 from app.api.observability import record_request
 from app.core.config import api_token, auth_required, datasets_output_dir, datasets_input_dir, runs_dir
+from app.core.trust.identity import token_accepted, token_auth_configured
 
 # Docker / compose: logging must hit stdout/stderr *before* plugin venv installs
 # (pip output is captured; without this, ``docker logs`` stays empty for minutes).
@@ -188,8 +196,8 @@ def _auth_dep(
 ):
     if _is_public_api_path(request.url.path):
         return
-    token = api_token()  # read on every call
-    if not token:
+    # Read on every call: GRAPHYN_API_TOKEN and/or the GRAPHYN_API_TOKENS map.
+    if not token_auth_configured():
         if auth_required():
             raise HTTPException(
                 status_code=401,
@@ -203,7 +211,7 @@ def _auth_dep(
             detail="Missing Bearer token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if not hmac.compare_digest(str(credentials.credentials), token):
+    if not token_accepted(str(credentials.credentials)):
         raise HTTPException(
             status_code=401,
             detail="Invalid Bearer token",
@@ -213,8 +221,7 @@ def _auth_dep(
 
 def _auth_dep_request(request: Request) -> None:
     """Request-scoped auth check for non-router paths (e.g. static mounts)."""
-    token = api_token()
-    if not token:
+    if not token_auth_configured():
         if auth_required():
             raise HTTPException(
                 status_code=401,
@@ -231,7 +238,7 @@ def _auth_dep_request(request: Request) -> None:
             detail="Missing Bearer token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if not hmac.compare_digest(str(value), token):
+    if not token_accepted(str(value)):
         raise HTTPException(
             status_code=401,
             detail="Invalid Bearer token",
@@ -248,6 +255,28 @@ app = FastAPI(title="Graphyn API", version="2.0.0", lifespan=_lifespan)
 from app.api.errors import get_or_set_request_id, register_exception_handlers
 
 register_exception_handlers(app)
+
+
+@app.middleware("http")
+async def _identity_middleware(request: Request, call_next):
+    """Bind the caller's token-derived identity for core audit emitters.
+
+    The ContextVar is set before ``call_next`` so endpoint code (and sync
+    endpoints run in the threadpool, which copies the context) sees it;
+    record_audit then replaces generic actors with this identity.
+    """
+    from app.api.actor import resolve_identity
+    from app.core.trust.identity import reset_request_identity, set_request_identity
+
+    try:
+        ident = resolve_identity(request)
+    except Exception:
+        ident = None
+    token = set_request_identity(ident)
+    try:
+        return await call_next(request)
+    finally:
+        reset_request_identity(token)
 
 
 @app.middleware("http")
@@ -296,6 +325,12 @@ app.include_router(experiments_router, prefix="/api/v1", dependencies=_deps)
 app.include_router(proposals_router,   prefix="/api/v1", dependencies=_deps)
 app.include_router(models_router,      prefix="/api/v1", dependencies=_deps)
 app.include_router(ship_router,        prefix="/api/v1", dependencies=_deps)
+app.include_router(identity_router,    prefix="/api/v1", dependencies=_deps)
+app.include_router(hooks_router,       prefix="/api/v1", dependencies=_deps)
+app.include_router(gates_router,       prefix="/api/v1", dependencies=_deps)
+# Inbound webhooks authenticate themselves (HMAC signature or bearer token —
+# see app/api/routers/hooks.py); they must NOT carry the global bearer dep.
+app.include_router(hooks_public_router, prefix="/api/v1")
 
 
 @app.get("/")
@@ -406,7 +441,7 @@ def host_header_allowed(raw_host: str) -> bool:
 @app.middleware("http")
 async def _host_check(request: Request, call_next):
     """Reject non-loopback Host headers while the API is unauthenticated."""
-    if not api_token() and request.scope.get("type") == "http":
+    if not token_auth_configured() and request.scope.get("type") == "http":
         if not host_header_allowed(request.headers.get("host", "")):
             from app.api.errors import error_body, get_or_set_request_id
 

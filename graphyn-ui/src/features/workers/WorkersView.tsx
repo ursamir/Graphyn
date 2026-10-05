@@ -245,8 +245,8 @@ export default function WorkersView() {
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
                 Recent run statuses (proxy)
               </div>
-              <div className="overflow-hidden rounded-xl border border-ink-100">
-                <table className="w-full text-left text-sm">
+              <div className="overflow-x-auto rounded-xl border border-ink-100">
+                <table className="w-full min-w-[32rem] text-left text-sm">
                   <thead className="border-b border-ink-100 bg-ink-50/80 text-[11px] uppercase tracking-wide text-ink-500">
                     <tr>
                       <th className="px-3 py-2 font-semibold">Run</th>
@@ -311,19 +311,19 @@ export default function WorkersView() {
               value={filterLabel}
               onChange={(e) => setFilterLabel(e.target.value)}
               placeholder="Filter label"
-              className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+              className="min-w-0 flex-1 basis-36 rounded-lg border border-ink-200 px-3 py-1.5 text-sm sm:flex-none"
             />
             <input
               value={filterPool}
               onChange={(e) => setFilterPool(e.target.value)}
               placeholder="Filter pool"
-              className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+              className="min-w-0 flex-1 basis-36 rounded-lg border border-ink-200 px-3 py-1.5 text-sm sm:flex-none"
             />
             <input
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
               placeholder="Filter status"
-              className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+              className="min-w-0 flex-1 basis-36 rounded-lg border border-ink-200 px-3 py-1.5 text-sm sm:flex-none"
             />
             {(filterLabel || filterPool || filterStatus) && (
               <button
@@ -343,8 +343,8 @@ export default function WorkersView() {
           {filtered.length === 0 ? (
             <p className="py-6 text-center text-sm text-ink-500">No workers match these filters.</p>
           ) : (
-            <div className="overflow-hidden rounded-2xl border border-ink-200/80 bg-white shadow-sm">
-              <table className="w-full text-left text-sm">
+            <div className="overflow-x-auto rounded-2xl border border-ink-200/80 bg-white shadow-sm">
+              <table className="w-full min-w-[40rem] text-left text-sm">
                 <thead className="border-b border-ink-100 bg-ink-50/80 text-[11px] uppercase tracking-wide text-ink-500">
                   <tr>
                     <th className="px-4 py-2.5 font-semibold">Worker</th>
@@ -366,7 +366,7 @@ export default function WorkersView() {
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             <Server className="h-3.5 w-3.5 text-ink-400" />
-                            <span className="font-medium text-ink-900">{w.worker_id}</span>
+                            <span className="max-w-[16rem] truncate font-medium text-ink-900" title={w.worker_id}>{w.worker_id}</span>
                             {stale && (
                               <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
                                 Stale

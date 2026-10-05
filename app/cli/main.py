@@ -24,6 +24,7 @@ Subcommands:
   runs     list                       List recent pipeline runs
   runs     logs <run_id>              Print log entries for a run
   worker   start                      Register as a distributed worker
+  data     ls|upload|snapshot|download  Manage input labels / dataset versions
 """
 
 import argparse
@@ -67,6 +68,7 @@ from app.cli.cmd_artifacts import (
     cmd_artifacts_list,
     cmd_artifacts_replay,
 )
+from app.cli.cmd_data import cmd_data_download, cmd_data_ls, cmd_data_snapshot, cmd_data_upload
 from app.cli.cmd_graph import cmd_inspect, cmd_migrate, cmd_nodes, cmd_run, cmd_validate
 from app.cli.cmd_mcp import cmd_mcp
 from app.cli.cmd_plugins import (
@@ -507,6 +509,42 @@ def build_parser():
     secrets_del_parser = secrets_sub.add_parser("delete", help="Delete a named secret")
     secrets_del_parser.add_argument("name")
     secrets_del_parser.set_defaults(func=cmd_secrets_delete)
+
+    # ── data ── (input labels / dataset versions)
+    data_parser = subparsers.add_parser(
+        "data",
+        help="Datasets: list, upload, freeze (snapshot), download",
+        description=(
+            "Manage workspace/datasets. Local by default; with --api-url / GRAPHYN_API_URL "
+            "the commands call the REST /data endpoints. Mutations are audited."
+        ),
+    )
+    data_sub = data_parser.add_subparsers(dest="data_command", metavar="ACTION")
+    data_sub.required = True
+    data_ls = data_sub.add_parser("ls", help="List input labels, a label's files, or output versions")
+    data_ls.add_argument("label", nargs="?", default=None, help="Input label to list files of")
+    data_ls.add_argument("--outputs", action="store_true", help="List output dataset versions instead")
+    data_ls.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="JSON output")
+    data_ls.set_defaults(func=cmd_data_ls)
+    data_up = data_sub.add_parser("upload", help="Upload files, folders or zip/tar archives into a label")
+    data_up.add_argument("paths", nargs="+", help="Files, folders or .zip/.tar(.gz) archives")
+    data_up.add_argument("--label", default="uploads", help="Target input label (default: uploads)")
+    fal = data_up.add_mutually_exclusive_group()
+    fal.add_argument("--folders-as-labels", dest="folders_as_labels", action="store_true", default=None,
+                     help="First folder of each path names the label (default for archives)")
+    fal.add_argument("--keep-folders", dest="folders_as_labels", action="store_false",
+                     help="Keep sub-folders under --label (default for plain files)")
+    data_up.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="JSON output")
+    data_up.set_defaults(func=cmd_data_upload)
+    data_snap = data_sub.add_parser("snapshot", help="Freeze an input label as an immutable version")
+    data_snap.add_argument("label")
+    data_snap.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="JSON output")
+    data_snap.set_defaults(func=cmd_data_snapshot)
+    data_dl = data_sub.add_parser("download", help="Zip an input label or an output version")
+    data_dl.add_argument("target", help="<label> or <project>/<version> (e.g. _inputs/yes/v1)")
+    data_dl.add_argument("-o", "--output", default=None, help="Zip path (default: <name>.zip)")
+    data_dl.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="JSON output")
+    data_dl.set_defaults(func=cmd_data_download)
 
     # ── mcp ── (Req 1.6, 8.1)
     mcp_parser = subparsers.add_parser(

@@ -1,9 +1,12 @@
 # app/core/mlops/dataset_versions.py
 """
 Bounded Context:  BC6 — Data / datasets
-Responsibility:   Dataset version manifest sha256 (DATA-VER-002) and
-                  referenced-version delete guard (DATA-VER-006).
-Owns:             compute/write/read manifest, find_references, delete helpers.
+Responsibility:   Dataset version manifest sha256 (DATA-VER-002),
+                  referenced-version delete guard (DATA-VER-006) and the
+                  immutable-version helpers (next free version, existence).
+Owns:             compute/write/read manifest, aggregate_content_hash,
+                  find_references, VERSION_RE, version_has_content,
+                  next_free_version, delete helpers.
 Public Surface:   Same.
 Must NOT:         Import app.api.
 Dependencies:     hashlib, json, os, tempfile, pathlib, app.core.config.
@@ -15,6 +18,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -22,6 +26,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 MANIFEST_NAME = "manifest.json"
+# Canonical dataset version directory names: v1, v2, v1.0.0 …
+VERSION_RE = re.compile(r"^v\d+(\.\d+)*$")
 _SKIP_DIR_NAMES = frozenset({"ship", "pipelines", "snapshots", ".git"})
 # Per-run documents scanned by the delete guard (meta first, then the graph).
 _RUN_REF_FILES = ("meta.json", "graph.json", "ir.json", "pipeline.graph.json")
@@ -38,11 +44,68 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def aggregate_content_hash(entries: list[tuple[str, str]]) -> str:
+    """Aggregate ``[(rel_posix_path, sha256)]`` into one content hash.
+
+    Same algorithm as :func:`compute_manifest` (entries sorted part-wise like
+    ``sorted(Path.rglob())``, joined as ``"<sha256>:<path>"`` lines) so streamed zips and ingest jobs can report
+    a hash that equals the manifest a later snapshot would compute.
+    """
+    lines = [f"{digest}:{rel}" for rel, digest in sorted(entries, key=lambda e: tuple(e[0].split("/")))]
+    if not lines:
+        return hashlib.sha256(b"").hexdigest()
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+def version_has_content(version_dir: Path) -> bool:
+    """True when *version_dir* exists and holds at least one entry."""
+    try:
+        return version_dir.is_dir() and any(version_dir.iterdir())
+    except OSError:
+        return False
+
+
+def _bump(tag: str) -> str:
+    """v3 → v4; v1.0.2 → v1.0.3 (last numeric component)."""
+    nums = tag[1:].split(".")
+    nums[-1] = str(int(nums[-1]) + 1)
+    return "v" + ".".join(nums)
+
+
+def next_free_version(parent: Path, requested: str | None = None) -> str:
+    """Next unused version under *parent*.
+
+    With *requested* (``vN`` / ``vN.N.N``): that tag when free (missing or
+    empty dir), else the tag bumped until free. Without: ``v<max major + 1>``
+    over existing ``vN…`` dirs (``v1`` when none).
+    """
+    if requested:
+        if not VERSION_RE.match(requested):
+            raise ValueError(f"Invalid version {requested!r} (expected vN / vN.N.N)")
+        tag = requested
+        for _ in range(100_000):
+            if not version_has_content(parent / tag):
+                return tag
+            tag = _bump(tag)
+        raise RuntimeError(f"No free dataset version under {parent}")
+    top = 0
+    try:
+        for child in parent.iterdir():
+            if child.is_dir() and VERSION_RE.match(child.name):
+                try:
+                    top = max(top, int(child.name[1:].split(".")[0]))
+                except ValueError:
+                    continue
+    except OSError:
+        pass
+    return f"v{top + 1}"
+
+
 def compute_manifest(version_dir: Path) -> dict[str, Any]:
     """Walk version dir and build ``{files[], content_hash, schema_version}``."""
     root = version_dir.resolve()
     files: list[dict[str, Any]] = []
-    digests: list[str] = []
+    digests: list[tuple[str, str]] = []
     if root.is_dir():
         for path in sorted(root.rglob("*")):
             if not path.is_file():
@@ -67,12 +130,8 @@ def compute_manifest(version_dir: Path) -> dict[str, Any]:
                 logger.warning("dataset manifest skip %s: %s", path, exc)
                 continue
             files.append({"path": rel, "sha256": digest, "size": size})
-            digests.append(f"{digest}:{rel}")
-    aggregate = (
-        hashlib.sha256("\n".join(digests).encode("utf-8")).hexdigest()
-        if digests
-        else hashlib.sha256(b"").hexdigest()
-    )
+            digests.append((rel, digest))
+    aggregate = aggregate_content_hash(digests)
     return {
         "schema_version": "1.0",
         "files": files,

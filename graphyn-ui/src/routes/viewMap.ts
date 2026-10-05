@@ -4,6 +4,7 @@
 
 import type { AppView } from '../store/appStore'
 import { paths, type RunPanel } from './paths'
+import { DEVICES_ENABLED } from '../features/ship/devicesFlag'
 
 export type ViewPathContext = {
   workspaceId?: string | null
@@ -53,7 +54,9 @@ export function pathForView(view: AppView, ctx: ViewPathContext = {}): string | 
       return W ? paths.ship(W) : null
 
     case 'devices':
-      return W ? paths.shipDevices(W) : null
+      // Devices is hidden until a device API exists → plain Ship.
+      if (!W) return null
+      return DEVICES_ENABLED ? paths.shipDevices(W) : paths.ship(W)
 
     case 'workers':
       return paths.deployWorkers()

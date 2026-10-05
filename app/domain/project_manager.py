@@ -306,7 +306,13 @@ class ProjectManager:
 
     @_project_locked
     def clone(self, name: str, new_name: str) -> dict:
-        """Copy metadata files only (no version subdirs or audio files)."""
+        """New workspace from this one's pipelines and settings.
+
+        Copies spec/taxonomy/contract/links, the description and tags, and the
+        draft head of every pipeline (``pipelines/*.graph.json``). Not copied:
+        dataset output versions, snapshots, pipeline version history /
+        environments, runs and models (those live outside the folder anyway).
+        """
         self._validate_name(name)
         self._validate_name(new_name)
         src = self._require_project(name)
@@ -321,7 +327,30 @@ class ProjectManager:
             if src_file.exists():
                 shutil.copy2(str(src_file), str(dst / fname))
 
+        # Draft pipeline heads only — the clone starts with fresh version history.
+        src_pipes = src / "pipelines"
+        if src_pipes.is_dir():
+            dst_pipes = dst / "pipelines"
+            for gfile in sorted(src_pipes.glob("*.graph.json")):
+                if not gfile.is_file() or gfile.is_symlink():
+                    continue
+                dst_pipes.mkdir(parents=True, exist_ok=True)
+                target = dst_pipes / gfile.name
+                try:
+                    graph = json.loads(gfile.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    shutil.copy2(str(gfile), str(target))
+                    continue
+                # Re-stamp the owning workspace so runs of the copy are tagged
+                # with the clone, not the source.
+                if isinstance(graph, dict) and isinstance(graph.get("metadata"), dict):
+                    graph["metadata"]["project"] = new_name
+                _atomic_write_text(target, json.dumps(graph, indent=2) + "\n")
+
         # Create fresh project.json for the clone
+        src_meta = self._read_json(src / "project.json", {})
+        if not isinstance(src_meta, dict):
+            src_meta = {}
         now = self._now()
         meta = {
             "name": new_name,
@@ -329,7 +358,12 @@ class ProjectManager:
             "created_at": now,
             "updated_at": now,
             "versions": [],
+            "cloned_from": name,
         }
+        if src_meta.get("description"):
+            meta["description"] = src_meta["description"]
+        if src_meta.get("tags"):
+            meta["tags"] = list(src_meta["tags"])
         self._write_json(dst / "project.json", meta)
         return meta
 

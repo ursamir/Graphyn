@@ -9,7 +9,9 @@ Public Surface:   GET/POST/DELETE /api/v1/plugins/* endpoints
 Must NOT:         Contain plugin business logic — delegate to PluginManager.
                   Must not import PluginLoader, PluginStore, or PluginInstaller
                   directly.
-Dependencies:     fastapi, app.core.plugins.{manager, index, errors}.
+Dependencies:     fastapi, app.core.plugins.{manager, index, errors},
+                  app.api.actor + app.core.trust.audit (plugin.install /
+                  uninstall / enable / disable / install_deps audit events).
 Security:         InstallRequest.expected_sha256 forwarded to PluginManager
                   for HTTP archive checksum verification (SEC-6 fix).
                   Source allowlist enforced inside PluginInstaller — rejected
@@ -24,7 +26,7 @@ import logging
 import threading
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.core.plugins.errors import (
@@ -217,6 +219,27 @@ def gc_plugin_venvs() -> dict[str, Any]:
     return {"removed": removed}
 
 
+def _redact_source(source: str) -> str:
+    try:
+        from app.core.plugins.installer import redact_url_userinfo
+
+        return redact_url_userinfo(str(source))[:300]
+    except Exception:
+        return "***"
+
+
+def _audit_plugin(request: Request, action: str, name: str, meta: dict[str, Any]) -> None:
+    """Audit a plugin lifecycle mutation with the caller's token-bound actor."""
+    try:
+        from app.api.actor import resolve_actor
+        from app.core.trust.audit import record_audit
+
+        record_audit(actor=resolve_actor(request), action=action, resource_type="plugin",
+                     resource_id=str(name), meta=meta)
+    except Exception:
+        log.debug("plugin audit failed (%s)", action, exc_info=True)
+
+
 # ── POST /plugins/install ─────────────────────────────────────────────────────
 
 
@@ -224,6 +247,7 @@ def gc_plugin_venvs() -> dict[str, Any]:
 def install_plugin(
     body: InstallRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
 ) -> dict[str, Any]:
     """Install a plugin from *source*.
 
@@ -274,6 +298,8 @@ def install_plugin(
         background_tasks.add_task(_bg_install)
         with _install_jobs_lock:
             _install_jobs[parsed_name] = {"status": "installing", "error": None}
+        _audit_plugin(request, "plugin.install", parsed_name,
+                      {"source": _redact_source(source), "mode": "background", "upgrade": bool(upgrade)})
         return {"status": "installing", "name": parsed_name}
 
     # Synchronous path — local source
@@ -295,6 +321,8 @@ def install_plugin(
             detail={"error": "UnexpectedError", "detail": _safe_exc_detail(exc)},
         ) from exc
 
+    _audit_plugin(request, "plugin.install", record.name,
+                  {"source": _redact_source(source), "version": record.version, "upgrade": bool(upgrade)})
     return {"name": record.name, "version": record.version, "status": "installed"}
 
 
@@ -302,7 +330,7 @@ def install_plugin(
 
 
 @router.post("/{name}/enable", summary="Enable a plugin")
-def enable_plugin(name: str) -> dict[str, Any]:
+def enable_plugin(name: str, request: Request) -> dict[str, Any]:
     """Enable the plugin named *name* and reload its node types.
 
     Requirements: req-07 §8.4
@@ -317,6 +345,7 @@ def enable_plugin(name: str) -> dict[str, Any]:
     except (PluginCompatibilityError, PluginDependencyError, PluginInstallError) as exc:
         raise _plugin_http_error(exc) from exc
 
+    _audit_plugin(request, "plugin.enable", record.name, {})
     return {"name": record.name, "enabled": record.enabled}
 
 
@@ -324,7 +353,7 @@ def enable_plugin(name: str) -> dict[str, Any]:
 
 
 @router.post("/{name}/disable", summary="Disable a plugin")
-def disable_plugin(name: str) -> dict[str, Any]:
+def disable_plugin(name: str, request: Request) -> dict[str, Any]:
     """Disable the plugin named *name* and unload its node types.
 
     Requirements: req-07 §8.5
@@ -337,6 +366,7 @@ def disable_plugin(name: str) -> dict[str, Any]:
     except PluginNotFoundError as exc:
         raise _plugin_http_error(exc) from exc
 
+    _audit_plugin(request, "plugin.disable", record.name, {})
     return {"name": record.name, "enabled": record.enabled}
 
 
@@ -344,7 +374,7 @@ def disable_plugin(name: str) -> dict[str, Any]:
 
 
 @router.delete("/{name}", summary="Uninstall a plugin")
-def uninstall_plugin(name: str) -> dict[str, Any]:
+def uninstall_plugin(name: str, request: Request) -> dict[str, Any]:
     """Uninstall the plugin named *name*.
 
     Requirements: req-07 §8.6
@@ -357,6 +387,7 @@ def uninstall_plugin(name: str) -> dict[str, Any]:
     except PluginNotFoundError as exc:
         raise _plugin_http_error(exc) from exc
 
+    _audit_plugin(request, "plugin.uninstall", name, {})
     return {"name": name, "status": "uninstalled"}
 
 
@@ -428,6 +459,7 @@ class InstallDepsBody(BaseModel):
 def install_plugin_dependencies(
     name: str,
     background_tasks: BackgroundTasks,
+    request: Request,
     body: InstallDepsBody | None = None,
 ) -> dict[str, Any]:
     """Install missing required (and optionally optional) deps for *name*.
@@ -486,6 +518,7 @@ def install_plugin_dependencies(
                 }
 
     background_tasks.add_task(_bg_install_deps)
+    _audit_plugin(request, "plugin.install_deps", name, {"include_optional": include_optional})
     return {
         "status": "installing",
         "name": name,

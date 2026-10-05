@@ -5,6 +5,9 @@ import {
   looksLikeNodeId,
   modelDisplayName,
   modelPrimaryMetricText,
+  modelRowSubtitle,
+  modelStageSummary,
+  modelUsedInRuns,
   preferredStageKey,
   stageFacts,
   stageRunId,
@@ -67,5 +70,67 @@ describe('findModelForRoute', () => {
     expect(findModelForRoute(rows, 'kws-v1')?.name).toBe('KWS-v1')
     expect(findModelForRoute(rows, 'nope')).toBeNull()
     expect(findModelForRoute(rows, '')).toBeNull()
+  })
+})
+
+describe('modelRowSubtitle / modelStageSummary', () => {
+  const row = {
+    name: 'kws',
+    stages: {
+      prod: { run_id: 'aaaaaaaa11112222333344445555', created_at: '2026-10-01T10:00:00Z', metrics: { test_accuracy: 0.739 } },
+      staging: { source_run_id: 'bbbbbbbb11112222333344445555', created_at: '2026-10-03T10:00:00Z', metrics: { test_accuracy: 0.756 } },
+    },
+  }
+  it('shows the preferred stage run short id and date', () => {
+    expect(modelRowSubtitle(row)).toEqual({ runId: 'aaaaaaaa11112222333344445555', shortId: 'aaaaaaaa', date: '2026-10-01' })
+    expect(modelRowSubtitle({ name: 'x' })).toEqual({ runId: null, shortId: null, date: '' })
+  })
+  it('lists both stages with metrics', () => {
+    expect(modelStageSummary(row.stages)).toBe('Production 73.9% · Staging 75.6%')
+    expect(modelStageSummary({ staging: { run_id: 'r' } })).toBe('Staging')
+    expect(modelStageSummary({ latest: { run_id: 'r' } })).toBe('')
+    expect(modelStageSummary(null)).toBe('')
+  })
+})
+
+
+describe('defaultModelName', () => {
+  it('prefers a production model, then the newest', async () => {
+    const { defaultModelName } = await import('./modelDisplay')
+    expect(defaultModelName([])).toBeNull()
+    expect(
+      defaultModelName([
+        { name: 'old', stages: { staging: { run_id: 'a' } }, updated_at: '2026-10-02' },
+        { name: 'new', stages: { staging: { run_id: 'b' } }, updated_at: '2026-10-04' },
+      ]),
+    ).toBe('new')
+    expect(
+      defaultModelName([
+        { name: 'new', stages: { staging: { run_id: 'b' } }, updated_at: '2026-10-04' },
+        { name: 'shipped', stages: { prod: { run_id: 'c' } }, updated_at: '2026-10-01' },
+      ]),
+    ).toBe('shipped')
+  })
+})
+
+describe('modelUsedInRuns', () => {
+  const rows = [
+    { run_id: 'aaaaaaaaaaaaaaaa', created_at: '2026-01-01T00:00:00Z', graph_name: 'ship', lineage_request: { model: { name: 'kws', stage: 'prod' } } },
+    { run_id: 'bbbbbbbbbbbbbbbb', created_at: '2026-02-01T00:00:00Z', display_name: 'Ship v2', lineage_request: { model: { name: 'kws' } } },
+    { run_id: 'cccccccccccccccc', created_at: '2026-03-01T00:00:00Z', lineage_request: { model: { name: 'other' } } },
+    { run_id: 'dddddddddddddddd', created_at: '2026-04-01T00:00:00Z', lineage: { models: [{ name: 'kws', stage: 'staging' }] } },
+    { run_id: 'eeeeeeeeeeeeeeee', created_at: '2026-05-01T00:00:00Z' },
+  ]
+  it('lists runs whose lineage names the model, newest first', () => {
+    const used = modelUsedInRuns(rows, 'kws')
+    expect(used.map((u) => u.runId)).toEqual(['dddddddddddddddd', 'bbbbbbbbbbbbbbbb', 'aaaaaaaaaaaaaaaa'])
+    expect(used[0].stage).toBe('staging')
+    expect(used[1].label).toBe('Ship v2')
+    expect(used[2]).toMatchObject({ stage: 'prod', label: 'ship' })
+  })
+  it('excludes the source run and handles empty input', () => {
+    expect(modelUsedInRuns(rows, 'kws', { excludeRunIds: ['dddddddddddddddd'] })).toHaveLength(2)
+    expect(modelUsedInRuns(null, 'kws')).toEqual([])
+    expect(modelUsedInRuns(rows, '')).toEqual([])
   })
 })

@@ -54,6 +54,9 @@ ALLOWED_SUFFIXES = frozenset(
         ".keras",
         ".tflite",
         ".zip",
+        ".gz",  # deployment_packager edge / docker packages (.tar.gz)
+        ".tgz",
+        ".h",  # deployment_packager MCU header
         ".h5",
         ".pb",
         ".txt",

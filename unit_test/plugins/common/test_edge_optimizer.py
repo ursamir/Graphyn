@@ -99,6 +99,13 @@ def test_process_smoke(installed_cls, tmp_path):
     )
     result = node.process({"input": artifact})
     assert "output" in result
+    # 1.1: tensor details for deployment_packager (preprocessing.json / int8 scaling).
+    out = result["output"]
+    td = out.metadata["tensor_details"]
+    assert td["inputs"][0]["shape"] == [1, 4, 2, 1]
+    assert td["inputs"][0]["dtype"] == "float32"
+    assert out.input_shape == [1, 4, 2, 1] and out.output_shape == [1, 2]
+    assert out.metadata["source_model_path"] == saved_model_path
 
 
 def _load_edge_nodes():

@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, ChevronRight, Copy, Inbox, Info, X, type L
 import { prettyScalar, startCase } from '../lib/format'
 import { humanizeErrorText } from '../lib/errorText'
 import { goView } from '../routes/nav'
+import { isRunStatusException, runStatusLabel, runStatusTone, shortId, type RunStatusTone } from '../lib/runDisplay'
 
 export function EmptyState({
   title,
@@ -196,11 +197,76 @@ export function ErrorBanner({
   )
 }
 
+const RUN_TONE_CLASS: Partial<Record<RunStatusTone, string>> = {
+  failed: 'bg-rose-50 text-rose-800 ring-1 ring-inset ring-rose-200',
+  running: 'bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-200',
+  queued: 'bg-sky-50 text-sky-900 ring-1 ring-inset ring-sky-200',
+  paused: 'bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-200',
+  'needs-action': 'bg-violet-50 text-violet-900 ring-1 ring-inset ring-violet-200',
+  cancelled: 'bg-ink-100 text-ink-700 ring-1 ring-inset ring-ink-200',
+}
+
+function sentenceCase(text: string): string {
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text
+}
+
+/**
+ * Status pill.
+ *
+ * - Default (`kind` omitted): generic status (enabled / ok / prod / …) —
+ *   colour by keyword, raw text sentence-cased.
+ * - `kind="run"`: shared run vocabulary (`runStatusLabel` in lib/runDisplay).
+ *   Only exceptions get a coloured badge (failed, running, queued, paused,
+ *   needs action, cancelled); Done / Archived / Unknown are plain muted text
+ *   so a healthy list stays quiet.
+ */
 export function StatusBadge({
   status,
+  kind,
+  label,
+  className,
+  title,
 }: {
   status: string
+  /** `run` → shared run-status vocabulary + exceptions-only colour. */
+  kind?: 'run'
+  /** Override the visible text (status still drives colour). */
+  label?: string
+  className?: string
+  title?: string
 }) {
+  if (kind === 'run') {
+    const tone = runStatusTone(status)
+    const text = label ?? runStatusLabel(status)
+    if (!isRunStatusException(status)) {
+      return (
+        <span
+          className={clsx('inline-flex items-center text-type-meta font-medium text-ink-500', className)}
+          title={title ?? (status && status !== text ? status : undefined)}
+          data-status-tone={tone}
+        >
+          {text}
+        </span>
+      )
+    }
+    return (
+      <span
+        className={clsx(
+          'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-type-meta font-semibold',
+          RUN_TONE_CLASS[tone] ?? 'bg-ink-100 text-ink-700',
+          className,
+        )}
+        title={title ?? (status && status !== text ? status : undefined)}
+        data-status-tone={tone}
+      >
+        <span
+          aria-hidden
+          className={clsx('h-1.5 w-1.5 rounded-full bg-current opacity-70', tone === 'running' && 'animate-pulse')}
+        />
+        {text}
+      </span>
+    )
+  }
   const s = status.toLowerCase()
   const tone =
     s.includes('complete') || s.includes('succeed') || s === 'ok' || s === 'ready' || s === 'enabled' || s === 'success' || s === 'accepted'
@@ -211,9 +277,154 @@ export function StatusBadge({
           ? 'bg-amber-100 text-amber-900'
           : 'bg-ink-100 text-ink-700'
   return (
-    <span className={clsx('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-type-meta font-semibold uppercase tracking-wide', tone)}>
+    <span
+      className={clsx('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-type-meta font-semibold', tone, className)}
+      title={title}
+    >
       <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
-      {status}
+      {label ?? sentenceCase(status)}
+    </span>
+  )
+}
+
+/** Run status using the shared vocabulary — `<StatusBadge kind="run" />`. */
+export function RunStatusBadge({
+  status,
+  className,
+  title,
+}: {
+  status: string | null | undefined
+  className?: string
+  title?: string
+}) {
+  return <StatusBadge kind="run" status={String(status ?? '')} className={className} title={title} />
+}
+
+/**
+ * Section heading inside a page / card — sentence case, semibold, muted.
+ * Replaces ad-hoc `text-[11px] uppercase tracking-wide` eyebrow captions.
+ * Same as the `.ide-section-title` CSS class for plain markup.
+ */
+export function SectionLabel({
+  children,
+  as: Tag = 'div',
+  className,
+  actions,
+  title,
+}: {
+  children: React.ReactNode
+  as?: 'div' | 'h2' | 'h3' | 'h4' | 'span'
+  className?: string
+  /** Right-aligned controls on the same row. */
+  actions?: React.ReactNode
+  title?: string
+}) {
+  if (actions) {
+    return (
+      <div className={clsx('flex items-center justify-between gap-2', className)}>
+        <Tag className="ide-section-title" title={title}>
+          {children}
+        </Tag>
+        <div className="flex shrink-0 items-center gap-1.5">{actions}</div>
+      </div>
+    )
+  }
+  return (
+    <Tag className={clsx('ide-section-title', className)} title={title}>
+      {children}
+    </Tag>
+  )
+}
+
+/**
+ * The one card style: white, hairline border, subtle shadow, 8px radius,
+ * 12/14px padding (`.ui-card`). `padding="none"` for tables / lists that
+ * draw their own row padding; `title` renders a SectionLabel header.
+ */
+export function Card({
+  children,
+  title,
+  actions,
+  padding = 'md',
+  className,
+  as: Tag = 'section',
+  ...rest
+}: {
+  children?: React.ReactNode
+  title?: React.ReactNode
+  actions?: React.ReactNode
+  padding?: 'none' | 'sm' | 'md'
+  className?: string
+  as?: 'section' | 'div' | 'article'
+} & Omit<React.HTMLAttributes<HTMLElement>, 'title'>) {
+  return (
+    <Tag
+      className={clsx(
+        'ui-card',
+        padding === 'none' && 'ui-card-flush',
+        padding === 'sm' && 'ui-card-sm',
+        className,
+      )}
+      {...rest}
+    >
+      {title || actions ? (
+        <SectionLabel as="h3" actions={actions} className={padding === 'none' ? 'px-3.5 pt-3' : 'mb-2'}>
+          {title}
+        </SectionLabel>
+      ) : null}
+      {children}
+    </Tag>
+  )
+}
+
+/**
+ * Short id (8-char mono by default) with a copy button that appears on hover /
+ * focus. The full id is in the tooltip and is what gets copied.
+ */
+export function ShortId({
+  id,
+  length = 8,
+  className,
+  copy = true,
+  label,
+}: {
+  id: string | null | undefined
+  length?: number
+  className?: string
+  /** false → just the mono text (still has the full-id tooltip). */
+  copy?: boolean
+  /** Accessible name for the copy button, e.g. "run id". */
+  label?: string
+}) {
+  const [copied, setCopied] = React.useState(false)
+  const full = String(id ?? '').trim()
+  if (!full) return <span className={clsx('text-ink-400', className)}>—</span>
+  return (
+    <span className={clsx('group/shortid inline-flex items-center gap-0.5 align-middle', className)}>
+      <code className="font-mono text-[11px] text-ink-700" title={full}>
+        {shortId(full, length)}
+      </code>
+      {copy ? (
+        <button
+          type="button"
+          className={clsx(
+            'inline-flex h-4 w-4 items-center justify-center rounded text-ink-400 opacity-0 transition hover:text-ink-800 focus:opacity-100 group-hover/shortid:opacity-100',
+            copied && 'text-emerald-600 opacity-100',
+          )}
+          title={copied ? 'Copied' : `Copy ${full}`}
+          aria-label={`Copy ${label ?? 'id'}`}
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            void navigator.clipboard?.writeText(full).then(() => {
+              setCopied(true)
+              window.setTimeout(() => setCopied(false), 1200)
+            })
+          }}
+        >
+          {copied ? <CheckCircle2 className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+        </button>
+      ) : null}
     </span>
   )
 }

@@ -377,3 +377,16 @@ def register_all_tools(register: Callable) -> None:
     register("upload_dataset_file", UPLOAD_DATASET_FILE_DESCRIPTION, UPLOAD_DATASET_FILE_SCHEMA, upload_dataset_file_handler)
     register("list_workers", LIST_WORKERS_DESCRIPTION, LIST_WORKERS_SCHEMA, list_workers_handler)
     register("list_jobs", LIST_JOBS_DESCRIPTION, LIST_JOBS_SCHEMA, list_jobs_handler)
+
+    # Human approval gates (hitl_approve) — approve needs GRAPHYN_MCP_HUMAN_APPROVAL=1.
+    from app.mcp.handlers.gates import (
+        DECIDE_GATE_DESCRIPTION,
+        DECIDE_GATE_SCHEMA,
+        LIST_PENDING_GATES_DESCRIPTION,
+        LIST_PENDING_GATES_SCHEMA,
+        decide_gate_handler,
+        list_pending_gates_handler,
+    )
+
+    register("list_pending_gates", LIST_PENDING_GATES_DESCRIPTION, LIST_PENDING_GATES_SCHEMA, list_pending_gates_handler)
+    register("decide_gate", DECIDE_GATE_DESCRIPTION, DECIDE_GATE_SCHEMA, decide_gate_handler)

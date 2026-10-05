@@ -1,15 +1,23 @@
 import React from 'react'
 import { Database as EmptyDatabase, FolderOpen as EmptyFolderOpen, Tags as EmptyTags, TriangleAlert as EmptyTriangleAlert } from 'lucide-react'
-import { ArrowDown, ArrowUp, FileAudio, Play, RefreshCw, Search, Upload, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Check, Download, File as FileGeneric, FileAudio, FileImage, FileJson, FileSpreadsheet, FileText, HelpCircle, Lock, Play, RefreshCw, Search, Upload, X } from 'lucide-react'
 import {
   apiFetch,
   apiJson,
   apiUrl,
   getApiToken,
-  parseError,
 } from '../../api/client'
 import { unwrapList } from '../../api/unwrapList'
 import { normalizeDatasetRows } from './datasetRows'
+import { mostUsedInputLabel, usedInputLabels } from './datasetUsage'
+import { UploadPanel } from './UploadPanel'
+import {
+  DEFAULT_UPLOAD_LIMITS,
+  downloadZip,
+  isSnapshotProject,
+  zipPath,
+  type DataCapabilities,
+} from './dataApi'
 import { useAppStore } from '../../store/appStore'
 import {
   ConfirmButton,
@@ -20,7 +28,7 @@ import {
   LoadingBlock,
   SegmentedTabs,
 } from '../../components/ui'
-import { MasterDetail, WorkbenchPage } from '../../layout'
+import { MasterDetail, MasterDetailToggle, WorkbenchPage } from '../../layout'
 import { FileViewer } from '../../components/FileViewer'
 import clsx from 'clsx'
 import {
@@ -40,7 +48,10 @@ interface OutputProject {
 }
 interface InputLabel {
   label: string
+  /** Every (non-hidden) file, any type. */
   file_count: number
+  /** Audio subset of file_count. */
+  audio_count?: number
   /** false when label resolves outside datasets/input (external symlink). */
   accessible?: boolean
 }
@@ -53,9 +64,52 @@ const LIST_CAP = 200
 function sanitizePathSeg(value: string | undefined | null): string | undefined {
   const v = (value || '').trim()
   if (!v) return undefined
+  // Frozen input labels are addressed as `_inputs/<label>` (one slash, allowed).
+  if (isSnapshotProject(v) && !v.includes('\\') && !v.includes('..')) return v
   // Reject path-like hash/state — never send nested segments to /data/outputs/{project}/{version}.
   if (v.includes('/') || v.includes('\\')) return undefined
   return v
+}
+
+/** `/data/outputs/<project>/<version>`; `_inputs/<label>` keeps its slash (each segment encoded). */
+function outputVersionPath(project: string, version: string): string {
+  return `/data/outputs/${project.split('/').map(encodeURIComponent).join('/')}/${encodeURIComponent(version)}`
+}
+
+function rowKindIcon(kind: unknown) {
+  switch (kind) {
+    case 'table':
+      return FileSpreadsheet
+    case 'json':
+      return FileJson
+    case 'text':
+    case 'pdf':
+      return FileText
+    case 'image':
+      return FileImage
+    case 'audio':
+      return FileAudio
+    default:
+      return FileGeneric
+  }
+}
+
+interface InputStats {
+  label: string
+  file_count: number
+  total_bytes: number
+  by_kind: Record<string, number>
+  classes: Array<{ name: string; file_count: number; audio_count: number; bytes: number }>
+  audio: {
+    count: number
+    probed?: number
+    sampled?: boolean
+    unreadable?: number
+    sample_rates?: Record<string, number>
+    channels?: Record<string, number>
+    duration_s?: { min: number; max: number; mean: number }
+    estimated_total_duration_s?: number
+  }
 }
 
 function parseDataLocation(): {
@@ -214,13 +268,6 @@ export default function DataView() {
   const [previewFile, setPreviewFile] = React.useState<{ path: string; kind: 'files' | 'input-files' } | null>(
     null,
   )
-  const [storageHintDismissed, setStorageHintDismissed] = React.useState(() => {
-    try {
-      return localStorage.getItem('graphyn.datasets.storageHint') === '1'
-    } catch {
-      return false
-    }
-  })
 
   // Layout before path-sync effect: reset selection when workspace project is closed.
   React.useLayoutEffect(() => {
@@ -250,7 +297,33 @@ export default function DataView() {
   const [urls, setUrls] = React.useState('')
   const [ingestLabel, setIngestLabel] = React.useState('uploads')
   const [hfRepo, setHfRepo] = React.useState('')
+  const [hfSplit, setHfSplit] = React.useState('train')
+  const [hfAudioCol, setHfAudioCol] = React.useState('audio')
+  const [hfLabelCol, setHfLabelCol] = React.useState('label')
+  const [hfLabelOverride, setHfLabelOverride] = React.useState('')
+  const [hfMaxRows, setHfMaxRows] = React.useState(10000)
+  const [hfRevision, setHfRevision] = React.useState('')
   const [ingestLog, setIngestLog] = React.useState<string[]>([])
+
+  // Upload limits + which import sources the API host can run (GET /data/capabilities).
+  const [caps, setCaps] = React.useState<DataCapabilities | null>(null)
+  React.useEffect(() => {
+    let cancelled = false
+    apiJson<DataCapabilities>('/data/capabilities')
+      .then((c) => {
+        if (!cancelled) setCaps(c)
+      })
+      .catch(() => {
+        if (!cancelled) setCaps(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const [showUpload, setShowUpload] = React.useState(false)
+  const [inputStats, setInputStats] = React.useState<InputStats | null>(null)
+  const [inputStatsOpen, setInputStatsOpen] = React.useState(false)
+  const [mergeOverwrite, setMergeOverwrite] = React.useState(false)
 
   // merge
   const [mergeSources, setMergeSources] = React.useState('')
@@ -406,10 +479,10 @@ export default function DataView() {
         try {
           const [data, st] = await Promise.all([
             apiJson<unknown>(
-              `/data/outputs/${encodeURIComponent(project)}/${encodeURIComponent(version)}`,
+              outputVersionPath(project, version),
             ),
             apiJson(
-              `/data/outputs/${encodeURIComponent(project)}/${encodeURIComponent(version)}/stats`,
+              `${outputVersionPath(project, version)}/stats`,
             ).catch(() => null),
           ])
           if (cancelled) return
@@ -485,43 +558,68 @@ export default function DataView() {
     setPreviewFile({ path, kind })
   }
 
+  /** Open the upload panel (multi-file / folder / archive, any allowlisted type). */
   const upload = () => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = '.wav,.mp3,.m4a,.ogg,.webm,.flac'
-    input.onchange = async () => {
-      const file = input.files?.[0]
-      if (!file) return
-      const fd = new FormData()
-      fd.append('file', file)
-      try {
-        // Large audio uploads easily exceed the 30 s default timeout.
-        const res = await apiFetch('/data/inputs/upload', {
-          method: 'POST',
-          body: fd,
-          timeoutMs: 60 * 60 * 1000,
-        })
-        if (!res.ok) {
-          const apiErr = await parseError(res, '/data/inputs/upload')
-          throw new Error(
-            res.status === 413
-              ? `Upload failed: file too large for the server/proxy limit (${apiErr.message})`
-              : `Upload failed: ${apiErr.message}`,
-          )
-        }
-        const body = await res.json()
-        pushToast(`Uploaded ${body.filename ?? file.name}`, 'success')
-        await loadSources()
-        setUxMode('manage')
-        setManageTab('upload')
-        setMode('inputs')
-        setLabel('uploads')
-      } catch (err) {
-        pushToast(err instanceof Error ? err.message : String(err), 'error')
-      }
-    }
-    input.click()
+    setShowUpload(true)
+    setUxMode('manage')
+    setManageTab('upload')
+    setMode('inputs')
   }
+
+  const onUploadDone = async (touched: string[]) => {
+    await loadSources()
+    if (touched.length) setLabel(touched[0])
+    setDetailEpoch((n) => n + 1)
+  }
+
+  const freezeInput = async () => {
+    if (!label) return
+    try {
+      const snap = await apiJson<{ project: string; version: string; file_count: number }>(
+        `/data/inputs/${encodeURIComponent(label)}/snapshot`,
+        { method: 'POST', timeoutMs: 30 * 60 * 1000 },
+      )
+      pushToast(`Frozen “${label}” as ${snap.project}/${snap.version} (${snap.file_count} files) — see Outputs`, 'success')
+      await loadSources()
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  const downloadInputZip = async () => {
+    if (!label) return
+    try {
+      await downloadZip(zipPath({ label }), `${label}.zip`)
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  const downloadOutputZip = async () => {
+    if (!project || !version) return
+    try {
+      await downloadZip(zipPath({ project, version }), `${project.replace('/', '_')}_${version}.zip`)
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  // Input stats (file types, classes, audio summary) — loaded with the label.
+  React.useEffect(() => {
+    setInputStats(null)
+    if (mode !== 'inputs' || !label) return
+    let cancelled = false
+    apiJson<InputStats>(`/data/inputs/${encodeURIComponent(label)}/stats`, { timeoutMs: 120000 })
+      .then((st) => {
+        if (!cancelled) setInputStats(st)
+      })
+      .catch(() => {
+        if (!cancelled) setInputStats(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [mode, label, detailEpoch])
 
   /** Result of one ingest job's SSE stream — the job "completing" only means
    * it finished running, not that every URL/file succeeded. */
@@ -644,10 +742,14 @@ export default function DataView() {
       const res = await apiJson<{ job_id: string }>('/ingest/huggingface', {
         method: 'POST',
         body: JSON.stringify({
-          repo_id: hfRepo,
-          split: 'train',
-          audio_col: 'audio',
-          label_override: ingestLabel.trim() || undefined,
+          repo_id: hfRepo.trim(),
+          split: hfSplit.trim() || 'train',
+          audio_col: hfAudioCol.trim() || 'audio',
+          // Only when set: the label column (ClassLabel names) decides otherwise.
+          label_col: hfLabelCol.trim() || undefined,
+          label_override: hfLabelOverride.trim() || undefined,
+          max_rows: hfMaxRows,
+          revision: hfRevision.trim() || undefined,
         }),
       })
       setIngestLog([`job ${res.job_id} started`])
@@ -677,7 +779,7 @@ export default function DataView() {
     if (!project || !version) return
     try {
       await apiJson(
-        `/data/outputs/${encodeURIComponent(project)}/${encodeURIComponent(version)}`,
+        outputVersionPath(project, version),
         { method: 'DELETE' },
       )
       pushToast(`Deleted ${project}/${version}`, 'success')
@@ -706,6 +808,7 @@ export default function DataView() {
           sources,
           target_project: mergeTargetProject,
           target_version: mergeTargetVersion,
+          overwrite: mergeOverwrite,
         }),
       })
       const mergeResult = formatMergeToast(res)
@@ -742,19 +845,53 @@ export default function DataView() {
 
   const versions = outputs.find((o) => o.project === project)?.versions ?? []
 
-  /* Workspace Datasets used to promise "Inputs/Outputs linked here" while
-     listing every shared input label. Now: when the workspace has pinned
-     inputs (Home → Linked inputs) only those are listed, with a toggle for the
-     full shared catalog; with none pinned, all are shown with a note. */
+  /* Compare two output versions of the selected workspace (GET /projects/{p}/diff:
+     added / removed / relabelled samples by labels.csv). Moved here from the old
+     Home "Spec & metadata → Diff" tab — it belongs next to the versions. */
+  const [compareOpen, setCompareOpen] = React.useState(false)
+  const [cmpA, setCmpA] = React.useState('')
+  const [cmpB, setCmpB] = React.useState('')
+  const [cmpResult, setCmpResult] = React.useState<unknown>(null)
+  React.useEffect(() => {
+    setCompareOpen(false)
+    setCmpResult(null)
+  }, [project])
+  const openCompare = () => {
+    const others = versions.filter((v) => v !== version)
+    setCmpA(version || versions[0] || '')
+    setCmpB(others[0] || versions[1] || '')
+    setCmpResult(null)
+    setCompareOpen(true)
+  }
+  const runCompare = async () => {
+    if (!project || !cmpA || !cmpB || cmpA === cmpB) return
+    try {
+      setCmpResult(
+        await apiJson(`/projects/${encodeURIComponent(project)}/diff`, {
+          query: { version_a: cmpA, version_b: cmpB },
+        }),
+      )
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  /* Workspace Datasets lists the datasets this workspace actually uses first:
+     labels pinned on Home plus the dataset folders its runs read (run rows'
+     `summary.dataset` paths). Everything else is one toggle away under
+     "All shared datasets". With nothing used yet, all labels are listed. */
   const onWorkspaceDatasets =
     typeof window !== 'undefined' &&
     window.location.pathname.startsWith('/workspaces/') &&
     window.location.pathname.includes('/datasets')
+  /** Labels pinned to the active workspace (null = unknown / no workspace). */
   const [linkedInputs, setLinkedInputs] = React.useState<string[] | null>(null)
+  const [workspaceRuns, setWorkspaceRuns] = React.useState<unknown[]>([])
   const [showAllInputs, setShowAllInputs] = React.useState(false)
   React.useEffect(() => {
-    if (!onWorkspaceDatasets || !activeProject) {
+    if (!activeProject) {
       setLinkedInputs(null)
+      setWorkspaceRuns([])
       return
     }
     let cancelled = false
@@ -765,23 +902,59 @@ export default function DataView() {
       .catch(() => {
         if (!cancelled) setLinkedInputs(null)
       })
+    if (onWorkspaceDatasets) {
+      apiJson<unknown>('/runs', { query: { project: activeProject, limit: 50, offset: 0 } })
+        .then((d) => {
+          if (!cancelled) setWorkspaceRuns(unwrapList<unknown>(d))
+        })
+        .catch(() => {
+          if (!cancelled) setWorkspaceRuns([])
+        })
+    }
     return () => {
       cancelled = true
     }
   }, [onWorkspaceDatasets, activeProject])
-  const scopeToLinked = Boolean(linkedInputs && linkedInputs.length > 0 && !showAllInputs)
+  /** Pin / unpin a label for the active workspace (was: go to Home and pin there). */
+  const toggleLinkedInput = async (target: string, use: boolean) => {
+    if (!activeProject || !target) return
+    try {
+      const next = await apiJson<{ inputs?: string[] }>(`/projects/${encodeURIComponent(activeProject)}/links`, {
+        method: use ? 'POST' : 'DELETE',
+        body: JSON.stringify({ inputs: [target] }),
+      })
+      setLinkedInputs(Array.isArray(next?.inputs) ? next.inputs.map(String) : [])
+      pushToast(use ? `“${target}” is now used by ${activeProject}` : `Removed “${target}” from ${activeProject}`, 'success')
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+  const usedLabels = React.useMemo(
+    () =>
+      onWorkspaceDatasets && activeProject
+        ? usedInputLabels(
+            inputs.map((i) => i.label),
+            workspaceRuns,
+            linkedInputs ?? [],
+          )
+        : [],
+    [onWorkspaceDatasets, activeProject, inputs, workspaceRuns, linkedInputs],
+  )
+  const scopeToLinked = usedLabels.length > 0 && !showAllInputs
   const visibleInputs = React.useMemo(() => {
-    const base = scopeToLinked ? inputs.filter((i) => linkedInputs?.includes(i.label)) : inputs
+    const base = scopeToLinked ? inputs.filter((i) => usedLabels.includes(i.label)) : inputs
     return [...base].sort((a, b) => naturalCompare(a.label, b.label))
-  }, [inputs, linkedInputs, scopeToLinked])
+  }, [inputs, usedLabels, scopeToLinked])
   React.useEffect(() => {
-    // Keep the selected label inside the visible set when scoping to linked inputs.
+    // Keep the selected label inside the visible set when scoping to used datasets.
     if (!scopeToLinked || visibleInputs.length === 0) return
     if (!visibleInputs.some((i) => i.label === label)) {
-      const next = visibleInputs.find((i) => i.accessible !== false) ?? visibleInputs[0]
+      const accessible = visibleInputs.filter((i) => i.accessible !== false)
+      const preferred = mostUsedInputLabel(accessible.map((i) => i.label), workspaceRuns)
+      const next = accessible.find((i) => i.label === preferred) ?? accessible[0] ?? visibleInputs[0]
       setLabel(next.label)
     }
-  }, [scopeToLinked, visibleInputs, label])
+  }, [scopeToLinked, visibleInputs, label, workspaceRuns])
   const filteredInputs = React.useMemo(
     () => visibleInputs.filter((i) => matchesQuery(`${i.label} ${i.file_count}`, listFilter)),
     [visibleInputs, listFilter],
@@ -874,6 +1047,24 @@ export default function DataView() {
     else setMode('merge')
   }
 
+  /** Single tab row value: Import / Merge forms, else the browsed side. */
+  const flatTab: 'inputs' | 'outputs' | 'ingest' | 'merge' =
+    uxMode === 'manage' && manageTab !== 'upload' ? manageTab : mode === 'outputs' ? 'outputs' : 'inputs'
+  const pickFlatTab = (tab: 'inputs' | 'outputs' | 'ingest' | 'merge') => {
+    if (tab === 'ingest' || tab === 'merge') {
+      setManage(tab)
+      return
+    }
+    setError(null)
+    setErrorDetail(null)
+    setPathRecovery(false)
+    setListFilter('')
+    // Leaving Import / Merge returns to browsing; an open Manage (upload) stays.
+    if (uxMode === 'manage' && manageTab !== 'upload') setUxMode('browse')
+    setManageTab('upload')
+    setMode(tab)
+  }
+
   const showFileBrowser = uxMode === 'browse' || (uxMode === 'manage' && manageTab === 'upload')
   const showEmptyOutputs = mode === 'outputs' && (outputs.length === 0 || pathRecovery)
   const showEmptyInputs = mode === 'inputs' && inputs.length === 0
@@ -918,8 +1109,9 @@ export default function DataView() {
 
   const detailToolbarOutputs =
     !showEmptyOutputs && mode === 'outputs' ? (
+      <>
       <div className="flex flex-wrap items-center gap-2">
-        {project ? (
+        {project && !isSnapshotProject(project) ? (
           activeProject ? (
             <>
               <button
@@ -929,13 +1121,6 @@ export default function DataView() {
                 title="Open Editor with current workspace"
               >
                 Open Editor
-              </button>
-              <button
-                type="button"
-                className="btn-quiet text-[12px]"
-                onClick={() => openProjects({ project: activeProject })}
-              >
-                Open Home
               </button>
             </>
           ) : (
@@ -948,6 +1133,16 @@ export default function DataView() {
               Use in workspace
             </button>
           )
+        ) : null}
+        {project && version ? (
+          <button
+            type="button"
+            className="btn-secondary text-[12px]"
+            title="Download this version (all files + manifest.json with sha256) as a zip"
+            onClick={() => void downloadOutputZip()}
+          >
+            <Download className="h-3.5 w-3.5" /> Download zip
+          </button>
         ) : null}
         {uxMode === 'manage' && project && version ? (
           <ConfirmButton
@@ -969,8 +1164,76 @@ export default function DataView() {
           >
             Manage…
           </button>
+        ) : uxMode === 'manage' ? (
+          <button type="button" className="btn-quiet text-[12px]" onClick={() => switchUxMode('browse')}>
+            Done
+          </button>
+        ) : null}
+        {project && versions.length >= 2 ? (
+          <button
+            type="button"
+            className="btn-secondary text-[12px]"
+            aria-expanded={compareOpen}
+            onClick={() => (compareOpen ? setCompareOpen(false) : openCompare())}
+          >
+            Compare versions
+          </button>
         ) : null}
       </div>
+      {compareOpen && project && versions.length >= 2 ? (
+        <div className="mt-2 space-y-2 rounded-xl border border-ink-200/80 bg-ink-50/50 p-3">
+          <div className="flex flex-wrap items-center gap-2 text-[12px]">
+            <select
+              aria-label="First version"
+              value={cmpA}
+              onChange={(e) => {
+                setCmpA(e.target.value)
+                setCmpResult(null)
+              }}
+              className="rounded-md border border-ink-200 bg-white px-2 py-1"
+            >
+              {versions.map((v) => (
+                <option key={`a-${v}`} value={v}>
+                  {v}
+                </option>
+              ))}
+            </select>
+            <span className="text-ink-400">vs</span>
+            <select
+              aria-label="Second version"
+              value={cmpB}
+              onChange={(e) => {
+                setCmpB(e.target.value)
+                setCmpResult(null)
+              }}
+              className="rounded-md border border-ink-200 bg-white px-2 py-1"
+            >
+              {versions.map((v) => (
+                <option key={`b-${v}`} value={v}>
+                  {v}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn-secondary text-[12px]"
+              disabled={!cmpA || !cmpB || cmpA === cmpB}
+              title={cmpA === cmpB ? 'Pick two different versions' : undefined}
+              onClick={() => void runCompare()}
+            >
+              Compare
+            </button>
+          </div>
+          {cmpResult != null ? (
+            <KeyValue data={cmpResult} />
+          ) : (
+            <p className="text-[11px] text-ink-500">
+              Counts samples added, removed and relabelled between the two versions (from each version’s labels.csv).
+            </p>
+          )}
+        </div>
+      ) : null}
+      </>
     ) : null
 
   const detailToolbarInputs =
@@ -984,18 +1247,27 @@ export default function DataView() {
             onConfirm={() => void deleteInput()}
           />
         ) : null}
-        {activeProject ? (
-          <button
-            type="button"
-            className="btn-primary"
-            title={`Open ${activeProject} Home, where “${label || 'an input label'}” can be pinned under Linked inputs`}
-            onClick={() => {
-              useAppStore.getState().openProject(activeProject)
-            }}
-          >
-            Open Home
-          </button>
-        ) : label ? (
+        {activeProject && label ? (
+          linkedInputs?.includes(label) ? (
+            <button
+              type="button"
+              className="btn-secondary"
+              title={`“${label}” is in ${activeProject}’s datasets in use (Home) — click to remove it`}
+              onClick={() => void toggleLinkedInput(label, false)}
+            >
+              <Check className="h-3.5 w-3.5" /> Used by {activeProject}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn-primary"
+              title={`Add “${label}” to ${activeProject}’s datasets in use, so the Editor offers it first`}
+              onClick={() => void toggleLinkedInput(label, true)}
+            >
+              Use in {activeProject}
+            </button>
+          )
+        ) : label && !activeProject ? (
           <button
             type="button"
             className="btn-primary"
@@ -1008,10 +1280,35 @@ export default function DataView() {
             Pick a workspace…
           </button>
         ) : null}
+        {label ? (
+          <>
+            <button
+              type="button"
+              className="btn-secondary text-[12px]"
+              title="Copy this label into an immutable version (Outputs → _inputs/…) with a sha256 manifest, so runs can cite exactly this data"
+              onClick={() => void freezeInput()}
+            >
+              <Lock className="h-3.5 w-3.5" /> Freeze as version
+            </button>
+            <button
+              type="button"
+              className="btn-secondary text-[12px]"
+              title="Download every file of this label plus a manifest.json (sha256) as a zip"
+              onClick={() => void downloadInputZip()}
+            >
+              <Download className="h-3.5 w-3.5" /> Download zip
+            </button>
+          </>
+        ) : null}
         {uxMode === 'manage' ? (
-          <button type="button" className="btn-secondary" onClick={upload}>
-            <Upload className="h-3.5 w-3.5" /> Upload
-          </button>
+          <>
+            <button type="button" className="btn-secondary" onClick={upload}>
+              <Upload className="h-3.5 w-3.5" /> Upload
+            </button>
+            <button type="button" className="btn-quiet text-[12px]" onClick={() => switchUxMode('browse')}>
+              Done
+            </button>
+          </>
         ) : (
           <button
             type="button"
@@ -1040,24 +1337,40 @@ export default function DataView() {
       title={workspaceDatasetsPath ? 'Workspace datasets' : 'Datasets'}
       description={
         workspaceDatasetsPath
-          ? linkedInputs && linkedInputs.length > 0
-            ? `Pinned input labels for ${activeProject ?? 'this workspace'} plus shared outputs.`
-            : 'Shared Inputs/Outputs scoped to this workspace — pin labels on Home to narrow the list.'
-          : 'Shared Inputs and Outputs for pipelines (not per-run files under Runs).'
+          ? usedLabels.length > 0
+            ? `Datasets ${activeProject ?? 'this workspace'} uses, plus shared outputs.`
+            : 'Shared datasets — none used by this workspace yet.'
+          : 'Shared inputs and outputs for pipelines.'
       }
       toolbar={
+        /* One level of tabs: Inputs · Outputs · Import · Merge. Upload / delete
+           live behind the detail toolbar's "Manage…" toggle. */
         <SegmentedTabs
-          value={uxMode}
+          value={flatTab}
           options={[
-            { id: 'browse', label: 'Browse' },
-            { id: 'manage', label: 'Manage' },
+            { id: 'inputs', label: 'Inputs' },
+            { id: 'outputs', label: 'Outputs' },
+            { id: 'ingest', label: 'Import' },
+            { id: 'merge', label: 'Merge' },
           ]}
-          onChange={switchUxMode}
-          aria-label="Data mode"
+          onChange={pickFlatTab}
+          aria-label="Datasets"
         />
       }
       actions={
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className="inline-flex cursor-help items-center text-ink-400 hover:text-ink-700"
+            role="img"
+            aria-label="About datasets"
+            title={
+              'Datasets are shared folders: Inputs are what pipelines read, Outputs are dataset versions pipelines write.\n' +
+              'One run’s downloadable files live under Runs → Run outputs; Lineage is the audit trail.\n' +
+              'Labeling: use output versions plus the datasets chosen on Home (no full labeling studio).'
+            }
+          >
+            <HelpCircle className="h-4 w-4" />
+          </span>
           {workspaceDatasetsPath ? (
             <button
               type="button"
@@ -1081,44 +1394,6 @@ export default function DataView() {
       }
       bodyClassName="flex h-full min-h-0 flex-col overflow-hidden !px-0 !py-0"
     >
-      {!storageHintDismissed ? (
-        <div
-          role="note"
-          className="flex shrink-0 flex-wrap items-start gap-2 border-b border-ink-100 bg-ink-50/80 px-4 py-2 text-[12px] leading-snug text-ink-700 sm:px-6"
-        >
-          <p className="min-w-0 flex-1">
-            <strong className="font-medium text-ink-900">Storage:</strong> Datasets = shared folders · Runs →
-            Run outputs = one run’s downloadable files · Lineage = audit trail.{' '}
-            <strong className="font-medium text-ink-900">Label lite:</strong> use Output versions + Home pins
-            (full labeling studio not available).{' '}
-            <button
-              type="button"
-              className="font-medium text-accent-800 hover:underline"
-              onClick={() => {
-                if (activeProject) openProjects({ project: activeProject })
-                else openProjects()
-              }}
-            >
-              Open Home
-            </button>
-          </p>
-          <button
-            type="button"
-            className="btn-quiet shrink-0"
-            aria-label="Dismiss note"
-            onClick={() => {
-              try {
-                localStorage.setItem('graphyn.datasets.storageHint', '1')
-              } catch {
-                /* ignore */
-              }
-              setStorageHintDismissed(true)
-            }}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ) : null}
       {showBrowseError ? (
         <div className="shrink-0 px-4 pt-3 sm:px-6">
           <ErrorBanner
@@ -1156,42 +1431,20 @@ export default function DataView() {
       ) : (
         <MasterDetail
           listLabel="datasets"
+          storageKey="graphyn.datasets"
           collapsible
           className="min-h-0 flex-1"
           masterClassName="!pr-8"
           master={
             <div className="space-y-3">
-              {uxMode === 'browse' ? (
-                <>
-                  <SegmentedTabs
-                    value={mode === 'inputs' || mode === 'outputs' ? mode : 'inputs'}
-                    options={[
-                      { id: 'inputs', label: 'Inputs' },
-                      { id: 'outputs', label: 'Outputs' },
-                    ]}
-                    onChange={(m) => {
-                      setError(null)
-                      setErrorDetail(null)
-                      setPathRecovery(false)
-                      setListFilter('')
-                      setMode(m)
-                    }}
-                    aria-label="Browse datasets"
-                  />
-                  <p className="text-[11px] text-ink-400">Read-only — open / play files</p>
-                </>
-              ) : (
-                <SegmentedTabs
-                  value={manageTab}
-                  options={[
-                    { id: 'upload', label: 'Upload' },
-                    { id: 'ingest', label: 'Ingest' },
-                    { id: 'merge', label: 'Merge' },
-                  ]}
-                  onChange={(tab) => setManage(tab)}
-                  aria-label="Manage datasets"
-                />
-              )}
+              {uxMode === 'manage' && manageTab === 'upload' ? (
+                <p className="rounded-md bg-amber-50 px-2 py-1 text-[11px] text-amber-900">
+                  Managing — upload or delete files.{' '}
+                  <button type="button" className="font-medium underline" onClick={() => switchUxMode('browse')}>
+                    Done
+                  </button>
+                </p>
+              ) : null}
 
               {showSourcePicker && mode === 'outputs' && !showEmptyOutputs ? (
                 <div className="space-y-2">
@@ -1259,27 +1512,23 @@ export default function DataView() {
                     {!label ? <option value="">Select a label…</option> : null}
                     {filteredInputs.map((i) => (
                       <option key={i.label} value={i.label}>
-                        {i.label} ({i.file_count})
+                        {i.label} ({i.file_count}{typeof i.audio_count === 'number' && i.audio_count !== i.file_count ? `, ${i.audio_count} audio` : ''})
                         {i.accessible === false ? ' — external (blocked)' : ''}
                       </option>
                     ))}
                   </select>
-                  {linkedInputs && linkedInputs.length > 0 ? (
-                    <label
-                      className="inline-flex items-center gap-1.5 text-[12px] text-ink-600"
-                      title={`${linkedInputs.length} label${linkedInputs.length === 1 ? '' : 's'} pinned to ${activeProject}`}
+                  {usedLabels.length > 0 ? (
+                    <button
+                      type="button"
+                      className="text-[12px] text-ink-500 hover:text-accent-800 hover:underline"
+                      aria-pressed={showAllInputs}
+                      title={`${usedLabels.length} dataset${usedLabels.length === 1 ? '' : 's'} used by ${activeProject} (chosen on Home or read by its runs)`}
+                      onClick={() => setShowAllInputs((v) => !v)}
                     >
-                      <input
-                        type="checkbox"
-                        checked={showAllInputs}
-                        onChange={(e) => setShowAllInputs(e.target.checked)}
-                      />
-                      Show all shared inputs
-                    </label>
-                  ) : linkedInputs && linkedInputs.length === 0 ? (
-                    <span className="text-[12px] text-ink-400">
-                      None pinned to {activeProject} — showing all shared input labels.
-                    </span>
+                      {showAllInputs
+                        ? `Only datasets ${activeProject} uses (${usedLabels.length})`
+                        : `All shared datasets (${inputs.length})`}
+                    </button>
                   ) : null}
                   <ul className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200/70">
                     {filteredInputs.slice(0, 80).map((i) => (
@@ -1294,7 +1543,12 @@ export default function DataView() {
                         >
                           <EmptyTags className="h-3.5 w-3.5 shrink-0 text-ink-400" />
                           <span className="min-w-0 flex-1 truncate text-[12px] text-ink-800">{i.label}</span>
-                          <span className="shrink-0 text-[11px] tabular-nums text-ink-400">{i.file_count}</span>
+                          <span
+                            className="shrink-0 text-[11px] tabular-nums text-ink-400"
+                            title={`${i.file_count} files${typeof i.audio_count === 'number' ? ` · ${i.audio_count} audio` : ''}`}
+                          >
+                            {i.file_count}
+                          </span>
                         </button>
                       </li>
                     ))}
@@ -1305,6 +1559,7 @@ export default function DataView() {
           }
           detail={
             <div className="space-y-3">
+              <MasterDetailToggle />
               {uxMode === 'manage' && manageTab === 'ingest' ? (
                 <div className="space-y-3">
                   <section className="surface-card space-y-2 p-3">
@@ -1325,18 +1580,82 @@ export default function DataView() {
                       Start URL ingest
                     </button>
                   </section>
-                  <section className="surface-card space-y-2 p-3">
-                    <h3 className="text-sm font-semibold">HuggingFace ingest</h3>
-                    <input
-                      value={hfRepo}
-                      onChange={(e) => setHfRepo(e.target.value)}
-                      placeholder="org/dataset"
-                      className="field-control w-full text-sm"
-                    />
-                    <button type="button" className="btn-secondary" onClick={() => void startHfIngest()}>
-                      Start HF ingest
-                    </button>
-                  </section>
+                  {caps && !caps.ingest.huggingface ? (
+                    <section className="surface-card space-y-1 p-3">
+                      <h3 className="text-sm font-semibold">HuggingFace ingest</h3>
+                      <p className="text-[12px] text-ink-500" title={caps.ingest.huggingface_reason ?? undefined}>
+                        Not available on this server — the HuggingFace “datasets” package is not installed on the API
+                        host. Ask an admin to install the <code>hf</code> extra, or upload a zip instead.
+                      </p>
+                    </section>
+                  ) : (
+                    <section className="surface-card space-y-2 p-3">
+                      <h3 className="text-sm font-semibold">HuggingFace ingest</h3>
+                      <input
+                        value={hfRepo}
+                        onChange={(e) => setHfRepo(e.target.value)}
+                        placeholder="org/dataset"
+                        aria-label="HuggingFace dataset id"
+                        className="field-control w-full text-sm"
+                      />
+                      <div className="grid grid-cols-2 gap-2 text-[12px] sm:grid-cols-3">
+                        <label className="flex flex-col gap-1">
+                          <span className="text-ink-500">Split</span>
+                          <input value={hfSplit} onChange={(e) => setHfSplit(e.target.value)} className="field-control text-sm" />
+                        </label>
+                        <label className="flex flex-col gap-1">
+                          <span className="text-ink-500">Audio column</span>
+                          <input value={hfAudioCol} onChange={(e) => setHfAudioCol(e.target.value)} className="field-control text-sm" />
+                        </label>
+                        <label className="flex flex-col gap-1">
+                          <span className="text-ink-500">Label column</span>
+                          <input
+                            value={hfLabelCol}
+                            onChange={(e) => setHfLabelCol(e.target.value)}
+                            placeholder="(none)"
+                            className="field-control text-sm"
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1" title="Optional: put every row into this one label instead of using the label column">
+                          <span className="text-ink-500">Single label (optional)</span>
+                          <input
+                            value={hfLabelOverride}
+                            onChange={(e) => setHfLabelOverride(e.target.value)}
+                            placeholder="use label column"
+                            className="field-control text-sm"
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1">
+                          <span className="text-ink-500">Max rows</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={1000000}
+                            value={hfMaxRows}
+                            onChange={(e) => setHfMaxRows(Math.max(1, Number(e.target.value) || 1))}
+                            className="field-control text-sm"
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1" title="Branch, tag or commit; the resolved commit is recorded in the audit log">
+                          <span className="text-ink-500">Revision (optional)</span>
+                          <input
+                            value={hfRevision}
+                            onChange={(e) => setHfRevision(e.target.value)}
+                            placeholder="main"
+                            className="field-control text-sm"
+                          />
+                        </label>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        disabled={!hfRepo.trim()}
+                        onClick={() => void startHfIngest()}
+                      >
+                        Start HF ingest
+                      </button>
+                    </section>
+                  )}
                   <pre className="max-h-48 overflow-auto rounded-xl bg-ink-950 p-3 font-mono text-[11px] text-ink-100">
                     {ingestLog.map((line) => formatExecutionLine(line).text).join('\n') ||
                       'No import progress yet — start an import above and its progress appears here.'}
@@ -1366,6 +1685,13 @@ export default function DataView() {
                     className="field-control w-full text-sm"
                     placeholder="target version"
                   />
+                  <label
+                    className="flex items-center gap-1.5 text-[12px] text-ink-600"
+                    title="Versions are immutable: merging into an existing version is refused unless this is on, and never allowed when runs or packages reference it"
+                  >
+                    <input type="checkbox" checked={mergeOverwrite} onChange={(e) => setMergeOverwrite(e.target.checked)} />
+                    Replace the target version if it already exists
+                  </label>
                   <button type="button" className="btn-primary" onClick={() => void doMerge()}>
                     Merge
                   </button>
@@ -1374,6 +1700,15 @@ export default function DataView() {
                 <>
                   {detailToolbarOutputs}
                   {detailToolbarInputs}
+                  {showUpload ? (
+                    <UploadPanel
+                      labels={inputs.filter((i) => i.accessible !== false).map((i) => i.label)}
+                      initialLabel={label || undefined}
+                      limits={caps?.upload ?? DEFAULT_UPLOAD_LIMITS}
+                      onDone={(touched) => void onUploadDone(touched)}
+                      onClose={() => setShowUpload(false)}
+                    />
+                  ) : null}
                   {mode === 'outputs' && showEmptyOutputs ? (
               <EmptyState
                 compact
@@ -1447,7 +1782,7 @@ export default function DataView() {
                             upload()
                           }}
                         >
-                          Upload a file
+                          Upload files
                         </button>
                       }
                     />
@@ -1501,6 +1836,9 @@ export default function DataView() {
                       ) : null}
 
                       {stats != null && <KeyValue data={stats} />}
+                      {mode === 'inputs' && inputStats && label ? (
+                        <InputStatsCard stats={inputStats} open={inputStatsOpen} onToggle={() => setInputStatsOpen((v) => !v)} />
+                      ) : null}
                       {showBrowseError && filteredRows.length === 0 ? (
             <EmptyState
               compact
@@ -1560,7 +1898,7 @@ export default function DataView() {
                   </button>
                 ) : mode === 'inputs' && label ? (
                   <button type="button" className="btn-primary" onClick={upload}>
-                    Upload a file
+                    Upload files
                   </button>
                 ) : mode === 'outputs' ? (
                   <button type="button" className="btn-primary" onClick={browseTemplatesForDataPrep}>
@@ -1611,7 +1949,7 @@ export default function DataView() {
                       labels used to scroll away with them. `top-0` is safe here
                       because this page's scroll container no longer carries top
                       padding (see the container comment above). */}
-                  <thead className="sticky top-0 z-10 bg-ink-50/95 text-[11px] uppercase text-ink-500 shadow-[inset_0_-1px_0_rgb(0_0_0/0.06)]">
+                  <thead className="sticky top-0 z-10 bg-ink-50/95 text-[12px] text-ink-500 shadow-[inset_0_-1px_0_rgb(0_0_0/0.06)]">
                     <tr>
                       {(
                         [
@@ -1626,12 +1964,13 @@ export default function DataView() {
                             'px-3 py-2 font-medium',
                             align,
                             idx === 0 && 'rounded-tl-2xl',
+                            key === 'modified' && 'hidden sm:table-cell',
                           )}
                         >
                           <button
                             type="button"
                             className={clsx(
-                              'inline-flex items-center gap-1 uppercase hover:text-ink-900',
+                              'inline-flex items-center gap-1 hover:text-ink-900',
                               sortKey === key && 'text-ink-900',
                             )}
                             aria-sort={
@@ -1677,9 +2016,14 @@ export default function DataView() {
                       const kind = mode === 'outputs' ? 'files' : 'input-files'
                       return (
                         <tr key={i} className="group border-b border-ink-50 last:border-b-0 hover:bg-ink-50/60">
-                          <td className="px-3 py-1.5">
+                          {/* w-full + max-w-0: the name cell takes the free width and
+                              truncates instead of widening the table on narrow screens. */}
+                          <td className="w-full max-w-0 px-3 py-1.5">
                             <div className="flex min-w-0 items-center gap-2">
-                              <FileAudio className="h-3.5 w-3.5 shrink-0 text-ink-300" />
+                              {React.createElement(rowKindIcon(r.kind ?? 'audio'), {
+                                className: 'h-3.5 w-3.5 shrink-0 text-ink-300',
+                                'aria-hidden': true,
+                              })}
                               <button
                                 type="button"
                                 className="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-ink-800 hover:text-accent-800"
@@ -1694,7 +2038,7 @@ export default function DataView() {
                             {formatBytes(size)}
                           </td>
                           <td
-                            className="whitespace-nowrap px-3 py-1.5 text-right text-[11px] text-ink-500"
+                            className="hidden whitespace-nowrap px-3 py-1.5 text-right text-[11px] text-ink-500 sm:table-cell"
                             title={modified ? formatLocaleDateTime(modified) : undefined}
                           >
                             {modified ? formatRelativeTime(modified) : '—'}
@@ -1764,5 +2108,66 @@ export default function DataView() {
         </div>
       ) : null}
     </WorkbenchPage>
+  )
+}
+
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds)) return '—'
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 2 : 1)} s`
+  const m = Math.floor(seconds / 60)
+  if (m < 60) return `${m} min ${Math.round(seconds % 60)} s`
+  return `${Math.floor(m / 60)} h ${m % 60} min`
+}
+
+/** Input label summary before training: file types, per-class counts, audio duration / sample rates. */
+function InputStatsCard({ stats, open, onToggle }: { stats: InputStats; open: boolean; onToggle: () => void }) {
+  const kinds = Object.entries(stats.by_kind).sort((a, b) => b[1] - a[1])
+  const a = stats.audio
+  const rates = Object.entries(a.sample_rates ?? {}).sort((x, y) => y[1] - x[1])
+  const classes = stats.classes.filter((c) => c.name !== '(root)' || stats.classes.length === 1)
+  const maxCount = Math.max(1, ...classes.map((c) => c.file_count))
+  return (
+    <section className="surface-card p-3 text-[12px]" aria-label="Dataset statistics">
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+        <span>
+          <span className="font-medium text-ink-800">{stats.file_count}</span> files ·{' '}
+          <span className="font-medium text-ink-800">{formatBytes(stats.total_bytes)}</span>
+        </span>
+        <span className="text-ink-500">{kinds.map(([k, n]) => `${n} ${k}`).join(' · ')}</span>
+        {a.duration_s ? (
+          <span className="text-ink-500" title={a.sampled ? `Estimated from ${a.probed} of ${a.count} audio files` : undefined}>
+            ≈ {formatDuration(a.estimated_total_duration_s ?? 0)} audio · clips {a.duration_s.min}–{a.duration_s.max} s
+          </span>
+        ) : null}
+        {rates.length ? (
+          <span className={clsx(rates.length > 1 ? 'text-amber-800' : 'text-ink-500')} title={rates.length > 1 ? 'Mixed sample rates — resample before training' : undefined}>
+            {rates.map(([sr, n]) => `${Number(sr) / 1000} kHz${rates.length > 1 ? ` ×${n}` : ''}`).join(', ')}
+          </span>
+        ) : null}
+        {classes.length > 1 ? (
+          <button type="button" className="text-accent-800 hover:underline" aria-expanded={open} onClick={onToggle}>
+            {open ? 'Hide' : 'Show'} {classes.length} classes
+          </button>
+        ) : null}
+      </div>
+      {open && classes.length > 1 ? (
+        <ul className="mt-2 space-y-1">
+          {classes.slice(0, 50).map((c) => (
+            <li key={c.name} className="flex items-center gap-2">
+              <span className="w-32 shrink-0 truncate font-mono text-[11px]" title={c.name}>
+                {c.name}
+              </span>
+              <span className="h-1.5 flex-1 overflow-hidden rounded bg-ink-100">
+                <span className="block h-full bg-accent-600/70" style={{ width: `${(100 * c.file_count) / maxCount}%` }} />
+              </span>
+              <span className="w-24 shrink-0 text-right tabular-nums text-ink-500">
+                {c.file_count}
+                {c.audio_count !== c.file_count ? ` (${c.audio_count} audio)` : ''}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
   )
 }

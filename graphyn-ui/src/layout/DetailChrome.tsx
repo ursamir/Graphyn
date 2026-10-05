@@ -24,7 +24,9 @@ export function DetailChrome({ title, meta, actions, banner, children, className
             <div className="min-w-0 text-[14px] font-semibold text-ink-950">{title}</div>
             {meta}
           </div>
-          {actions ? <div className="flex flex-wrap items-center gap-1.5">{actions}</div> : null}
+          {actions ? (
+            <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5">{actions}</div>
+          ) : null}
         </div>
         {banner ? <div className="mt-2">{banner}</div> : null}
       </div>

@@ -711,6 +711,28 @@ Without `--control-url` / `GRAPHYN_CONTROL_URL`, use `--in-process` for the in-m
 
 ---
 
+### `graphyn data`
+
+Input labels and dataset versions (`app/cli/cmd_data.py`). Local by default (core
+functions on `GRAPHYN_PROJECT_DIR`, audited with actor `--actor` / `GRAPHYN_ACTOR`,
+else `cli`); with `--api-url` / `GRAPHYN_API_URL` every subcommand calls the REST
+`/api/v1/data/*` endpoints instead (token from `--token` / `GRAPHYN_API_TOKEN`).
+
+```
+graphyn data ls [LABEL] [--outputs]             # labels (file / audio counts), a label's files, or output versions
+graphyn data upload PATH... [--label L] [--folders-as-labels | --keep-folders]
+                                                # files, folders, .zip/.tar(.gz); same allowlist + caps as the API
+graphyn data snapshot LABEL                     # freeze → datasets/output/_inputs/LABEL/vN (sha256 manifest)
+graphyn data download TARGET [-o FILE.zip]      # TARGET = LABEL or PROJECT/VERSION (e.g. _inputs/kw/v1)
+```
+
+A folder argument keeps its own name as the first path segment, so
+`data upload ./clips --folders-as-labels` with `clips/yes/a.wav` stores label `yes`
+(the picked folder is dropped when it only wraps class folders). Global `--json`
+prints the API-shaped result.
+
+---
+
 ## Environment Variables
 
 Both the SDK and CLI respect:

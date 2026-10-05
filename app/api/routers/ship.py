@@ -2,7 +2,8 @@
 """
 Bounded Context:  REST API Layer
 Responsibility:   Ship package REST (§9.2.14) under /projects/{name}/ship/packages.
-Owns:             list/create/get/download/promote/transition routes;
+Owns:             list/create/get/download/promote/transition routes
+                  (download emits a ``ship.download`` audit event);
                   create accepts model_name@stage or run model_path (+labels;
                   422 ``labels_mismatch`` with ``expected`` order).
 Public Surface:   FastAPI router mounted at /api/v1.
@@ -205,7 +206,7 @@ def get_ship_package(name: str, package_id: str):
     "/{name}/ship/packages/{package_id}/download",
     summary="Download ship package archive",
 )
-def download_ship_package(name: str, package_id: str):
+def download_ship_package(name: str, package_id: str, request: Request):
     from app.core.mlops.ship_packages import download_package_path
 
     project_dir = _require_project(name)
@@ -229,6 +230,21 @@ def download_ship_package(name: str, package_id: str):
     }
     if sha:
         headers["X-Content-SHA256"] = sha
+    from app.api.download_audit import audit_bytes_download
+
+    try:
+        size = archive.stat().st_size
+    except OSError:
+        size = None
+    audit_bytes_download(
+        request,
+        action="ship.download",
+        resource_type="ship_package",
+        resource_id=package_id,
+        size=size,
+        sha256=sha or None,
+        extra={"project": name, "file": f"{package_id}.zip", "path": str(archive)},
+    )
     return FileResponse(
         path=str(archive),
         media_type="application/octet-stream",

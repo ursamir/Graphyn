@@ -39,3 +39,30 @@ def test_cap_no_sleep(installed_cls):
     assert out["output"]["keep"] == 1
     assert out["receipt"].slept_s == 0
     assert out["receipt"].capped is True
+
+
+def test_sleep_stops_on_run_cancel(installed_cls, monkeypatch):
+    import time as _time
+
+    class _Run:
+        is_cancelled = False
+
+    run = _Run()
+    import app.core.runs.run_control as rc
+    monkeypatch.setattr(rc, "get_active_run", lambda rid: run if rid == "r-1" else None)
+    node = installed_cls(config={"seconds": 30.0, "max_seconds": 60.0}, seed=0)
+    node._run_id = "r-1"
+    calls = {"n": 0}
+    real_sleep = _time.sleep
+
+    def _fake_sleep(dt):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            run.is_cancelled = True
+        real_sleep(0)
+
+    monkeypatch.setattr(_time, "sleep", _fake_sleep)
+    t0 = _time.monotonic()
+    with pytest.raises(RuntimeError, match="cancelled"):
+        node.process({"input": {"x": 1}})
+    assert _time.monotonic() - t0 < 5

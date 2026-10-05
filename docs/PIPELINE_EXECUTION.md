@@ -92,6 +92,37 @@ class IRPlacement(BaseModel):  # frozen=True
 
 Omitted / `None` → auto from capability. Loader accepts `1.0`/`1.1` graphs (`placement=None`). See [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md).
 
+### `on_error` / `retry` (IR 1.3)
+
+Optional per-node failure and retry policies on any node (not only nodes whose
+`Config` declares `on_error_port`). Unset fields are omitted from `dump_ir`, so
+pre-1.3 graphs dump and hash byte-identically; the loader accepts `1.0`–`1.3`.
+
+```json
+{"id": "fetch", "node_type": "http_request", "config": {…},
+ "retry":    {"max_attempts": 3, "backoff_s": 2, "max_backoff_s": 30, "on": ["exception"]},
+ "on_error": {"mode": "route", "port": "error"}}
+```
+
+| Field | Values | Semantics |
+|---|---|---|
+| `retry.max_attempts` | 1–20 (incl. the first) | Overrides the node class `RetryPolicy` entirely. |
+| `retry.backoff_s` / `max_backoff_s` | 0–3600 s | Wait before retry *i* (0-based) = `min(backoff_s · 2^i, max_backoff_s)`; cancel interrupts the wait. |
+| `retry.on` | `exception`, `timeout` | `exception` retries any failure; `timeout` alone retries only exceptions whose class (or a base) name contains `Timeout` (incl. `TimeoutError`). Others fail immediately. |
+| `on_error.mode` | `fail` (default) | The run fails (pre-1.3 behaviour). |
+| | `continue` | Final failure → outputs `{}`; the run continues and dependants are skipped as *unproduced* (G1). Event `node_failed_continued`. |
+| | `route` | Final failure → outputs **only** `{<port>: {"ok": false, "error_type", "message", "node_id", "node_type", "attempt"}}` (`port` default `"error"`). Normal outputs are omitted, so the success branch is skipped and edges from `<node>.error` run (e.g. `error_catch`, `send_email`, `http_webhook`). Event `node_error_routed`. |
+
+The error port is synthetic: `GraphIR` rejects an edge from `<node>.<on_error.port>` unless
+`mode == "route"`; `PipelineGraph` and `validate_graph_ir_result` accept it (only the
+destination port is checked, no type check). Cancellation is never routed or swallowed.
+The legacy Config `on_error_port` continuation still applies when no IR policy is set.
+
+Each retry emits `node_retry` (`attempt`, `max_attempts`, `wait_s`, `error_type`, `error`);
+these events go through the node progress sink, so they land in `logs.json`, the NDJSON
+stream and `meta.json.node_progress[<node_id>]` (latest event). **Mode A only**
+(sequential + parallel): the distributed backend / workers do not yet receive the policies.
+
 ### Artifact refs (distributed)
 
 Remote nodes exchange ports as `artifact://` URIs / `input_refs` / `output_refs` rather than rematerializing the full graph locally. Blob bytes live under `workspace/artifacts/distributed_blobs/` (HTTP put/get via control API).
@@ -276,20 +307,24 @@ executor.teardown()
 
 ### `execute(inputs)` sequence
 
-For each attempt (up to `retry_policy.max_attempts`):
-1. Sleep `policy.wait_before_attempt(attempt - 1)` (skipped for attempt 0)
+The effective retry policy is IR `retry` (stamped on the node instance as
+`_graphyn_retry` by `PipelineGraph`) or else the node class `retry_policy`.
+
+For each attempt (up to `max_attempts`):
+1. Emit `node_retry` and sleep `wait_before_attempt(attempt - 1)` (skipped for attempt 0)
 2. `node.on_start()` → observer `on_node_start`
 3. `node.process(inputs)` → `outputs`
 4. `node.on_end()` → observer `on_node_end`
 
 On exception in steps 2–3:
 - `node.on_error(exc)` → observer `on_node_error`
-- Continue to next attempt
+- Non-retryable (policy) → final failure now; else continue to next attempt
 
-After all attempts exhausted:
-- `node.on_error(last_exc)` → observer `on_node_error`
-- `self.teardown()`
-- Re-raise `last_exc`
+Final failure (`_final_failure`), unless cancelled:
+- IR `on_error.mode == "route"` → return `{port: error payload}` (+ `node_error_routed`)
+- IR `on_error.mode == "continue"` → return `{}` (+ `node_failed_continued`)
+- legacy Config `on_error_port` continuation (when mode is not `fail`)
+- otherwise `self.teardown()` and re-raise
 
 ### `execute_stream(inputs)` sequence
 
@@ -350,7 +385,72 @@ For each incoming edge `(src_id, src_port, dst_port)`:
 - If `dst_port.cardinality == "multi"`: append to `inputs[dst_port]` list
 - Otherwise: `inputs[dst_port] = upstream_outputs[src_id][src_port]`
 
-Unconnected optional ports receive `None`.
+Unconnected optional ports receive `None`. An edge whose source port is
+*unproduced* (see below) contributes nothing — the port is not set from it.
+
+### Run inputs and parameters (G3)
+
+`POST /pipelines/run` and `/run-async` accept `inputs: {node_id: {port: value}}`
+→ `get_backend().execute(..., input_overrides=inputs)`, and `parameters: {name: value}`
+for graphs that declare `GraphIR.parameters`. Helpers: `app/core/execution/run_inputs.py`
+(`prepare_run_inputs`, `prepare_parameters`, `persist_run_inputs_meta`) and
+`app/core/ir/parameters.py` (`apply_parameters`).
+
+- Overrides replace any edge value into that port and count as *provided* for skip
+  semantics. Unknown node / undeclared input port → 422; canonical JSON larger than
+  `GRAPHYN_RUN_INPUTS_MAX_BYTES` (default 1 MiB) → 413. `parallel=True` still refuses overrides.
+- Parameters substitute `${params.NAME}` in node `config` strings before execution
+  (exact match → typed value; embedded → `str(value)`); defaults fill missing names;
+  types are checked against `IRParameter.type`. Graphs without declared parameters are untouched.
+- Run meta: `inputs_sha256`, `input_keys` (`["node.port"]`), `inputs_bytes`,
+  `parameters_sha256`, `parameter_names` — fingerprints only, never values.
+- Inbound webhooks (`POST /api/v1/hooks/{ws}/{pipeline}`) use the same path: the body,
+  allow-listed headers and query are injected into every `webhook_trigger` node's
+  `body` / `headers` / `query` input ports (see API_REFERENCE → Inbound webhooks).
+
+### Skip semantics (G1)
+
+**File:** `app/core/execution/skip_logic.py` → `should_skip_for_unproduced()`, called by the
+sequential path (`orchestrator.py`) and the parallel/wave path (`executor.py`) with the same
+arguments, so both paths skip the same nodes.
+
+An incoming edge is **unproduced** when the upstream node was skipped, the upstream
+output dict **omits** the source port (branch not taken — `if_switch`, `hitl_approve`,
+`output_schema_validate`, `guardrail_filter.violations`), or the edge `condition`
+evaluated to false. A port present with value `None` counts as **produced**.
+
+A node is skipped (logged `node_skip`, outputs `{}`, added to the skipped set so the skip
+propagates down the chain) when either rule holds:
+
+| Rule | Condition | Reason |
+|---|---|---|
+| 1 — required input | a `required` input port has incoming edges and none is produced | `condition_false` / `upstream_skipped` |
+| 2 — all inputs unproduced | the node has ≥ 1 incoming data edge and **every** incoming edge is unproduced, regardless of `required` | `condition_false` / `all_inputs_unproduced` |
+
+Nodes with no incoming edges (sources) never skip. A node with *some* produced input still
+runs — e.g. `merge` after an `if_switch` runs with one side and `None` on the other. Ports
+supplied out-of-band (`input_overrides`, values from an excluded / checkpointed source) are
+passed as `provided_ports`; any provided port counts as a produced input. Rule 2 is new:
+before it, the not-taken branch of an `if_switch` still ran with `None` on its optional
+input. Regression: `unit_test/core/test_skip_semantics.py` (sequential + parallel).
+
+### External call audit (G6)
+
+Nodes that make network calls announce each attempt with
+`Node.record_external_call(kind, method, url, status, request_sha256=, response_sha256=,
+duration_ms=, connection_id=, error=)` (`app/core/nodes/base.py`). The URL is redacted
+(`Node.redact_url`: userinfo, query string and fragment stripped) and bodies are stored only
+as `sha256:` digests (`Node.body_sha256` hashes bytes / str / JSON-able values). After a node
+runs — on success **and** on failure — the executor calls
+`app/core/execution/external_calls.drain_external_calls(run, node, node_id, node_type)`,
+which drains the queue, stamps `node_id` / `node_type` and rewrites run meta
+`external_calls` (accumulated list). `seal_run_record` copies it into `prove.json` as
+`external_calls` (whitelisted keys, URLs re-redacted, capped at 2000 rows; additive —
+schema stays 2.0). Users: `http_request` (kind `http`, every attempt), `http_webhook`
+(`webhook`, URL shown as `scheme://host/***`), `send_email` (`smtp`, relay
+`smtp://host:port`, not in dry-run), `llm_chat` / `structured_llm` (`llm`). Limitation:
+isolated (`runtime = "isolated"`) plugins and Mode B workers do not ship the queue back yet
+(`Node.accept_external_calls` is the host-side hook); all current users are in-process.
 
 ---
 
@@ -382,9 +482,10 @@ Before execution the graph is **run-scoped** (`_scope_graph_to_run` → `workspa
 
 ### Run audit record (`app/core/runs/audit_record.py`)
 
-- **Run start** (`orchestrator.capture_run_start`, also Mode B): writes `graph.logical.json` and meta `node_implementations` / `plugin_version` / `plugin_code_hashes` (plugin name + version from the runtime registry / installed manifest / PluginStore, sha256 of the plugin source tree cached by stat signature), `environment_info`, `external_inputs` + `dataset_versions` (content hashes of every external path node configs read; `audit_hashing.hash_path`, per-file cache keyed by (path, mtime_ns, size), `manifest` mode for huge trees), `pipeline_ref` / `pipeline_source` (declared or content-hash match against the project's saved draft / versions), `node_labels` (`run_summary.node_labels`, installed on the logger so `node_*` events carry `node_label`). Interfaces stamp `actor` / `trigger` (+ declared `lineage` → meta `lineage_request`) first (`graph_prepare.persist_run_identity`). `environment_info` = `run_environment(impls)`: host env (container / image / git via env → `BUILD_INFO.json` → `.git`) plus `plugin_environments` (per isolated-plugin venv library versions + freeze hash, cached per venv + site-packages mtime). External inputs are named (`node_label · key`, code-string path literals as `source:<key>`) and exclude write-sink keys, the graph's output locations and the run's own scope.
+- **Run start** (`orchestrator.capture_run_start`, also Mode B): writes `graph.logical.json` and meta `node_implementations` / `plugin_version` / `plugin_code_hashes` (plugin name + version from the runtime registry / installed manifest / PluginStore, sha256 of the plugin source tree cached by stat signature), `environment_info`, `external_inputs` + `dataset_versions` (content hashes of every external path node configs read; `audit_hashing.hash_path`, per-file cache keyed by (path, mtime_ns, size), `manifest` mode for huge trees), `pipeline_ref` / `pipeline_source` (declared or content-hash match against the project's saved draft / versions), `node_labels` (`run_summary.node_labels`, installed on the logger so `node_*` events carry `node_label`). Interfaces stamp `actor` / `actor_verified` / `claimed_actor` / `trigger` (+ declared `lineage` → meta `lineage_request`) first (`graph_prepare.persist_run_identity`; the actor is bound to the API bearer token via `app/core/trust/identity.py` — see `DEPLOYMENT.md` → Named tokens). `environment_info` = `run_environment(impls)`: host env (container / image / git via env → `BUILD_INFO.json` → `.git`) plus `plugin_environments` (per isolated-plugin venv library versions + freeze hash, cached per venv + site-packages mtime). External inputs are named (`node_label · key`, code-string path literals as `source:<key>`) and exclude write-sink keys, the graph's output locations and the run's own scope.
 - **Terminal transition** (`RunManager.save_metadata` / `mark_failed` / `mark_cancelled`, first one only): `seal_run_record` writes `prove.json` (schema 2.0: + `lineage` (source run + registered models declared or read as inputs, with model hash), `input_artifact_hashes` (consumed, never own outputs), `outputs` per-node folder hashes, `outputs_manifest.json` sidecar, `cache` provenance, status / error) and appends `{seq, run_id, record_hash, prev}` to `workspace/audit/chains/<project>.jsonl` (file-locked); `record_hash` = sha256 of the canonical record (which includes `previous_record_hash`). Then audit `run.finish` / `run.fail` / `run.cancel` with the run's actor.
 - **Failures** record the real exception: `mark_failed(..., error_type=, error_traceback=)`; isolated plugin workers write a structured `error.json` (`IsolatedNodeError`: `error_type`, `error_message`, `traceback_text`; stderr fallback takes the last traceback block and filters absl/TF noise).
+- **External calls:** `external_calls` rows (see [External call audit](#external-call-audit-g6)) — kind, method, redacted URL, status, request/response hashes, duration, connection id, node id.
 - **Cache provenance:** `PipelineCache.save(key, outputs, source={run_id, node_id, saved_at})` stores the producing run in the entry manifest; a hit records `cache_key` + `cache_source_run_id` in `node_stats`.
 - `verify_run` / `GET /runs/{id}/verify`, `run_replay.start_replay` / `POST /runs/{id}/replay` and `run_archive` (`DELETE` = archive) are described in `docs/API_REFERENCE.md`.
 
@@ -471,6 +572,7 @@ workspace/runs/{run_id}/
 ├── graph.logical.json  # logical graph (graph_hash source; replay input)
 ├── prove.json          # sealed audit record (schema 2.0) — every terminal run
 ├── outputs_manifest.json  # per-file output hashes (verify diffs)
+├── verify.json         # verification history (every GET/POST /runs/{id}/verify; never touches prove.json)
 ├── .archived           # present when the run is archived (DELETE default)
 ├── resume_state.json   # written when checkpoint=True
 └── checkpoints/        # Per-node checkpoints (when checkpoint=True)
@@ -541,3 +643,14 @@ Condition semantics at runtime (`app/core/execution/conditions.py`): `*` and `%`
 **File:** `app/core/utils/hash.py`
 
 Deterministic hash used for node seeds and export file IDs. Takes any number of arguments, converts them to strings, and returns a stable integer hash. The same inputs always produce the same output across Python runs.
+
+### Retained run inputs and exact replay
+
+Runs started with inputs (`POST /pipelines/run[-async]` `inputs`, inbound webhook body /
+headers / query) keep the exact values in `runs/<id>/inputs.json` (canonical JSON). The
+sealed record only stores fingerprints (`run_inputs.inputs_sha256`, `input_keys`), Verify adds
+a `run_inputs` check (pass / changed; `skipped` when not retained), and **Replay exactly**
+re-injects the retained inputs after checking their sha256. If the inputs were not retained
+(`GRAPHYN_RETAIN_RUN_INPUTS=0`, or a run from before retention existed) or fail the check,
+replay is refused with `409 replay_inputs_unavailable` instead of silently running on no
+payload (which would take a different branch).

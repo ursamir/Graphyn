@@ -108,6 +108,9 @@ export function applyEdgeConfig(
     quantization: EdgeQuantization
     target: EdgeTarget
     packageName: string
+    /** Training run whose Feature Frontend / Dataset Builder settings the
+     *  packager writes into preprocessing.json (deployment_packager ≥ 1.1). */
+    sourceRunId?: string
   },
 ): GraphIR {
   const graph: GraphIR = structuredClone(base)
@@ -132,6 +135,7 @@ export function applyEdgeConfig(
         target: opts.target,
         package_name: opts.packageName.trim() || 'edge_model',
         output_path: 'workspace/artifacts/edge-deploy/packages',
+        ...(opts.sourceRunId?.trim() ? { source_run_id: opts.sourceRunId.trim() } : {}),
       }
     }
   }

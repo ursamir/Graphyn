@@ -17,7 +17,8 @@ Owns:             capture_run_start(), seal_run_record(), verify_run(),
                   (record ``lineage``: source run + registered models),
                   collect_external_inputs() (named rows; write sinks and
                   the run's own outputs excluded), resolve_pipeline_ref(),
-                  record_hash(), the per-project chain files
+                  record_hash(), ``external_calls`` rows (G6 egress
+                  audit from run meta), the per-project chain files
                   ``{project}/audit/chains/<project>.jsonl`` and the
                   ``runs/<id>/graph.logical.json`` / ``outputs_manifest.json``
                   sidecars.
@@ -649,7 +650,13 @@ def _walk_config(cfg: Any, key: str = "") -> Iterable[tuple[str, str]]:
             yield from _walk_config(item, key)
 
 
+_DATASET_VERSION_RE = re.compile(r"v\d+(?:\.\d+)*")
+
+
 def _dataset_version(path: Path) -> dict[str, str] | None:
+    """``{project, version}`` when *path* lies inside a dataset version dir
+    (``datasets/output/<p>/vN[.N…]`` or a frozen input
+    ``datasets/output/_inputs/<label>/vN``), else None."""
     try:
         from app.core.config import datasets_output_dir
 
@@ -658,7 +665,10 @@ def _dataset_version(path: Path) -> dict[str, str] | None:
     except Exception:
         return None
     parts = rel.parts
-    if len(parts) >= 2 and re.fullmatch(r"v\d+", parts[1]):
+    # Frozen input labels: datasets/output/_inputs/<label>/vN[...]
+    if len(parts) >= 3 and parts[0] == "_inputs" and _DATASET_VERSION_RE.fullmatch(parts[2]):
+        return {"project": f"_inputs/{parts[1]}", "version": parts[2]}
+    if len(parts) >= 2 and _DATASET_VERSION_RE.fullmatch(parts[1]):
         return {"project": parts[0], "version": parts[1]}
     return None
 
@@ -1259,6 +1269,36 @@ def _cache_rows(meta: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+_EXTERNAL_CALL_KEYS = (
+    "node_id", "node_type", "kind", "method", "url", "status", "request_sha256",
+    "response_sha256", "duration_ms", "connection_id", "error", "ts",
+)
+_MAX_EXTERNAL_CALLS = 2000
+
+
+def _external_call_rows(meta: dict[str, Any]) -> list[dict[str, Any]]:
+    """Outbound calls recorded via ``Node.record_external_call`` (G6).
+
+    Rows come from run meta ``external_calls`` (written by the executor).
+    Only whitelisted keys are kept; URLs are re-redacted defensively so a
+    plugin that bypassed ``Node.redact_url`` cannot leak query secrets into
+    the sealed record.
+    """
+    raw = meta.get("external_calls")
+    if not isinstance(raw, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in raw[:_MAX_EXTERNAL_CALLS]:
+        if not isinstance(item, dict):
+            continue
+        row = {k: item.get(k) for k in _EXTERNAL_CALL_KEYS if k in item}
+        url = row.get("url")
+        if isinstance(url, str):
+            row["url"] = re.sub(r"(//)[^/@]*@", r"\1", url.split("#", 1)[0].split("?", 1)[0])
+        rows.append(row)
+    return rows
+
+
 def _art_get(a: Any, key: str) -> Any:
     return a.get(key) if isinstance(a, dict) else getattr(a, key, None)
 
@@ -1419,6 +1459,13 @@ def resolve_model_lineage(meta: dict[str, Any], inputs: list[dict[str, Any]] | N
     }
 
 
+def _run_input_fingerprints(meta: dict[str, Any]) -> dict[str, Any] | None:
+    """Run inputs / IR parameters recorded at submit time (sha256 + keys), or None."""
+    keys = ("inputs_sha256", "input_keys", "inputs_bytes", "parameters_sha256", "parameter_names")
+    row = {k: meta.get(k) for k in keys if meta.get(k) not in (None, "", [])}
+    return row or None
+
+
 def build_record(
     run_dir: Path,
     *,
@@ -1505,6 +1552,8 @@ def build_record(
         "outputs": outputs,
         "outputs_manifest_hash": manifest_hash,
         "cache": _cache_rows(meta),
+        # G6: outbound HTTP/SMTP/LLM calls (redacted URL + body hashes). Additive.
+        "external_calls": _external_call_rows(meta),
         "node_labels": labels,
         "model_version": model_version,
         "lineage": lineage,
@@ -1516,7 +1565,14 @@ def build_record(
         "configuration": {"node_ids": [str(n.get("id")) for n in _graph_nodes(graph)]},
         "seed": seed,
         "actor": str(meta.get("actor") or os.environ.get("GRAPHYN_ACTOR") or "system"),
+        # True only when the API bearer token mapped to ``actor`` (GRAPHYN_API_TOKENS).
+        "actor_verified": bool(meta.get("actor_verified")),
+        "claimed_actor": meta.get("claimed_actor") or None,
         "trigger": str(meta.get("trigger") or "api"),
+        # G3/G4: what was injected into this run (fingerprints only — never
+        # the payload itself) and, for webhook runs, the delivery receipt.
+        "run_inputs": _run_input_fingerprints(meta),
+        "webhook": dict(meta["webhook"]) if isinstance(meta.get("webhook"), dict) else None,
         "replay_of": meta.get("replay_of"),
         "error": meta.get("error") if status == "failed" else None,
         "error_type": meta.get("error_type") if status == "failed" else None,
@@ -1639,6 +1695,22 @@ def verify_run(run_dir: str | Path, *, meta: dict[str, Any] | None = None) -> di
                        "expected": record["graph_hash"], "actual": actual_l})
 
     checks.extend(check_external_inputs(record.get("external_inputs") or []))
+
+    # Run inputs (webhook body / POST inputs): retained copy must match the
+    # sealed fingerprint so "Replay exactly" re-injects the same payload.
+    run_inputs = record.get("run_inputs") if isinstance(record.get("run_inputs"), dict) else None
+    expected_in = (run_inputs or {}).get("inputs_sha256")
+    if expected_in:
+        inputs_path = run_dir / "inputs.json"
+        if not inputs_path.is_file():
+            checks.append({"check": "run_inputs", "status": "skipped", "expected": expected_in, "actual": None,
+                           "details": {"reason": "inputs not retained (GRAPHYN_RETAIN_RUN_INPUTS=0 or older run)"}})
+        else:
+            import hashlib as _hashlib
+
+            actual_in = _hashlib.sha256(inputs_path.read_bytes()).hexdigest()
+            checks.append({"check": "run_inputs", "status": "pass" if actual_in == expected_in else "changed",
+                           "expected": expected_in, "actual": actual_in})
 
     sidecar = _read_json(run_dir / OUTPUTS_MANIFEST_FILE)
     if record.get("outputs_manifest_hash"):

@@ -1,9 +1,10 @@
 import React from 'react'
 import {
   RefreshCw,
+  Archive,
+  ArchiveRestore,
   Copy,
   Database,
-  Pencil,
   Workflow,
   History,
   ChevronRight,
@@ -20,27 +21,30 @@ import {
   FolderOpen as EmptyFolderOpen,
   SearchX as EmptySearchX,
   History as EmptyHistory,
-  Camera as EmptyCamera,
-  GitCompare as EmptyGitCompare,
 } from 'lucide-react'
-import { ApiError, apiJson } from '../../api/client'
+import { apiJson } from '../../api/client'
 import { unwrapList } from '../../api/unwrapList'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
 import {
   ConfirmButton,
-  CollapsibleJson,
   EmptyState,
   ErrorBanner,
-  KeyValue,
   LoadingBlock,
-  SegmentedTabs,
   StatusBadge,
 } from '../../components/ui'
 import { paths } from '../../routes/paths'
 import { goView, guardedNavigatePath, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 import { formatRelativeTime, shortRunId } from '../../lib/format'
 import { runDisplayName } from '../../lib/runDisplay'
+import {
+  activityDetail,
+  buildActivityItems,
+  homeSummaryLine,
+  isExceptionStatus,
+  runStatusWord,
+  workspaceStatusLabel,
+} from './homeActivity'
 import { pickLatestResult, regressionTone } from './latestResult'
 import { formatMetric, formatMetricDelta, formatMetricValue, isRatioMetric, metricLabel, primaryMetric } from '../../lib/metrics'
 import {
@@ -56,6 +60,14 @@ import {
   workspaceErrorMessage,
   workspaceNameError,
 } from '../../lib/workspaceName'
+import {
+  CLONE_SCOPE_TEXT,
+  deleteWorkspaceSummary,
+  isArchivedWorkspace,
+  partitionArchived,
+  showsWorkspaceId,
+  workspaceTitle,
+} from './workspaceAdmin'
 
 interface Project {
   name: string
@@ -91,6 +103,13 @@ function runMetricText(r: unknown): string | null {
   return `${metricLabel(pm.name)} ${formatMetricValue(pm.name, pm.value)}`
 }
 
+/** Runs fetched for Home: enough to collapse repeated failures and still fill
+ *  the 8-row Activity list; the header shows "N+ runs" when the cap is hit. */
+const HOME_RUNS_LIMIT = 30
+const HOME_ACTIVITY_ROWS = 8
+/** Sentence-case section title (replaces the ALL-CAPS `ide-section-title`). */
+const SECTION_TITLE = 'text-[13px] font-semibold text-ink-900'
+
 type WorkspaceSort = 'recent' | 'updated' | 'activity' | 'name'
 
 /** Approximate height of the workspace ⋯ menu (4 items + separator), used to
@@ -104,30 +123,9 @@ const SORT_LABEL: Record<WorkspaceSort, string> = {
   name: 'Name (A–Z)',
 }
 
-type Tab = 'spec' | 'taxonomy' | 'contract' | 'versions' | 'snapshots' | 'diff'
-
-const TABS: Tab[] = ['spec', 'taxonomy', 'contract', 'versions', 'snapshots', 'diff']
-
-const DOC_TAB_OPTIONS: { id: Tab; label: string }[] = [
-  { id: 'versions', label: 'Versions' },
-  { id: 'spec', label: 'Spec' },
-  { id: 'taxonomy', label: 'Taxonomy' },
-  { id: 'contract', label: 'Contract' },
-  { id: 'snapshots', label: 'Snapshots' },
-  { id: 'diff', label: 'Diff' },
-]
-
 /** API ProjectManager.set_status enum (never 'active'). */
 const STATUSES = ['draft', 'in-progress', 'ready', 'archived'] as const
 type ProjectStatus = (typeof STATUSES)[number]
-
-/** Plain-language workspace status (the API enum stays as-is). */
-const WORKSPACE_STATUS_LABEL: Record<ProjectStatus, string> = {
-  draft: 'Getting started',
-  'in-progress': 'In progress',
-  ready: 'Ready',
-  archived: 'Archived',
-}
 
 /** Map legacy stored 'active' → 'in-progress' for display / select value. */
 function normalizeProjectStatus(raw: unknown): ProjectStatus {
@@ -138,7 +136,7 @@ function normalizeProjectStatus(raw: unknown): ProjectStatus {
 }
 
 
-function parseProjectsLocation(): { project?: string; tab?: Tab } {
+function parseProjectsLocation(): { project?: string } {
   const { pathname } = window.location
   const params = readSearchParams()
   const parts = pathname.replace(/\/+$/, '').split('/').filter(Boolean)
@@ -148,19 +146,9 @@ function parseProjectsLocation(): { project?: string; tab?: Tab } {
   } else {
     project = (params.get('project') || '').trim() || undefined
   }
-  const tabRaw = (params.get('tab') || '').trim()
-  const tab = TABS.includes(tabRaw as Tab) ? (tabRaw as Tab) : undefined
-  return { project, tab }
+  return { project }
 }
 
-
-function lineageIds(lineage: unknown): { runId?: string; artifactId?: string } {
-  if (!lineage || typeof lineage !== 'object') return {}
-  const o = lineage as Record<string, unknown>
-  const runId = String(o.run_id ?? o.runId ?? '').trim() || undefined
-  const artifactId = String(o.artifact_id ?? o.artifactId ?? '').trim() || undefined
-  return { runId, artifactId }
-}
 
 function pinnedKey(project: string) {
   return `graphyn.pinnedPipelines.${project}`
@@ -190,19 +178,19 @@ export default function ProjectsView() {
   const activeProject = useAppStore((s) => s.activeProject)
   const pushToast = useAppStore((s) => s.pushToast)
   const openData = useAppStore((s) => s.openData)
-  const openTrace = useAppStore((s) => s.openTrace)
-  const openArtifacts = useAppStore((s) => s.openArtifacts)
-  const openEdge = useAppStore((s) => s.openEdge)
   const setActiveProject = useAppStore((s) => s.setActiveProject)
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
   const initialLoc = React.useMemo(() => parseProjectsLocation(), [])
   const [projects, setProjects] = React.useState<Project[] | null>(null)
   const [selected, setSelected] = React.useState<string | null>(initialLoc.project ?? null)
-  const [tab, setTab] = React.useState<Tab>(initialLoc.tab ?? 'versions')
   const [newName, setNewName] = React.useState('')
   const newNameError = workspaceNameError(newName)
   const nameRef = React.useRef<HTMLInputElement | null>(null)
-  const [renameTo, setRenameTo] = React.useState('')
+  /** Workspaces list: the "New workspace" inline form is opened by a button. */
+  const [createOpen, setCreateOpen] = React.useState(false)
+  React.useEffect(() => {
+    if (createOpen) nameRef.current?.focus()
+  }, [createOpen])
   const [cloneTo, setCloneTo] = React.useState('')
   const [error, setError] = React.useState<string | null>(null)
   // Separate from `error` (the projects-list load failure) — open() failing
@@ -217,29 +205,32 @@ export default function ProjectsView() {
   // which are also [] before the fetch resolves — without this flag every
   // workspace open briefly, falsely renders as "no pipelines / no activity".
   const [opening, setOpening] = React.useState(false)
+  // Workspace whose Home payload (runs, pipelines, schedules, links) finished
+  // loading. Until it equals `selected` the page shows skeletons — never zeros.
+  const [homeLoadedFor, setHomeLoadedFor] = React.useState<string | null>(null)
+  // Collapsed "Set up" row → user asked to choose datasets: show the full card.
+  const [showInputsCard, setShowInputsCard] = React.useState(false)
+  // Activity "N more failed runs" groups the user expanded (by group key).
+  const [expandedFailures, setExpandedFailures] = React.useState<Set<string>>(() => new Set())
 
-  const [spec, setSpec] = React.useState('')
-  type DocKey = 'spec' | 'taxonomy' | 'contract'
-  // Per-tab load errors (non-404). A tab that failed to load must not be
-  // saveable, or Save would overwrite real server content with the empty
-  // placeholder we rendered.
-  const [docErrors, setDocErrors] = React.useState<Partial<Record<DocKey, string>>>({})
-  // Workspace whose spec/taxonomy/contract are currently in the editors.
-  const [docsLoadedFor, setDocsLoadedFor] = React.useState<string | null>(null)
   // Monotonic open() request id — results of superseded opens are dropped.
   const openSeqRef = React.useRef(0)
-  const [taxonomy, setTaxonomy] = React.useState('[]')
-  const [contract, setContract] = React.useState('{}')
-  const [versions, setVersions] = React.useState<unknown[]>([])
-  const [versionFocus, setVersionFocus] = React.useState('')
-  const [versionStats, setVersionStats] = React.useState<unknown>(null)
-  const [versionSamples, setVersionSamples] = React.useState<unknown>(null)
-  const [snapshots, setSnapshots] = React.useState<unknown[]>([])
-  const [snapshotName, setSnapshotName] = React.useState('')
-  const [diffA, setDiffA] = React.useState('')
-  const [diffB, setDiffB] = React.useState('')
-  const [diffResult, setDiffResult] = React.useState<unknown>(null)
-  const [lineage, setLineage] = React.useState<unknown>(null)
+  /** GET /projects/{name}: display name, description, status of the open workspace. */
+  const [wsMeta, setWsMeta] = React.useState<{
+    display_name?: string
+    description?: string
+    status?: string
+  } | null>(null)
+  const [nameDraft, setNameDraft] = React.useState('')
+  const [descDraft, setDescDraft] = React.useState('')
+  const [deleteConfirm, setDeleteConfirm] = React.useState('')
+  /** Workspace fold (name, archive, clone, danger zone) — controlled so the
+   *  list's "Delete…" can open it at the danger zone. */
+  const [workspaceFoldOpen, setWorkspaceFoldOpen] = React.useState(false)
+  const [revealDanger, setRevealDanger] = React.useState(false)
+  const dangerZoneRef = React.useRef<HTMLDivElement>(null)
+  /** Dataset output versions of this workspace — only counted for the delete scope. */
+  const [datasetVersionCount, setDatasetVersionCount] = React.useState(0)
   const [recentRuns, setRecentRuns] = React.useState<RunRow[]>([])
   const [projectPipelines, setProjectPipelines] = React.useState<
     Array<{
@@ -343,59 +334,48 @@ export default function ProjectsView() {
     }
   }, [selected])
 
+  // List "Delete…": once that workspace is open, expand its Workspace fold and
+  // bring the danger zone (typed-name confirmation) into view.
+  React.useEffect(() => {
+    if (!revealDanger || !selected) return
+    setWorkspaceFoldOpen(true)
+    const id = window.setTimeout(() => {
+      if (!dangerZoneRef.current) return
+      dangerZoneRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      dangerZoneRef.current.querySelector('input')?.focus({ preventScroll: true })
+      setRevealDanger(false)
+    }, 150)
+    return () => window.clearTimeout(id)
+  }, [revealDanger, selected, wsMeta])
+
   const open = async (name: string) => {
     const seq = ++openSeqRef.current
     const stale = () => seq !== openSeqRef.current
-    setDocsLoadedFor(null)
-    setDocErrors({})
     noteRecentWorkspace(name)
     setSelected(name)
     setActiveProject(name)
-    setRenameTo(name)
     setCloneTo(`${name}-copy`)
+    setDeleteConfirm('')
     setOpenError(null)
     setOpening(true)
-    replacePathSearch(
-      tab && tab !== 'versions' ? { tab } : {},
-      paths.workspace(name),
-    )
-    setVersionStats(null)
-    setVersionSamples(null)
-    setDiffResult(null)
-    const docErrs: Partial<Record<DocKey, string>> = {}
-    // Only "not found" means "empty document"; 401/500/timeouts are errors.
-    const emptyOn404 =
-      <T,>(key: DocKey, fallback: T) =>
-      (err: unknown): T => {
-        if (!(err instanceof ApiError && err.status === 404)) {
-          docErrs[key] = err instanceof Error ? err.message : String(err)
-        }
-        return fallback
-      }
+    setShowInputsCard(false)
+    replacePathSearch({}, paths.workspace(name))
     try {
-      const [vers, sp, tax, con, snaps, lin] = await Promise.all([
-        apiJson<unknown[]>(`/projects/${encodeURIComponent(name)}/versions`),
-        apiJson<{ markdown?: string }>(`/projects/${encodeURIComponent(name)}/spec`).catch(
-          emptyOn404<{ markdown?: string }>('spec', { markdown: '' }),
+      const [meta, vers] = await Promise.all([
+        apiJson<{ display_name?: string; description?: string; status?: string; name?: string }>(
+          `/projects/${encodeURIComponent(name)}`,
         ),
-        apiJson<unknown>(`/projects/${encodeURIComponent(name)}/taxonomy`).catch(emptyOn404<unknown>('taxonomy', [])),
-        apiJson<unknown>(`/projects/${encodeURIComponent(name)}/contract`).catch(emptyOn404<unknown>('contract', {})),
-        apiJson<unknown[]>(`/projects/${encodeURIComponent(name)}/snapshots`).catch(() => []),
-        apiJson(`/projects/${encodeURIComponent(name)}/lineage`).catch(() => null),
+        apiJson<unknown[]>(`/projects/${encodeURIComponent(name)}/versions`).catch(() => []),
       ])
       if (stale()) return
-      setDocErrors(docErrs)
-      setDocsLoadedFor(name)
-      setVersions(vers)
-      setSpec(sp?.markdown ?? '')
-      setTaxonomy(JSON.stringify(tax, null, 2))
-      setContract(JSON.stringify(con, null, 2))
-      setSnapshots(Array.isArray(snaps) ? snaps : [])
-      setLineage(lin)
+      setWsMeta(meta)
+      setNameDraft(workspaceTitle({ name, display_name: meta?.display_name }))
+      setDescDraft(String(meta?.description ?? ''))
+      setDatasetVersionCount(Array.isArray(vers) ? vers.length : 0)
       try {
         const [runs, linkData, inputs, pipes, sched] = await Promise.all([
           apiJson<unknown>('/runs', {
-            query: { limit: 8, offset: 0, project: name },
+            query: { limit: HOME_RUNS_LIMIT, offset: 0, project: name },
           }),
           apiJson<{ inputs?: string[]; outputs?: Array<{ version: string }> }>(`/projects/${encodeURIComponent(name)}/links`).catch(() => ({ inputs: [], outputs: [] })),
           apiJson<Array<{ label?: string } | string>>('/data/inputs').catch(() => []),
@@ -423,7 +403,7 @@ export default function ProjectsView() {
         setRecentRuns(
           unwrapList<RunRow>(runs)
             .filter((r) => r && typeof r.run_id === 'string')
-            .slice(0, 8),
+            .slice(0, HOME_RUNS_LIMIT),
         )
         setProjectPipelines(unwrapList<(typeof projectPipelines)[number]>(pipes).filter((p) => p && typeof p.name === 'string'))
         {
@@ -459,47 +439,27 @@ export default function ProjectsView() {
         setSchedules([])
         setLinks({ inputs: [], outputs: [] })
       }
-      const first =
-        typeof vers[0] === 'string'
-          ? vers[0]
-          : String((vers[0] as { version?: string } | undefined)?.version ?? '')
-      setVersionFocus(first)
-      setDiffA(first)
-      setDiffB(typeof vers[1] === 'string' ? vers[1] : first)
     } catch (err) {
       if (stale()) return
-      setDocsLoadedFor(null)
       setOpenError(err instanceof Error ? err.message : String(err))
       // Keep selected, but clear Home payload so we don't pretend load succeeded.
-      setVersions([])
-      setSpec('')
-      setTaxonomy('[]')
-      setContract('{}')
-      setSnapshots([])
-      setLineage(null)
+      setWsMeta(null)
+      setDatasetVersionCount(0)
       setRecentRuns([])
       setProjectPipelines([])
       setSchedules([])
       setLinks({ inputs: [], outputs: [] })
-      setVersionFocus('')
-      setDiffA('')
-      setDiffB('')
     } finally {
-      if (!stale()) setOpening(false)
+      if (!stale()) {
+        setOpening(false)
+        setHomeLoadedFor(name)
+      }
     }
   }
-
-  /** Save allowed only when the editor holds this workspace's loaded content. */
-  const canSaveDoc = (key: DocKey) =>
-    Boolean(selected) && !opening && docsLoadedFor === selected && !docErrors[key]
 
   React.useEffect(() => {
     const apply = () => {
       const h = parseProjectsLocation()
-      if (h.tab) {
-        setTab(h.tab)
-        setDatasetOpen(true)
-      }
       if (h.project) {
         setSelected((cur) => {
           if (h.project !== cur) {
@@ -531,14 +491,6 @@ export default function ProjectsView() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject])
-
-  const useInEdge = () => {
-    openEdge({
-      project: selected || undefined,
-      version: versionFocus || undefined,
-      runId: recentRuns[0]?.run_id || undefined,
-    })
-  }
 
   const openProjectPipeline = async (pipelineName: string, env?: string) => {
     if (!selected) return
@@ -678,6 +630,7 @@ export default function ProjectsView() {
       pushToast(`Created ${created}`, 'success')
       setActiveProject(created)
       setNewName('')
+      setCreateOpen(false)
       await load()
       await open(created)
     } catch (err) {
@@ -685,19 +638,26 @@ export default function ProjectsView() {
     }
   }
 
-  const rename = async () => {
-    if (!selected || !renameTo.trim()) return
+  /** PUT display_name / description (the workspace id never changes). */
+  const saveDetails = async () => {
+    if (!selected) return
+    const body: Record<string, string> = {}
+    const name = nameDraft.trim()
+    if (name && name !== workspaceTitle({ name: selected, display_name: wsMeta?.display_name })) {
+      body.display_name = name
+    }
+    if (descDraft.trim() !== String(wsMeta?.description ?? '').trim()) body.description = descDraft.trim()
+    if (!Object.keys(body).length) return
     try {
-      await apiJson(`/projects/${encodeURIComponent(selected)}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ new_name: renameTo.trim() }),
-      })
-      pushToast(`Renamed to ${renameTo}`, 'success')
-      forgetRecentWorkspace(selected)
+      const next = await apiJson<{ display_name?: string; description?: string; status?: string }>(
+        `/projects/${encodeURIComponent(selected)}`,
+        { method: 'PUT', body: JSON.stringify(body) },
+      )
+      setWsMeta(next)
+      pushToast('Workspace details saved', 'success')
       await load()
-      await open(renameTo.trim())
     } catch (err) {
-      pushToast(workspaceErrorMessage(err instanceof Error ? err.message : String(err)), 'error')
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
   }
 
@@ -708,7 +668,7 @@ export default function ProjectsView() {
         method: 'POST',
         body: JSON.stringify({ new_name: cloneTo.trim() }),
       })
-      pushToast(`Cloned to ${cloneTo}`, 'success')
+      pushToast(`Created ${cloneTo.trim()} from ${selected}`, 'success')
       await load()
     } catch (err) {
       pushToast(workspaceErrorMessage(err instanceof Error ? err.message : String(err)), 'error')
@@ -730,7 +690,25 @@ export default function ProjectsView() {
     }
   }
 
-  const removeProject = async (name: string) => {
+  /** Archive hides the workspace from the default Workspaces list; nothing is deleted. */
+  const setArchived = async (archived: boolean) => {
+    if (!selected) return
+    try {
+      const next = await apiJson<{ status?: string }>(`/projects/${encodeURIComponent(selected)}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: archived ? 'archived' : 'in-progress' }),
+      })
+      setWsMeta((m) => ({ ...(m ?? {}), status: next?.status ?? (archived ? 'archived' : 'in-progress') }))
+      pushToast(archived ? `Archived ${selected}` : `Unarchived ${selected}`, 'success')
+      await load()
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  const remove = async () => {
+    if (!selected || deleteConfirm.trim() !== selected) return
+    const name = selected
     try {
       await apiJson(`/projects/${encodeURIComponent(name)}`, {
         method: 'DELETE',
@@ -739,163 +717,9 @@ export default function ProjectsView() {
       pushToast(`Deleted ${name}`, 'success')
       forgetRecentWorkspace(name)
       if (useAppStore.getState().activeProject === name) setActiveProject(null)
-      await load()
-    } catch (err) {
-      pushToast(workspaceErrorMessage(err instanceof Error ? err.message : String(err)), 'error')
-    }
-  }
-
-  const setStatus = async (status: string) => {
-    if (!selected) return
-    try {
-      await apiJson(`/projects/${encodeURIComponent(selected)}/status`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status }),
-      })
-      pushToast(`Status → ${status}`, 'success')
-      await load()
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
-    }
-  }
-
-  const remove = async () => {
-    if (!selected) return
-    try {
-      await apiJson(`/projects/${encodeURIComponent(selected)}`, {
-        method: 'DELETE',
-        body: JSON.stringify({ confirm: selected }),
-      })
-      pushToast(`Deleted ${selected}`, 'success')
       setSelected(null)
+      replacePathSearch({}, paths.workspaces())
       await load()
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
-    }
-  }
-
-  const saveSpec = async () => {
-    if (!selected) return
-    if (!canSaveDoc('spec')) {
-      pushToast(docErrors['spec'] ? `Not saved — spec failed to load: ${docErrors['spec']}` : 'Workspace is still loading', 'error')
-      return
-    }
-    try {
-      await apiJson(`/projects/${encodeURIComponent(selected)}/spec`, {
-        method: 'PUT',
-        body: JSON.stringify({ markdown: spec }),
-      })
-      pushToast('Spec saved', 'success')
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
-    }
-  }
-
-  const saveTaxonomy = async () => {
-    if (!selected) return
-    if (!canSaveDoc('taxonomy')) {
-      pushToast(docErrors['taxonomy'] ? `Not saved — taxonomy failed to load: ${docErrors['taxonomy']}` : 'Workspace is still loading', 'error')
-      return
-    }
-    try {
-      const body = JSON.parse(taxonomy) as unknown
-      await apiJson(`/projects/${encodeURIComponent(selected)}/taxonomy`, {
-        method: 'PUT',
-        body: JSON.stringify(body),
-      })
-      pushToast('Taxonomy saved', 'success')
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
-    }
-  }
-
-  const saveContract = async () => {
-    if (!selected) return
-    if (!canSaveDoc('contract')) {
-      pushToast(docErrors['contract'] ? `Not saved — contract failed to load: ${docErrors['contract']}` : 'Workspace is still loading', 'error')
-      return
-    }
-    try {
-      const body = JSON.parse(contract) as unknown
-      await apiJson(`/projects/${encodeURIComponent(selected)}/contract`, {
-        method: 'PUT',
-        body: JSON.stringify(body),
-      })
-      pushToast('Contract saved', 'success')
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
-    }
-  }
-
-  const loadVersionDetail = async () => {
-    if (!selected || !versionFocus) return
-    try {
-      const [st, samp] = await Promise.all([
-        apiJson(
-          `/projects/${encodeURIComponent(selected)}/versions/${encodeURIComponent(versionFocus)}/stats`,
-        ),
-        apiJson(
-          `/projects/${encodeURIComponent(selected)}/versions/${encodeURIComponent(versionFocus)}/samples`,
-          { query: { page: 1, page_size: 20 } },
-        ).catch(() => null),
-      ])
-      setVersionStats(st)
-      setVersionSamples(samp)
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
-    }
-  }
-
-  const restoreVersion = async () => {
-    if (!selected || !versionFocus) return
-    try {
-      await apiJson(
-        `/projects/${encodeURIComponent(selected)}/versions/${encodeURIComponent(versionFocus)}/restore`,
-        { method: 'POST' },
-      )
-      pushToast(`Restored ${versionFocus}`, 'success')
-      await open(selected)
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
-    }
-  }
-
-  const createSnapshot = async () => {
-    if (!selected || !snapshotName.trim()) return
-    try {
-      await apiJson(`/projects/${encodeURIComponent(selected)}/snapshots`, {
-        method: 'POST',
-        body: JSON.stringify({ snapshot_name: snapshotName.trim() }),
-      })
-      pushToast(`Snapshot ${snapshotName} created`, 'success')
-      setSnapshotName('')
-      await open(selected)
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
-    }
-  }
-
-  const restoreSnapshot = async (name: string) => {
-    if (!selected) return
-    try {
-      await apiJson(
-        `/projects/${encodeURIComponent(selected)}/snapshots/${encodeURIComponent(name)}/restore`,
-        { method: 'POST' },
-      )
-      pushToast(`Restored snapshot ${name}`, 'success')
-      await open(selected)
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
-    }
-  }
-
-  const runDiff = async () => {
-    if (!selected) return
-    try {
-      const res = await apiJson(`/projects/${encodeURIComponent(selected)}/diff`, {
-        query: { version_a: diffA, version_b: diffB },
-      })
-      setDiffResult(res)
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
@@ -929,7 +753,7 @@ export default function ProjectsView() {
     }
   }
 
-  const [datasetOpen, setDatasetOpen] = React.useState(() => Boolean(initialLoc.tab))
+  const [showArchived, setShowArchived] = React.useState(false)
   const [projectFilter, setProjectFilter] = React.useState('')
   /* Landing-page console controls. Sort and density persist — a management list
      you re-sort on every visit is a list that doesn't remember you. */
@@ -1001,22 +825,23 @@ export default function ProjectsView() {
     })
   }, [projectPipelines, pinnedPipelines])
 
-  const versionOptions = versions.map((v) =>
-    typeof v === 'string' ? v : String((v as { version?: string }).version ?? JSON.stringify(v)),
+  /* Archived workspaces are hidden from the list unless "Show archived" is on. */
+  const { visible: unarchivedProjects, archivedCount } = React.useMemo(
+    () => partitionArchived(projects ?? [], showArchived),
+    [projects, showArchived],
   )
-
   const filteredProjects = React.useMemo(() => {
     const q = projectFilter.trim().toLowerCase()
-    if (!projects) return []
-    if (!q) return projects
-    return projects.filter(
+    if (!q) return unarchivedProjects
+    return unarchivedProjects.filter(
       (p) =>
         p.name.toLowerCase().includes(q) ||
+        workspaceTitle(p).toLowerCase().includes(q) ||
         String(p.status || '')
           .toLowerCase()
           .includes(q),
     )
-  }, [projects, projectFilter])
+  }, [unarchivedProjects, projectFilter])
 
   /* The header stats used to be plain text sitting next to a "Last run" link —
      three things that look identical, one of which happens to be clickable.
@@ -1122,7 +947,7 @@ export default function ProjectsView() {
     ) => {
       const body = (
         <>
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+          <div className="text-[12px] font-medium text-ink-500">
             {label}
           </div>
           <div className="mt-1 text-[22px] font-semibold leading-none text-ink-950">{value}</div>
@@ -1145,17 +970,22 @@ export default function ProjectsView() {
     }
 
     const statusChip = (raw: unknown) => {
-      const s = normalizeProjectStatus(raw)
-      /* Every project is "draft" until someone changes it, so badging all 30 of
-         them printed the same word 30 times and told you nothing. Only the
-         statuses that actually distinguish a workspace earn the pixels. */
-      if (s === 'draft') return null
+      /* Only "Archived" changes behaviour (hidden from this list by default), so
+         it is the only status that earns a chip; the legacy draft / in-progress /
+         ready values are no longer editable and would just be noise. */
+      if (!isArchivedWorkspace({ status: raw })) return null
       return (
-        <span className="shrink-0 rounded-md bg-ink-100 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-ink-600">
-          {s}
+        <span className="shrink-0 rounded-md bg-amber-50 px-1.5 py-px text-[11px] font-medium text-amber-800">
+          Archived
         </span>
       )
     }
+
+    /* Display name first; the id (URLs, runs, audit) muted when it differs. */
+    const idHint = (p: Project) =>
+      showsWorkspaceId(p) ? (
+        <span className="ml-1.5 font-mono text-[11px] font-normal text-ink-400">{p.name}</span>
+      ) : null
 
     const cardMenuFor = (p: Project) => (
       /* Every row's trigger sits in its own `relative` wrapper. They all shared
@@ -1229,16 +1059,20 @@ export default function ProjectsView() {
               Clone…
             </button>
             <div className="mt-1 border-t border-ink-100 pt-1">
-              <ConfirmButton
-                label="Delete"
-                confirmLabel={`Delete ${p.name}?`}
-                danger
-                className="w-full justify-start"
-                onConfirm={() => {
+              {/* Same typed-name confirmation as Home's danger zone (deleting
+                  removes the workspace's dataset versions), not a 2-click confirm. */}
+              <button
+                type="button"
+                role="menuitem"
+                className="block w-full rounded-md px-2 py-1.5 text-left text-[12px] text-rose-700 hover:bg-rose-50"
+                onClick={() => {
                   setCardMenu(null)
-                  void removeProject(p.name)
+                  setRevealDanger(true)
+                  void open(p.name)
                 }}
-              />
+              >
+                Delete…
+              </button>
             </div>
           </div>
         )}
@@ -1319,6 +1153,17 @@ export default function ProjectsView() {
               >
                 <Database className="h-3.5 w-3.5" /> Browse shared library
               </button>
+              <button
+                type="button"
+                className="btn-primary"
+                aria-expanded={createOpen}
+                onClick={() => {
+                  if (createOpen) nameRef.current?.focus()
+                  else setCreateOpen(true)
+                }}
+              >
+                <Plus className="h-3.5 w-3.5" /> New workspace
+              </button>
             </div>
           </div>
         </div>
@@ -1338,6 +1183,42 @@ export default function ProjectsView() {
             />
           )}
 
+          {projects != null && list.length > 0 && list.length < 5 ? (
+            // Few workspaces: one summary line instead of four KPI cards.
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ink-500">
+              <span>
+                {list.length} workspace{list.length === 1 ? '' : 's'}
+              </span>
+              {allRuns ? (
+                <>
+                  <span aria-hidden>·</span>
+                  {failedCount ? (
+                    <button
+                      type="button"
+                      className={`font-medium underline-offset-2 hover:underline ${
+                        activityFilter === 'failed' ? 'text-rose-800' : 'text-rose-700'
+                      }`}
+                      aria-pressed={activityFilter === 'failed'}
+                      title={activityFilter === 'failed' ? 'Showing only failed runs — click to clear' : 'Show only failed runs in activity'}
+                      onClick={() => setActivityFilter((f) => (f === 'failed' ? 'all' : 'failed'))}
+                    >
+                      {failedCount} failed run{failedCount === 1 ? '' : 's'}
+                    </button>
+                  ) : (
+                    <span>nothing failing</span>
+                  )}
+                  <span aria-hidden>·</span>
+                  <span>
+                    {newestRun
+                      ? `last activity ${formatRelativeTime(newestRun.created_at)}${newestRun.project ? ` in ${newestRun.project}` : ''}`
+                      : 'no runs yet'}
+                  </span>
+                </>
+              ) : null}
+            </p>
+          ) : null}
+
+          {projects != null && list.length >= 5 ? (
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {statTile(
               'Workspaces',
@@ -1369,12 +1250,14 @@ export default function ProjectsView() {
               newestRun?.project ? `in ${newestRun.project}` : undefined,
             )}
           </div>
+          ) : null}
 
-          {/* Creating a workspace was a bare text box in a sidebar gutter. It is
-              the primary action of this page, so it looks like one. */}
+          {/* New workspace: inline form opened from the header button (or the
+              empty state), so the list comes first. */}
+          {createOpen ? (
           <div className="rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-end gap-2">
-              <label className="min-w-[14rem] flex-1 text-[12px] font-medium text-ink-600">
+              <label className="min-w-0 flex-1 basis-56 text-[12px] font-medium text-ink-600">
                 New workspace
                 <input
                   ref={nameRef}
@@ -1405,6 +1288,16 @@ export default function ProjectsView() {
               >
                 <Plus className="h-3.5 w-3.5" /> Create workspace
               </button>
+              <button
+                type="button"
+                className="btn-quiet mb-px"
+                onClick={() => {
+                  setCreateOpen(false)
+                  setNewName('')
+                }}
+              >
+                Cancel
+              </button>
             </div>
             <p
               id="new-workspace-hint"
@@ -1418,9 +1311,10 @@ export default function ProjectsView() {
               workspaces, so you can look at those before picking one.
             </p>
           </div>
+          ) : null}
 
           <div className="flex flex-wrap items-center gap-2">
-            <div className="relative min-w-[13rem] flex-1 sm:max-w-sm">
+            <div className="relative min-w-0 flex-1 basis-48 sm:max-w-sm">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
               <input
                 value={projectFilter}
@@ -1469,6 +1363,16 @@ export default function ProjectsView() {
                 ? 'Loading…'
                 : `${sorted.length}${sorted.length === list.length ? '' : ` of ${list.length}`} shown`}
             </span>
+            {archivedCount > 0 ? (
+              <label className="flex items-center gap-1.5 text-[12px] text-ink-500">
+                <input
+                  type="checkbox"
+                  checked={showArchived}
+                  onChange={(e) => setShowArchived(e.target.checked)}
+                />
+                Show archived ({archivedCount})
+              </label>
+            ) : null}
           </div>
 
           <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_21rem]">
@@ -1482,14 +1386,17 @@ export default function ProjectsView() {
                   description={
                     authBlocked
                       ? 'Sign in via Settings to list workspaces.'
-                      : 'Create one above to start building pipelines, or open a template to see how one is put together.'
+                      : 'Create one to start building pipelines, or open a template to see how one is put together.'
                   }
                   action={
                     <>
                       <button
                         type="button"
                         className="btn-primary"
-                        onClick={() => nameRef.current?.focus()}
+                        onClick={() => {
+                          if (createOpen) nameRef.current?.focus()
+                          else setCreateOpen(true)
+                        }}
                       >
                         <Plus className="h-3.5 w-3.5" /> New workspace
                       </button>
@@ -1497,6 +1404,17 @@ export default function ProjectsView() {
                         Browse templates
                       </button>
                     </>
+                  }
+                />
+              ) : sorted.length === 0 && !projectFilter.trim() ? (
+                <EmptyState
+                  icon={Archive}
+                  title="All workspaces are archived"
+                  description="Archived workspaces are hidden from this list. Their runs, models and pipelines are untouched."
+                  action={
+                    <button type="button" className="btn-secondary" onClick={() => setShowArchived(true)}>
+                      Show archived ({archivedCount})
+                    </button>
                   }
                 />
               ) : sorted.length === 0 ? (
@@ -1522,7 +1440,8 @@ export default function ProjectsView() {
                         className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-ink-900 after:absolute after:inset-0 after:content-[''] group-hover:text-accent-800"
                         onClick={() => void open(p.name)}
                       >
-                        {p.name}
+                        {workspaceTitle(p)}
+                        {idHint(p)}
                       </button>
                       {recentRank.has(p.name) ? (
                         <Clock className="h-3 w-3 shrink-0 text-ink-300" aria-label="Opened recently" />
@@ -1553,14 +1472,15 @@ export default function ProjectsView() {
                           <button
                             type="button"
                             className="block w-full truncate text-left text-[14px] font-semibold text-ink-950 after:absolute after:inset-0 after:content-[''] group-hover:text-accent-800"
-                            title={p.name}
+                            title={showsWorkspaceId(p) ? `${workspaceTitle(p)} (${p.name})` : p.name}
                             onClick={() => void open(p.name)}
                           >
-                            {p.name}
+                            {workspaceTitle(p)}
+                            {idHint(p)}
                           </button>
                           <div className="mt-1 flex flex-wrap items-center gap-1.5">
                             {recentRank.has(p.name) ? (
-                              <span className="inline-flex items-center gap-1 rounded-md bg-accent-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-accent-800">
+                              <span className="inline-flex items-center gap-1 rounded-md bg-accent-50 px-1.5 py-px text-[11px] font-medium text-accent-800">
                                 <Clock className="h-2.5 w-2.5" /> Recent
                               </span>
                             ) : null}
@@ -1590,7 +1510,7 @@ export default function ProjectsView() {
             <aside className="min-w-0 xl:sticky xl:top-4 xl:self-start">
               <div className="flex flex-col rounded-2xl border border-ink-200/80 bg-white shadow-sm">
                 <div className="flex items-center justify-between gap-2 border-b border-ink-100 px-4 py-3">
-                  <div className="ide-section-title">Recent activity</div>
+                  <div className={SECTION_TITLE}>Recent activity</div>
                   <div className="flex overflow-hidden rounded-md border border-ink-200 text-[11px]">
                     {(['all', 'failed'] as const).map((f) => (
                       <button
@@ -1742,27 +1662,110 @@ export default function ProjectsView() {
   }
 
   /* ── Workspace home: full pane (no second project list) ── */
-  const statusVal = normalizeProjectStatus(projects?.find((p) => p.name === selected)?.status)
+  const listedMeta = projects?.find((p) => p.name === selected)
+  const statusVal = normalizeProjectStatus(wsMeta?.status ?? listedMeta?.status)
+  const archived = statusVal === 'archived'
+  const wsTitle = workspaceTitle({ name: selected, display_name: wsMeta?.display_name ?? listedMeta?.display_name })
+  const detailsDirty =
+    (nameDraft.trim() !== '' && nameDraft.trim() !== wsTitle) ||
+    descDraft.trim() !== String(wsMeta?.description ?? '').trim()
+  const deleteScope = deleteWorkspaceSummary({
+    pipelines: projectPipelines.length,
+    datasetVersions: datasetVersionCount,
+    schedules: schedules.filter((sc) => String(sc.project || '') === selected).length,
+    linkedInputs: links.inputs.length,
+  })
   const lastRun = recentRuns[0]
   const stagingHint = projectPipelines.find((p) => p.environments?.staging)?.environments?.staging
   const prodHint = projectPipelines.find((p) => p.environments?.prod)?.environments?.prod
+  // Skeleton until this workspace's Home payload has loaded — no misleading
+  // "0 pipelines" / "Getting started" flash while fetching.
+  const homeLoading = opening || homeLoadedFor !== selected
+  const statusWord = workspaceStatusLabel(statusVal, recentRuns.length > 0, homeLoading)
+  const summaryCounts = homeSummaryLine({
+    pipelines: projectPipelines.length,
+    runs: recentRuns.length,
+    runsCapped: recentRuns.length >= HOME_RUNS_LIMIT,
+  })
+  const projectSchedules = schedules.filter((s) => String(s.project || '') === selected)
+  const setupCollapsed = !homeLoading && projectSchedules.length === 0 && links.inputs.length === 0 && !showInputsCard
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-white">
       <div className="shrink-0 border-b border-ink-200/80 bg-white px-4 py-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
-            <h1 className="truncate text-[15px] font-semibold leading-tight tracking-tight text-ink-950">
-              {selected}
-            </h1>
-            <p className="mt-0.5 text-type-meta text-ink-500">
-              <span title="Workspace status — change it under Spec & metadata">
-                Status: {WORKSPACE_STATUS_LABEL[statusVal]}
-              </span>
-              {versionFocus ? (
-                <span title="The dataset version this page is focused on"> · Dataset version {versionFocus}</span>
+            <div className="flex min-w-0 items-center gap-2">
+              <h1
+                className="truncate text-[15px] font-semibold leading-tight tracking-tight text-ink-950"
+                title={wsMeta?.description ? String(wsMeta.description) : undefined}
+              >
+                {wsTitle}
+              </h1>
+              {wsTitle !== selected ? (
+                <span className="shrink-0 font-mono text-[11px] text-ink-400" title="Workspace id">
+                  {selected}
+                </span>
               ) : null}
-            </p>
+              {archived ? (
+                <span
+                  className="shrink-0 rounded-md bg-amber-50 px-1.5 py-px text-[11px] font-medium text-amber-800"
+                  title="Archived — hidden from the Workspaces list. Unarchive under Workspace below."
+                >
+                  Archived
+                </span>
+              ) : statusWord ? (
+                <span className="shrink-0 rounded-md bg-ink-100 px-1.5 py-px text-[11px] font-medium text-ink-600">
+                  {statusWord}
+                </span>
+              ) : null}
+            </div>
+            {/* One summary line: "N pipelines · M runs · last run <name> <status> <time>".
+                Pipeline versions and datasets in use live in the tooltip. */}
+            {homeLoading ? (
+              <div className="mt-1 h-3.5 w-72 max-w-full animate-pulse rounded bg-ink-100" aria-label="Loading workspace summary" />
+            ) : (
+              <p
+                className="mt-0.5 truncate text-type-meta text-ink-500"
+                title={[
+                  stagingHint || prodHint
+                    ? `Pipeline versions: ${[stagingHint ? `staging ${stagingHint}` : '', prodHint ? `production ${prodHint}` : ''].filter(Boolean).join(' · ')}`
+                    : '',
+                  links.inputs.length ? `Datasets in use: ${links.inputs.join(', ')}` : '',
+                ]
+                  .filter(Boolean)
+                  .join('\n') || undefined}
+              >
+                <button type="button" className="hover:text-accent-800 hover:underline" onClick={() => jumpToCard('continue')}>
+                  {summaryCounts}
+                </button>
+                {lastRun ? (
+                  <>
+                    {' · '}
+                    <button
+                      type="button"
+                      className="hover:text-accent-800 hover:underline"
+                      title={`Run ${lastRun.run_id}`}
+                      onClick={openLastRun}
+                    >
+                      last run <span className="font-medium text-ink-800">{runDisplayName(lastRun)}</span>{' '}
+                      <span
+                        className={
+                          runStatusWord(lastRun.status) === 'Failed'
+                            ? 'font-medium text-rose-700'
+                            : isExceptionStatus(lastRun.status)
+                              ? 'font-medium text-amber-800'
+                              : ''
+                        }
+                      >
+                        {runStatusWord(lastRun.status)}
+                      </span>
+                      {lastRun.created_at ? ` ${formatRelativeTime(lastRun.created_at)}` : ''}
+                    </button>
+                  </>
+                ) : null}
+              </p>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <button type="button" className="btn-primary" onClick={goEditor}>
@@ -1771,89 +1774,18 @@ export default function ProjectsView() {
             <button type="button" className="btn-secondary" onClick={goTemplates}>
               From template
             </button>
-            {/* "Last run" lived here as well as in the metrics line below and in the
-                header's own run chip — three controls for one run on one screen. The
-                metrics entry wins: it shows the status and id, not just a label. */}
             <button type="button" className="btn-icon" aria-label="Refresh" onClick={() => void open(selected)}>
               <RefreshCw className="h-4 w-4" />
             </button>
           </div>
         </div>
-        {/* L0 — compact metrics (status already in subtitle). Every entry links to
-            the section it summarises; a stat that reads like a link and isn't one is
-            worse than no stat. */}
-        <dl className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-ink-600">
-          <div className="flex gap-1.5">
-            <dt className="text-ink-400">Pipelines</dt>
-            <dd>
-              <button
-                type="button"
-                className="font-medium text-accent-800 hover:underline"
-                title="Jump to the Continue list"
-                onClick={() => jumpToCard('continue')}
-              >
-                {projectPipelines.length}
-              </button>
-            </dd>
-          </div>
-          <div className="flex gap-1.5">
-            <dt
-              className="text-ink-400"
-              title="Dataset folders this workspace's pipelines read from (you choose them below)"
-            >
-              Datasets in use
-            </dt>
-            <dd>
-              <button
-                type="button"
-                className="font-medium text-accent-800 hover:underline"
-                title="Jump to Datasets in use"
-                onClick={() => jumpToCard('inputs')}
-              >
-                {links.inputs.length}
-              </button>
-            </dd>
-          </div>
-          <div className="flex gap-1.5">
-            <dt className="text-ink-400">Last run</dt>
-            <dd>
-              {lastRun ? (
-                <button
-                  type="button"
-                  className="font-medium text-accent-800 hover:underline"
-                  title={`Run ${lastRun.run_id}`}
-                  onClick={openLastRun}
-                >
-                  {runDisplayName(lastRun)} · {lastRun.status || 'unknown'}
-                </button>
-              ) : (
-                <span className="text-ink-400">—</span>
-              )}
-            </dd>
-          </div>
-          {(stagingHint || prodHint) && (
-            <div className="flex gap-1.5">
-              <dt
-                className="text-ink-400"
-                title="Published versions of this workspace's saved pipelines (graphs). Not the same as a model stage on the Models page."
-              >
-                Pipeline versions
-              </dt>
-              <dd className="font-medium text-ink-800">
-                {stagingHint ? `staging ${stagingHint}` : null}
-                {stagingHint && prodHint ? ' · ' : null}
-                {prodHint ? `production ${prodHint}` : null}
-              </dd>
-            </div>
-          )}
-        </dl>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
         <div className="mx-auto max-w-6xl space-y-6">
           {openError && <ErrorBanner message={openError} onRetry={() => void open(selected)} />}
 
-          {workspaceEmpty && !openError && !opening ? (
+          {workspaceEmpty && !openError && !homeLoading ? (
             <section className="grid gap-3 sm:grid-cols-2">
               <div className="flex flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm">
                 <h2 className="text-sm font-semibold text-ink-950">Start from template</h2>
@@ -1905,7 +1837,7 @@ export default function ProjectsView() {
           {/* Latest result — newest successful run with a headline metric. */}
           {(() => {
             const latest = pickLatestResult(recentRuns, homeModels)
-            if (!latest || opening) return null
+            if (!latest || homeLoading) return null
             const pct = isRatioMetric(latest.metric.name, latest.metric.value)
             const tone = regressionTone(latest.regression, /loss|error|mae|mse/i.test(latest.metric.name))
             return (
@@ -1914,7 +1846,7 @@ export default function ProjectsView() {
                 data-testid="home-latest-result"
               >
                 <div className="min-w-0">
-                  <div className="ide-section-title">Latest result</div>
+                  <div className={SECTION_TITLE}>Latest result</div>
                   <div className="mt-1 flex flex-wrap items-baseline gap-2">
                     <span className="text-2xl font-semibold tabular-nums text-ink-950" title={`${latest.metric.name} = ${latest.metric.value}`}>
                       {formatMetric(latest.metric.value, { percent: pct })}
@@ -1970,26 +1902,23 @@ export default function ProjectsView() {
           {/* Activity feed */}
           <section>
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <div className="ide-section-title">Activity</div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  className="ide-quiet-btn text-[11px]"
-                  onClick={() => goView('runs')}
-                >
-                  View all in Runs
-                  <ChevronRight className="h-3 w-3" />
-                </button>
-              </div>
+              <h2 className={SECTION_TITLE}>Activity</h2>
+              <button type="button" className="ide-quiet-btn text-[11px]" onClick={() => goView('runs')}>
+                View all in Runs
+                <ChevronRight className="h-3 w-3" />
+              </button>
             </div>
-            <p className="mb-2 text-[12px] text-ink-500">
-              {recentRuns.length >= 8
-                ? 'Latest 8 runs — click a row to open it, or View all in Runs for the full history.'
-                : 'Recent runs — click a row to open it.'}
-            </p>
             <div className="overflow-hidden rounded-xl border border-ink-200/70 bg-white">
-              {opening ? (
-                <div className="px-4 py-5 text-[13px] text-ink-400">Loading…</div>
+              {homeLoading ? (
+                <ul className="divide-y divide-ink-100" aria-label="Loading activity">
+                  {[0, 1, 2].map((i) => (
+                    <li key={i} className="flex items-center gap-3 px-3 py-2.5">
+                      <div className="h-3 w-40 animate-pulse rounded bg-ink-100" />
+                      <div className="h-3 flex-1 animate-pulse rounded bg-ink-50" />
+                      <div className="h-3 w-12 animate-pulse rounded bg-ink-100" />
+                    </li>
+                  ))}
+                </ul>
               ) : recentRuns.length === 0 && !schedules.some((s) => s.last_run_id) ? (
                 <EmptyState
                   compact
@@ -2004,35 +1933,60 @@ export default function ProjectsView() {
                 />
               ) : (
                 <ul className="divide-y divide-ink-100">
-                  {recentRuns.slice(0, 8).map((r) => (
-                    <li key={r.run_id}>
-                      <button
-                        type="button"
-                        className="ide-row w-full px-3"
-                        onClick={() =>
-                          useAppStore.getState().openRun(r.run_id, selected ? { project: selected } : undefined)
-                        }
-                      >
-                        <History className="h-3.5 w-3.5 shrink-0 text-ink-400" />
-                        <span className="min-w-0 flex-1 truncate text-[12px] text-ink-700" title={`Run ${r.run_id}`}>
-                          <span className="font-medium text-ink-900">{runDisplayName(r)}</span>
-                          {runMetricText(r) ? (
-                            <span className="ml-1.5 text-ink-500">· {runMetricText(r)}</span>
-                          ) : null}
-                        </span>
-                        {r.created_at ? (
-                          <time
-                            className="shrink-0 text-[11px] text-ink-400"
-                            dateTime={r.created_at}
-                            title={new Date(r.created_at).toLocaleString()}
+                  {buildActivityItems(recentRuns, HOME_ACTIVITY_ROWS, expandedFailures).map((item) => {
+                    if (item.kind === 'more-failed') {
+                      return (
+                        <li key={item.key}>
+                          <button
+                            type="button"
+                            className="ide-row w-full px-3 text-[12px] text-ink-500 hover:text-ink-800"
+                            title={item.runs.map((r) => `Run ${r.run_id}`).join('\n')}
+                            onClick={() => setExpandedFailures((prev) => new Set(prev).add(item.key))}
                           >
-                            {formatRelativeTime(r.created_at)}
-                          </time>
-                        ) : null}
-                        <StatusBadge status={r.status || 'unknown'} />
-                      </button>
-                    </li>
-                  ))}
+                            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-400" />
+                            {item.runs.length} more failed run{item.runs.length === 1 ? '' : 's'} with the same error
+                          </button>
+                        </li>
+                      )
+                    }
+                    const r = item.run
+                    const detail = activityDetail(r, shortRunId)
+                    return (
+                      <li key={r.run_id}>
+                        <button
+                          type="button"
+                          className="ide-row w-full px-3"
+                          onClick={() =>
+                            useAppStore.getState().openRun(r.run_id, selected ? { project: selected } : undefined)
+                          }
+                        >
+                          <History className="h-3.5 w-3.5 shrink-0 text-ink-400" />
+                          <span className="min-w-0 flex-1 truncate text-[12px] text-ink-700" title={detail?.text}>
+                            <span className="font-medium text-ink-900">{runDisplayName(r)}</span>
+                            {detail ? (
+                              <span className={`ml-1.5 ${detail.tone === 'error' ? 'text-rose-700' : 'text-ink-500'}`}>
+                                · {detail.text}
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="shrink-0 font-mono text-[11px] text-ink-400" title={`Run ${r.run_id}`}>
+                            {shortRunId(r.run_id)}
+                          </span>
+                          {r.created_at ? (
+                            <time
+                              className="w-16 shrink-0 text-right text-[11px] text-ink-400"
+                              dateTime={r.created_at}
+                              title={new Date(r.created_at).toLocaleString()}
+                            >
+                              {formatRelativeTime(r.created_at)}
+                            </time>
+                          ) : null}
+                          {/* Shared vocabulary; coloured badge only for exceptions (Done is plain text). */}
+                          <StatusBadge kind="run" status={r.status || 'unknown'} className="shrink-0" />
+                        </button>
+                      </li>
+                    )
+                  })}
                   {schedules
                     .filter((s) => s.last_run_id && String(s.project || '') === selected)
                     .slice(0, 3)
@@ -2050,13 +2004,14 @@ export default function ProjectsView() {
                         >
                           <CalendarClock className="h-3.5 w-3.5 shrink-0 text-ink-400" />
                           <span className="min-w-0 flex-1 truncate text-[12px] text-ink-700">
-                            Schedule {s.name || s.id} · last {shortRunId(String(s.last_run_id))}
+                            Schedule {s.name || s.id} · last run{' '}
+                            <span className="font-mono">{shortRunId(String(s.last_run_id))}</span>
                             {s.last_error ? (
-                              <span className="ml-1 text-rose-700">· error: {s.last_error}</span>
+                              <span className="ml-1 text-rose-700">· {s.last_error}</span>
                             ) : null}
                           </span>
                           <span className="text-[11px] text-ink-400">{s.pipeline || ''}</span>
-                          {s.last_error ? <StatusBadge status="failed" /> : null}
+                          {s.last_error ? <StatusBadge kind="run" status="failed" /> : null}
                         </button>
                       </li>
                     ))}
@@ -2067,7 +2022,7 @@ export default function ProjectsView() {
 
           {/* Continue / Always-on / Linked inputs sit side-by-side on wide screens instead of
               stacking full-width one after another — this is a dashboard, not a document. */}
-          <div className="grid gap-4 lg:grid-cols-3">
+          <div className={`grid gap-4 ${setupCollapsed ? '' : 'lg:grid-cols-3'}`}>
           {/* Layer 1 — continue work */}
           <section
             ref={continueRef}
@@ -2077,15 +2032,17 @@ export default function ProjectsView() {
                 right — instead of Continue having none, Always-on having one and
                 Linked inputs having an action plus a stat. */}
             <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="ide-section-title">Continue</div>
+              <div className={SECTION_TITLE}>Continue</div>
               <button type="button" className="ide-quiet-btn text-[11px]" onClick={goEditor}>
                 Open Editor
               </button>
             </div>
-            <p className="mb-2 text-[12px] text-ink-500">Open a pipeline in the Editor to keep working.</p>
             <div className="overflow-hidden rounded-xl border border-ink-200/70 bg-white">
-              {opening ? (
-                <div className="px-4 py-5 text-[13px] text-ink-400">Loading…</div>
+              {homeLoading ? (
+                <div className="space-y-2 px-3 py-3" aria-label="Loading pipelines">
+                  <div className="h-3 w-2/3 animate-pulse rounded bg-ink-100" />
+                  <div className="h-3 w-1/2 animate-pulse rounded bg-ink-100" />
+                </div>
               ) : projectPipelines.length === 0 ? (
                 <EmptyState
                   compact
@@ -2211,10 +2168,13 @@ export default function ProjectsView() {
             </div>
           </section>
 
-          {/* Always-on — schedules filtered by project when possible */}
+          {/* Always-on — schedules filtered by project when possible. When there are
+              no schedules and no datasets chosen, both cards collapse into the one
+              compact "Set up" row below instead of two big empty states. */}
+          {!setupCollapsed && (
           <section className="flex flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm">
             <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="ide-section-title">Always-on</div>
+              <div className={SECTION_TITLE}>Always-on</div>
               <button
                 type="button"
                 className="ide-quiet-btn text-[11px]"
@@ -2225,7 +2185,13 @@ export default function ProjectsView() {
             </div>
             <div className="overflow-hidden rounded-xl border border-ink-200/70 bg-white">
               {(() => {
-                const projectSchedules = schedules.filter((s) => String(s.project || '') === selected)
+                if (homeLoading) {
+                  return (
+                    <div className="px-3 py-3" aria-label="Loading schedules">
+                      <div className="h-3 w-1/2 animate-pulse rounded bg-ink-100" />
+                    </div>
+                  )
+                }
                 if (projectSchedules.length === 0) {
                   return (
                     <EmptyState
@@ -2276,7 +2242,10 @@ export default function ProjectsView() {
             </div>
           </section>
 
+          )}
+
           {/* Layer 2 — linked data (compact) */}
+          {!setupCollapsed && (
           <section
             ref={inputsRef}
             className={`flex flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm transition ${cardRing('inputs')}`}
@@ -2287,12 +2256,12 @@ export default function ProjectsView() {
                 where the card points, and Artifacts moved up to Activity where the
                 runs that produce them live. */}
             <div className="mb-2 flex items-center justify-between gap-2">
-              <div
-                className="ide-section-title"
-                title="Datasets input folders this workspace uses"
+              <h2
+                className={SECTION_TITLE}
+                title="Choose which dataset folders this workspace uses, so the Editor offers them first. Runs don’t add folders here automatically."
               >
                 Datasets in use
-              </div>
+              </h2>
               <button
                 type="button"
                 className="ide-quiet-btn text-[11px]"
@@ -2301,10 +2270,6 @@ export default function ProjectsView() {
                 Open Datasets
               </button>
             </div>
-            <p className="mb-2 text-[12px] text-ink-500">
-              Choose which dataset folders this workspace uses, so the Editor offers them first. Runs
-              don’t add folders here automatically.
-            </p>
             <div className="flex flex-wrap items-center gap-2">
               <select
                 className="rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px]"
@@ -2329,14 +2294,9 @@ export default function ProjectsView() {
                   as the card header's "Open Datasets", one row apart. */}
             </div>
             {links.inputs.length === 0 && (
-              <div className="mt-2">
-                <EmptyState
-                  compact
-                  icon={Database}
-                  title="No dataset folders chosen"
-                  description="Pick one above, or upload data in Datasets first."
-                />
-              </div>
+              <p className="mt-2 text-[12px] text-ink-500">
+                No dataset folders chosen yet — pick one above, or upload data in Datasets first.
+              </p>
             )}
             {links.inputs.length > 0 && (
               <ul className="mt-2 flex flex-wrap gap-1.5">
@@ -2358,305 +2318,215 @@ export default function ProjectsView() {
               </ul>
             )}
           </section>
+          )}
           </div>
 
-          {/* Layer 3 — advanced (collapsed by default).
-              These two drawers were bare `border-t` rows on the page background while
-              everything above them was a white card, so they read as page footer
-              rather than content and were easy to scroll past without registering.
-              They get the same card chrome as the rest of the dashboard, and their
-              summaries say what is inside before you open them. */}
+          {setupCollapsed && (
+            <section
+              className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-ink-200/80 bg-ink-50/60 px-4 py-2.5 text-[12px] text-ink-600"
+              aria-label="Set up"
+            >
+              <span className="font-medium text-ink-800">Set up</span>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-accent-800 hover:underline"
+                title="Run a pipeline on a schedule (Ops → Schedules)"
+                onClick={() => goView('system')}
+              >
+                <CalendarClock className="h-3.5 w-3.5" /> Add a schedule
+              </button>
+              <span className="text-ink-300" aria-hidden>
+                ·
+              </span>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-accent-800 hover:underline"
+                title="Choose the dataset folders this workspace uses, so the Editor offers them first"
+                onClick={() => {
+                  setShowInputsCard(true)
+                  window.setTimeout(() => jumpToCard('inputs'), 0)
+                }}
+              >
+                <Database className="h-3.5 w-3.5" /> Choose datasets
+              </button>
+            </section>
+          )}
+
+          {/* Layer 3 — workspace administration (collapsed by default).
+              Replaces "Spec & metadata" (placeholder spec/taxonomy/contract nobody
+              read, dataset versions duplicated from Datasets → Outputs, a "Restore"
+              into an unused working area, snapshots duplicating pipeline versions)
+              and "Workspace settings" (a status select with no effect, a rename that
+              orphaned run history). What is left changes something real. */}
           <details
             className="group overflow-hidden rounded-2xl border border-ink-200/80 bg-white shadow-sm"
-            open={datasetOpen}
-            onToggle={(e) => setDatasetOpen((e.currentTarget as HTMLDetailsElement).open)}
+            open={workspaceFoldOpen}
+            onToggle={(e) => setWorkspaceFoldOpen((e.currentTarget as HTMLDetailsElement).open)}
           >
             <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 px-4 py-3 text-[13px] font-medium text-ink-800 hover:bg-ink-50/70">
               <ChevronRight className="h-4 w-4 shrink-0 text-ink-400 transition group-open:rotate-90" />
-              Spec &amp; metadata
-              <span className="font-normal text-ink-400">
-                spec, taxonomy, contract, dataset versions, snapshots, diff
-              </span>
-              <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-ink-500">
-                <span className="rounded-md bg-ink-100 px-1.5 py-0.5">
-                  {versions.length} version{versions.length === 1 ? '' : 's'}
+              Workspace
+              <span className="font-normal text-ink-400">name, description, archive, clone, delete</span>
+              {archived ? (
+                <span className="ml-auto shrink-0 rounded-md bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-800">
+                  Archived
                 </span>
-                <span className="rounded-md bg-ink-100 px-1.5 py-0.5">
-                  {snapshots.length} snapshot{snapshots.length === 1 ? '' : 's'}
-                </span>
-              </span>
+              ) : null}
             </summary>
-            <div className="space-y-3 border-t border-ink-100 px-4 pb-4 pt-3">
-              <SegmentedTabs
-                value={tab}
-                options={DOC_TAB_OPTIONS}
-                onChange={setTab}
-                aria-label="Spec and metadata"
-                className="border-b border-ink-100 pb-2"
-              />
-
-              {tab === 'spec' && (
-                <section className="space-y-2">
-                  <textarea value={spec} onChange={(e) => setSpec(e.target.value)} rows={12} className="w-full rounded-lg border border-ink-200 p-3 font-mono text-[12px]" />
-                  {docErrors.spec ? (
-                    <p className="text-[12px] text-rose-700">Could not load spec ({docErrors.spec}). Saving is disabled so existing content is not overwritten — reopen the workspace to retry.</p>
-                  ) : null}
-                  <button type="button" className="btn-secondary" disabled={!canSaveDoc('spec')} onClick={() => void saveSpec()}>Save spec</button>
-                </section>
-              )}
-              {tab === 'taxonomy' && (
-                <section className="space-y-2">
-                  <textarea value={taxonomy} onChange={(e) => setTaxonomy(e.target.value)} rows={12} className="w-full rounded-lg border border-ink-200 p-3 font-mono text-[12px]" />
-                  {docErrors.taxonomy ? (
-                    <p className="text-[12px] text-rose-700">Could not load taxonomy ({docErrors.taxonomy}). Saving is disabled so existing content is not overwritten — reopen the workspace to retry.</p>
-                  ) : null}
-                  <button type="button" className="btn-secondary" disabled={!canSaveDoc('taxonomy')} onClick={() => void saveTaxonomy()}>Save taxonomy</button>
-                </section>
-              )}
-              {tab === 'contract' && (
-                <section className="space-y-2">
-                  <textarea value={contract} onChange={(e) => setContract(e.target.value)} rows={12} className="w-full rounded-lg border border-ink-200 p-3 font-mono text-[12px]" />
-                  {docErrors.contract ? (
-                    <p className="text-[12px] text-rose-700">Could not load contract ({docErrors.contract}). Saving is disabled so existing content is not overwritten — reopen the workspace to retry.</p>
-                  ) : null}
-                  <button type="button" className="btn-secondary" disabled={!canSaveDoc('contract')} onClick={() => void saveContract()}>Save contract</button>
-                </section>
-              )}
-              {tab === 'versions' && (
-                <section className="space-y-3">
-                  {/* Load stats / Restore both silently no-op on an empty versionFocus (the
-                      handlers guard on it), but with zero versions the select has nothing to
-                      pick — showing them anyway meant a user could click "Restore" with nothing
-                      selected and see it arm into the literal, broken-looking "Restore ?" (the
-                      version name interpolates to nothing). Only show this toolbar once there's
-                      something in it to select. */}
-                  {versions.length > 0 && (
-                    <div className="flex flex-wrap gap-2">
-                      <select value={versionFocus} onChange={(e) => setVersionFocus(e.target.value)} className="rounded-md border border-ink-200 px-2 py-1.5 text-[12px]">
-                        {versionOptions.map((v) => (
-                          <option key={v} value={v}>{v}</option>
-                        ))}
-                      </select>
-                      <button type="button" className="btn-secondary" onClick={() => void loadVersionDetail()}>Load stats</button>
-                      <ConfirmButton label="Restore" confirmLabel={`Restore ${versionFocus}?`} onConfirm={() => void restoreVersion()} />
-                    </div>
-                  )}
-                  {versions.length === 0 ? (
-                    <EmptyState
-                      compact
-                      icon={Database}
-                      title="No dataset versions"
-                      description="Run a pipeline that writes dataset output."
+            <div className="space-y-4 border-t border-ink-100 px-4 pb-4 pt-3">
+              <div className="grid gap-3 sm:max-w-xl">
+                <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] items-start gap-2 text-[12px] text-ink-500">
+                  <label htmlFor="ws-display-name" className="pt-1">
+                    Display name
+                  </label>
+                  <div className="min-w-0">
+                    <input
+                      id="ws-display-name"
+                      value={nameDraft}
+                      maxLength={120}
+                      onChange={(e) => setNameDraft(e.target.value)}
+                      className="w-full rounded-md border border-ink-200 px-2 py-1 text-[12px] text-ink-900"
                     />
-                  ) : (
-                    <KeyValue data={versions} />
-                  )}
-                  {versionStats != null && <KeyValue data={versionStats} />}
-                  {versionSamples != null && <CollapsibleJson value={versionSamples} label="Samples" />}
-                </section>
-              )}
-              {tab === 'snapshots' && (
-                <section className="space-y-3">
-                  <div className="flex gap-2">
-                    <input id="snapshot-name" value={snapshotName} onChange={(e) => setSnapshotName(e.target.value)} placeholder="snapshot-name" className="rounded-md border border-ink-200 px-2 py-1.5 text-[12px]" />
+                    <p className="mt-1 text-[11px] text-ink-400">
+                      ID <span className="font-mono">{selected}</span> — used in links, runs and the audit log; it
+                      does not change.
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] items-start gap-2 text-[12px] text-ink-500">
+                  <label htmlFor="ws-description" className="pt-1">
+                    Description
+                  </label>
+                  <textarea
+                    id="ws-description"
+                    value={descDraft}
+                    rows={2}
+                    maxLength={500}
+                    placeholder="What this workspace is for"
+                    onChange={(e) => setDescDraft(e.target.value)}
+                    className="w-full rounded-md border border-ink-200 px-2 py-1 text-[12px] text-ink-900"
+                  />
+                </div>
+                <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-2">
+                  <span />
+                  <div>
                     <button
                       type="button"
                       className="btn-secondary"
-                      disabled={!snapshotName.trim()}
-                      title={!snapshotName.trim() ? 'Type a snapshot name first' : undefined}
-                      onClick={() => void createSnapshot()}
+                      disabled={!detailsDirty || homeLoading}
+                      title={!detailsDirty ? 'Nothing changed' : undefined}
+                      onClick={() => void saveDetails()}
                     >
-                      Create
+                      Save details
                     </button>
                   </div>
-                  {snapshots.length === 0 ? (
-                    <EmptyState compact icon={EmptyCamera} title="No snapshots" description="Create one above to pin dataset state." />
-                  ) : (
-                    <ul className="space-y-1">
-                      {snapshots.map((s, i) => {
-                        const name =
-                          typeof s === 'string'
-                            ? s
-                            : String((s as { snapshot_name?: string; name?: string }).snapshot_name ?? (s as { name?: string }).name ?? `snapshot-${i}`)
-                        return (
-                          <li key={name} className="flex items-center justify-between rounded-md border border-ink-100 px-2 py-1.5">
-                            <span className="font-mono text-[12px]">{name}</span>
-                            <ConfirmButton label="Restore" confirmLabel={`Restore ${name}?`} onConfirm={() => void restoreSnapshot(name)} />
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  )}
-                </section>
-              )}
-              {tab === 'diff' && (
-                <section className="space-y-3">
-                  {/* Needs two versions to compare — with fewer, the selects have nothing
-                      meaningful to offer and "Diff" would fire with empty version_a/version_b. */}
-                  {versionOptions.length >= 2 ? (
-                    <div className="flex flex-wrap gap-2">
-                      <select value={diffA} onChange={(e) => setDiffA(e.target.value)} className="rounded-md border border-ink-200 px-2 py-1.5 text-[12px]">
-                        {versionOptions.map((v) => (
-                          <option key={`a-${v}`} value={v}>{v}</option>
-                        ))}
-                      </select>
-                      <span className="self-center text-[12px] text-ink-400">vs</span>
-                      <select value={diffB} onChange={(e) => setDiffB(e.target.value)} className="rounded-md border border-ink-200 px-2 py-1.5 text-[12px]">
-                        {versionOptions.map((v) => (
-                          <option key={`b-${v}`} value={v}>{v}</option>
-                        ))}
-                      </select>
-                      <button type="button" className="btn-secondary" onClick={() => void runDiff()}>Diff</button>
+                </div>
+                <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] items-start gap-2 border-t border-ink-100 pt-3 text-[12px] text-ink-500">
+                  <span className="pt-1">{archived ? 'Archived' : 'Archive'}</span>
+                  <div className="min-w-0">
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={homeLoading}
+                      onClick={() => void setArchived(!archived)}
+                    >
+                      {archived ? (
+                        <>
+                          <ArchiveRestore className="h-3.5 w-3.5" /> Unarchive workspace
+                        </>
+                      ) : (
+                        <>
+                          <Archive className="h-3.5 w-3.5" /> Archive workspace
+                        </>
+                      )}
+                    </button>
+                    <p className="mt-1 text-[11px] text-ink-400">
+                      Archived workspaces are hidden from the Workspaces list (toggle “Show archived”). Nothing is
+                      deleted and they still open and run.
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] items-start gap-2 border-t border-ink-100 pt-3 text-[12px] text-ink-500">
+                  <label htmlFor="ws-clone-to" className="pt-1">
+                    Clone as
+                  </label>
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 gap-2">
+                      <input
+                        id="ws-clone-to"
+                        value={cloneTo}
+                        onChange={(e) => setCloneTo(e.target.value)}
+                        aria-describedby="ws-clone-scope"
+                        className="min-w-0 flex-1 rounded-md border border-ink-200 px-2 py-1 font-mono text-[12px]"
+                      />
+                      <button
+                        type="button"
+                        className="btn-secondary shrink-0"
+                        disabled={!cloneTo.trim() || cloneTo.trim() === selected || !isValidWorkspaceName(cloneTo)}
+                        title={
+                          !cloneTo.trim()
+                            ? 'Enter a new workspace id first'
+                            : cloneTo.trim() === selected
+                              ? 'Pick a different id for the copy'
+                              : !isValidWorkspaceName(cloneTo)
+                                ? WORKSPACE_NAME_HINT
+                                : undefined
+                        }
+                        onClick={() => void clone()}
+                      >
+                        <Copy className="h-3.5 w-3.5" /> Clone
+                      </button>
                     </div>
-                  ) : (
-                    <EmptyState
-                      compact
-                      icon={EmptyGitCompare}
-                      title="Need two versions"
-                      description="Run a pipeline that writes dataset output more than once, then compare versions here."
-                    />
-                  )}
-                  {diffResult != null && <KeyValue data={diffResult} />}
-                  {(() => {
-                    const ids = lineageIds(lineage)
-                    if (!ids.runId && !ids.artifactId) return null
-                    return (
-                      <div className="flex flex-wrap gap-2">
-                        {ids.runId ? (
-                          <button type="button" className="btn-secondary" onClick={() => openTrace({ runId: ids.runId })}>Open Lineage</button>
-                        ) : null}
-                        {ids.runId ? (
-                          <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={() => openArtifacts({ runId: ids.runId })}
-                          >
-                            Run outputs
-                          </button>
-                        ) : ids.artifactId ? (
-                          <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={() => openArtifacts({ artifactId: ids.artifactId })}
-                          >
-                            Run outputs
-                          </button>
-                        ) : null}
-                      </div>
-                    )
-                  })()}
-                  <CollapsibleJson value={lineage} label="Lineage JSON" />
-                </section>
-              )}
-            </div>
-          </details>
-
-          {/* Layer 4 — settings.
-              Was a single undifferentiated flex row: a status select, two bare text
-              inputs whose only labels were `aria-label` (so sighted users saw two
-              identical prefilled boxes and had to infer which was Rename and which
-              was Clone from the button beside it), and Delete sitting in the same
-              row as everything else. Each action is now its own labelled row, and
-              the destructive one is separated out. */}
-          <details className="group overflow-hidden rounded-2xl border border-ink-200/80 bg-white shadow-sm">
-            <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 px-4 py-3 text-[13px] font-medium text-ink-800 hover:bg-ink-50/70">
-              <ChevronRight className="h-4 w-4 shrink-0 text-ink-400 transition group-open:rotate-90" />
-              Workspace settings
-              <span className="font-normal text-ink-400">status, rename, clone, delete</span>
-              <span className="ml-auto shrink-0 rounded-md bg-ink-100 px-1.5 py-0.5 text-[11px] text-ink-500">
-                {statusVal}
-              </span>
-            </summary>
-            <div className="border-t border-ink-100 px-4 pb-4 pt-3">
-              <div className="grid gap-3 sm:max-w-xl">
-                <label className="grid grid-cols-[6rem_minmax(0,1fr)] items-center gap-2 text-[12px] text-ink-500">
-                  Status
-                  <select
-                    className="w-full rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px] text-ink-800"
-                    value={statusVal}
-                    onChange={(e) => void setStatus(e.target.value)}
-                  >
-                    {STATUSES.map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </select>
-                </label>
-                <div className="grid grid-cols-[6rem_minmax(0,1fr)] items-center gap-2 text-[12px] text-ink-500">
-                  <label htmlFor="ws-rename-to">Rename to</label>
-                  <div className="flex min-w-0 gap-2">
-                    <input
-                      id="ws-rename-to"
-                      value={renameTo}
-                      onChange={(e) => setRenameTo(e.target.value)}
-                      className="min-w-0 flex-1 rounded-md border border-ink-200 px-2 py-1 text-[12px]"
-                    />
-                    <button
-                      type="button"
-                      className="btn-secondary shrink-0"
-                      disabled={!renameTo.trim() || renameTo.trim() === selected}
-                      title={
-                        !renameTo.trim()
-                          ? 'Enter a name first'
-                          : renameTo.trim() === selected
-                            ? 'That is already the current name'
-                            : undefined
-                      }
-                      onClick={() => void rename()}
-                    >
-                      <Pencil className="h-3.5 w-3.5" /> Rename
-                    </button>
-                  </div>
-                </div>
-                <div className="grid grid-cols-[6rem_minmax(0,1fr)] items-center gap-2 text-[12px] text-ink-500">
-                  <label htmlFor="ws-clone-to">Clone as</label>
-                  <div className="flex min-w-0 gap-2">
-                    <input
-                      id="ws-clone-to"
-                      value={cloneTo}
-                      onChange={(e) => setCloneTo(e.target.value)}
-                      className="min-w-0 flex-1 rounded-md border border-ink-200 px-2 py-1 text-[12px]"
-                    />
-                    <button
-                      type="button"
-                      className="btn-secondary shrink-0"
-                      disabled={!cloneTo.trim() || cloneTo.trim() === selected}
-                      title={
-                        !cloneTo.trim()
-                          ? 'Enter a name first'
-                          : cloneTo.trim() === selected
-                            ? 'Pick a different name for the copy'
-                            : undefined
-                      }
-                      onClick={() => void clone()}
-                    >
-                      <Copy className="h-3.5 w-3.5" /> Clone
-                    </button>
-                  </div>
-                </div>
-                <div className="grid grid-cols-[6rem_minmax(0,1fr)] items-center gap-2 text-[12px] text-ink-500">
-                  <span>Deploy</span>
-                  <div>
-                    <button type="button" className="btn-secondary" onClick={useInEdge}>
-                      Use in Ship
-                    </button>
+                    <p id="ws-clone-scope" className="mt-1 text-[11px] text-ink-400">
+                      {CLONE_SCOPE_TEXT}
+                    </p>
                   </div>
                 </div>
               </div>
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50/50 px-3 py-2.5">
+              <div ref={dangerZoneRef} className="rounded-xl border border-rose-200 bg-rose-50/50 px-3 py-3">
                 {/* Scope verified against ProjectManager.delete: it rmtree's
-                    workspace/datasets/output/{name} only — artifacts under
-                    workspace/artifacts/{name}/runs are a separate tree and survive. */}
-                <p className="text-[12px] text-rose-900">
-                  <span className="font-medium">Delete this workspace.</span> Removes its pipelines,
-                  spec/taxonomy/contract, links and dataset output versions. Artifacts and run
-                  history are kept.
-                </p>
-                <ConfirmButton
-                  label="Delete"
-                  confirmLabel={`Delete ${selected}?`}
-                  danger
-                  onConfirm={() => void remove()}
-                />
+                    workspace/datasets/output/{id} and disables its schedules; runs,
+                    artifacts, models and the audit log live elsewhere and survive. */}
+                <div className="text-[12px] font-semibold text-rose-900">Danger zone — delete workspace</div>
+                <div className="mt-2 grid gap-3 text-[12px] sm:grid-cols-2">
+                  <div>
+                    <div className="font-medium text-rose-900">Removed</div>
+                    <ul className="mt-1 list-disc space-y-0.5 pl-4 text-rose-900/90">
+                      {deleteScope.removed.map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <div className="font-medium text-ink-800">Kept</div>
+                    <ul className="mt-1 list-disc space-y-0.5 pl-4 text-ink-700">
+                      {deleteScope.kept.map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap items-end gap-2">
+                  <label className="min-w-0 flex-1 basis-56 text-[12px] text-rose-900">
+                    Type <span className="font-mono font-semibold">{selected}</span> to confirm
+                    <input
+                      value={deleteConfirm}
+                      onChange={(e) => setDeleteConfirm(e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-label={`Type ${selected} to confirm deletion`}
+                      className="mt-1 w-full rounded-md border border-rose-200 bg-white px-2 py-1 font-mono text-[12px]"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="btn-danger mb-px"
+                    disabled={deleteConfirm.trim() !== selected}
+                    onClick={() => void remove()}
+                  >
+                    Delete workspace
+                  </button>
+                </div>
               </div>
             </div>
           </details>

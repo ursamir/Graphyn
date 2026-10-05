@@ -100,7 +100,11 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
       }
     }
     if (c === 'agent') return { view: 'builder', workspaceId: W }
-    return { view: 'projects', workspaceId: W, canonical: `/workspaces/${b}` }
+    // `/workspaces/:id/templates`, `/workspaces/:id/plugins`, `/workspaces/:id/builder`, …
+    // used to silently land on Home. Redirect aliases; 404 anything else.
+    const wsAlias = resolveRouteAlias(pathname, W)
+    if (wsAlias) return aliasTo(wsAlias, search)
+    return { view: 'projects', workspaceId: W, notFound: true }
   }
 
   if (a === 'templates') return { view: 'templates' }
@@ -167,7 +171,151 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
     if (b === 'access') return { view: 'access' as AppView }
   }
 
+  // Short / legacy spellings (`/plugins`, `/ops`, `/runs`, …) → their real route.
+  const alias = resolveRouteAlias(pathname, rememberedWorkspace())
+  if (alias) return aliasTo(alias, search)
+
   return { view: 'projects', notFound: true }
+}
+
+/** Parse `target` and mark it as the canonical URL to replace the alias with. */
+function aliasTo(target: string, search: string): ParsedPath {
+  const parsed = parsePathname(target, search)
+  // A redirect target must itself be a real route — never loop or chain.
+  if (parsed.notFound) return { view: 'projects', notFound: true }
+  return { ...parsed, canonical: parsed.canonical ?? target }
+}
+
+/** Last active workspace (localStorage) — scopes `/runs`, `/editor`, … aliases. */
+function rememberedWorkspace(): string | null {
+  try {
+    return globalThis.localStorage?.getItem('graphyn.activeProject')?.trim() || null
+  } catch {
+    return null
+  }
+}
+
+/** Global pages: alias word → canonical path. */
+const GLOBAL_ALIAS: Record<string, string> = {
+  plugins: '/library/plugins',
+  plugin: '/library/plugins',
+  library: '/library/plugins',
+  packs: '/library/plugins',
+  templates: '/templates',
+  template: '/templates',
+  ops: '/admin/ops',
+  system: '/admin/ops',
+  admin: '/admin/ops',
+  maintenance: '/admin/ops',
+  credentials: '/admin/credentials',
+  secrets: '/admin/credentials',
+  access: '/admin/access',
+  workers: '/deploy/workers',
+  worker: '/deploy/workers',
+  fleet: '/deploy/workers',
+  deploy: '/deploy/workers',
+  inbox: '/agent/inbox',
+  proposals: '/agent/inbox',
+  agent: '/agent/inbox',
+}
+
+/** Workspace pages: alias word → segment under `/workspaces/:id` ('' = Home). */
+const WORKSPACE_ALIAS: Record<string, string> = {
+  home: '',
+  overview: '',
+  editor: 'editor',
+  builder: 'editor',
+  canvas: 'editor',
+  runs: 'runs',
+  run: 'runs',
+  history: 'runs',
+  compare: 'runs/compare',
+  experiments: 'runs/compare',
+  models: 'models',
+  model: 'models',
+  ship: 'ship',
+  edge: 'ship',
+  devices: 'ship/devices',
+  datasets: 'datasets',
+  dataset: 'datasets',
+  data: 'datasets',
+}
+
+/** Workspace segments with a global fallback when no workspace is known. */
+const WORKSPACE_SEGMENT_NO_WS: Record<string, string> = {
+  datasets: '/library/datasets',
+}
+
+/** `/workspaces/:id/<seg>` segments that are already real routes (never aliased). */
+const REAL_WORKSPACE_SEGMENTS = new Set(['editor', 'runs', 'models', 'datasets', 'ship', 'agent'])
+
+/**
+ * Redirect target for a short / legacy / mis-scoped URL, or null when the
+ * path is either a real route or truly unknown (→ 404).
+ *
+ * - `/plugins` → `/library/plugins`, `/ops` → `/admin/ops`, `/templates/…`,
+ *   `/credentials`, `/workers`, `/inbox`, `/library` → Plugins, `/admin` → Ops …
+ * - Workspace pages (`/runs`, `/editor`, `/models`, `/ship`, `/datasets`,
+ *   `/home`, `/compare`) → `/workspaces/<workspaceId>/…`, keeping any tail
+ *   (`/runs/abc/logs` → `/workspaces/W/runs/abc/logs`). Without a workspace →
+ *   `/workspaces` (picker); `/datasets` → `/library/datasets`.
+ * - `/workspaces/:id/<global page>` (templates, plugins, ops, …) → the global page;
+ *   `/workspaces/:id/<alias>` (builder, data, edge, compare, home) → the real segment.
+ * - `/library/templates` → `/templates`, `/admin/system` → `/admin/ops`,
+ *   `/admin/workers` → `/deploy/workers`.
+ *
+ * Pure apart from its arguments — `workspaceId` is the active workspace.
+ */
+export function resolveRouteAlias(pathname: string, workspaceId?: string | null): string | null {
+  const raw = pathname.replace(/\/+$/, '').split('/').filter(Boolean)
+  if (raw.length === 0) return null
+  const parts = raw.map((p) => p.toLowerCase())
+  const W = workspaceId?.trim() || null
+  const wsBase = (id: string) => `/workspaces/${encodeURIComponent(id)}`
+
+  if (parts[0] === 'workspaces') {
+    if (raw.length < 3) return null
+    const id = decodeURIComponent(raw[1])
+    const seg = parts[2]
+    if (REAL_WORKSPACE_SEGMENTS.has(seg)) return null
+    if (seg in WORKSPACE_ALIAS) {
+      const target = WORKSPACE_ALIAS[seg]
+      const tail = raw.slice(3).join('/')
+      const base = target ? `${wsBase(id)}/${target}` : wsBase(id)
+      return tail && target && !target.includes('/') ? `${base}/${tail}` : base
+    }
+    if (seg in GLOBAL_ALIAS) return GLOBAL_ALIAS[seg]
+    return null
+  }
+
+  // Two-segment legacy spellings under real prefixes.
+  if (parts[0] === 'library' && parts[1] === 'templates') return '/templates'
+  if (parts[0] === 'library' && parts[1] === 'plugin') return '/library/plugins'
+  if (parts[0] === 'admin' && (parts[1] === 'system' || parts[1] === 'maintenance')) return '/admin/ops'
+  if (parts[0] === 'admin' && (parts[1] === 'workers' || parts[1] === 'fleet')) return '/deploy/workers'
+  if (parts[0] === 'admin' && parts[1] === 'inbox') return '/agent/inbox'
+  if (parts[0] === 'deploy' && parts[1] === 'fleet') return '/deploy/workers'
+
+  const head = parts[0]
+  if (head in WORKSPACE_ALIAS) {
+    const target = WORKSPACE_ALIAS[head]
+    if (!W) return WORKSPACE_SEGMENT_NO_WS[target] ?? '/workspaces'
+    const base = target ? `${wsBase(W)}/${target}` : wsBase(W)
+    const tail = raw.slice(1).join('/')
+    // Keep a tail only for single-segment targets (`/runs/<id>/logs`), never `/compare/x`.
+    return tail && target && !target.includes('/') ? `${base}/${tail}` : base
+  }
+  // Only a bare global word redirects (`/plugins`), plus a short tail on the
+  // pages that own sub-routes (`/inbox/<proposal>`) — `/plugins/foo/bar` is a 404.
+  if (head in GLOBAL_ALIAS) {
+    if (raw.length === 1) return GLOBAL_ALIAS[head]
+    if ((head === 'inbox' || head === 'proposals') && raw.length === 2) {
+      return `/agent/inbox/${raw[1]}`
+    }
+    return null
+  }
+  if (head === 'projects' || head === 'workspace') return W ? wsBase(W) : '/workspaces'
+  return null
 }
 
 /** Global routes that need no workspace, keyed by the words people type. */

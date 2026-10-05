@@ -3,18 +3,18 @@
 Bounded Context:  Application Layer — MCP Interface
 Responsibility:   Token authentication middleware for MCP tool invocations.
 Owns:             check_auth() — validates _meta.auth_token against
-                  GRAPHYN_API_TOKEN. Reads token on every call (no caching)
+                  GRAPHYN_API_TOKEN or a GRAPHYN_API_TOKENS mapped token. Reads token on every call (no caching)
                   so token rotation takes effect immediately.
 Public Surface:   check_auth(arguments) -> dict | None
 Must NOT:         Cache the API token at module level. Must not import from
                   app.domain or any execution module.
-Dependencies:     app.core.config (api_token, auth_required), stdlib (typing).
+Dependencies:     app.core.config (api_token, auth_required),
+                  app.core.trust.identity (token map), stdlib (typing).
 Reason To Change: Auth scheme changes (e.g. JWT, OAuth), or token location
                   in arguments changes.
 """
 from __future__ import annotations
 
-import hmac
 from typing import Any
 
 from app.core.config import api_token as _api_token
@@ -45,8 +45,11 @@ def check_auth(arguments: dict[str, Any]) -> dict[str, Any] | None:
     Fail-closed: GRAPHYN_AUTH_REQUIRED=1 or GRAPHYN_ENV=production/staging
     rejects requests when GRAPHYN_API_TOKEN is empty.
     """
-    token = _api_token()  # read on every call — never cached at module level
-    if not token:
+    from app.core.trust.identity import token_accepted, token_auth_configured
+
+    # Read on every call — never cached at module level. GRAPHYN_API_TOKEN
+    # or any GRAPHYN_API_TOKENS mapped token is accepted.
+    if not (_api_token() or token_auth_configured()):
         if _auth_required():
             return {
                 "error": True,
@@ -57,7 +60,7 @@ def check_auth(arguments: dict[str, Any]) -> dict[str, Any] | None:
         return None  # development convenience — allow all
 
     provided = (arguments or {}).get("_meta", {}).get("auth_token", "") or ""
-    if not hmac.compare_digest(str(provided), token):
+    if not token_accepted(str(provided)):
         return {
             "error": True,
             "error_type": "unauthorized",

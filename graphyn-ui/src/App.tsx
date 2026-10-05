@@ -20,6 +20,8 @@ import {
   EyeOff,
   Box,
   Shield,
+  KeyRound,
+  ChevronDown,
 } from 'lucide-react'
 import { apiJson, ApiError, getApiToken, setApiToken } from './api/client'
 import { fetchAllPages, unwrapList } from './api/unwrapList'
@@ -34,10 +36,13 @@ import { ErrorBoundary, ToastHost } from './components/ui'
 import { ViewErrorBoundary } from './components/ViewErrorBoundary'
 import { SplitPane } from './components/SplitPane'
 import { LayoutModeControl, LayoutPrefsProvider, LAYOUT_KEYS } from './layout'
-import { shortRunId } from './lib/format'
+import { runDisplayName, runStatusLabel } from './lib/runDisplay'
 import { KeyboardHelp } from './components/KeyboardHelp'
 import { CommandPalette } from './components/CommandPalette'
 import { NotificationBell } from './components/NotificationBell'
+import { ActorName } from './components/ActorName'
+import { notifyIdentityChanged, useMe } from './lib/identity'
+import { DEVICES_ENABLED } from './features/ship/devicesFlag'
 import BuilderView from './features/builder/BuilderView'
 import RunsView from './features/runs/RunsView'
 import PluginsView from './features/plugins/PluginsView'
@@ -58,7 +63,9 @@ import { paths } from './routes/paths'
 import { pathForView } from './routes/viewMap'
 import { navigatePath, parsePathname, panelToFocus, stripLegacyAppHash } from './routes/parsePath'
 import { JUMP_KEYS } from './routes/nav'
+import { NAV_SECTIONS, navHighlightFor, navSectionFor } from './routes/navSections'
 import { usePolling } from './lib/usePolling'
+import { BREAKPOINTS, sidebarModeFor, useViewport } from './lib/viewport'
 import { installGlobalDetailsMenuDismiss, OPEN_MODE_EXPLAINER_EVENT, useMenuDismiss } from './lib/menus'
 import { sharedFetch } from './lib/sharedFetch'
 import { checkRunExists } from './lib/runExists'
@@ -74,56 +81,24 @@ import { confirmNavigation } from './lib/navigationGuard'
 import { NotFoundView } from './components/NotFoundView'
 import { WorkspaceNotFoundView } from './components/WorkspaceNotFoundView'
 
-type NavItem = { id: AppView; label: string; icon: React.ComponentType<{ className?: string }> }
-type NavGroup = { title: string; items: NavItem[] }
+/** Sidebar icons — structure lives in routes/navSections.ts (pure, tested). */
+const NAV_ICON: Partial<Record<AppView, React.ComponentType<{ className?: string }>>> = {
+  projects: FolderKanban,
+  builder: Workflow,
+  runs: History,
+  models: Box,
+  edge: Cpu,
+  data: Database,
+  templates: BookOpen,
+  plugins: Package,
+  proposals: GitPullRequest,
+  workers: Server,
+  credentials: KeyRound,
+  system: Activity,
+  access: Shield,
+}
 
-/**
- * Workspace strip — always the same rows (VS Code Activity/Explorer pattern).
- * Home is always enabled; Editor/Runs/Models/Ship/Datasets require activeProject
- * (disabled + "Open a workspace first" otherwise). Shape never changes.
- */
-const WORKSPACE_NAV_ITEMS: NavItem[] = [
-  { id: 'projects', label: 'Home', icon: FolderKanban },
-  { id: 'builder', label: 'Editor', icon: Workflow },
-  { id: 'runs', label: 'Runs', icon: History },
-  { id: 'models', label: 'Models', icon: Box },
-  { id: 'edge', label: 'Ship', icon: Cpu },
-  { id: 'data', label: 'Datasets', icon: Database },
-]
-
-/**
- * Fixed groups below the strip — same titles/items whether or not a workspace
- * is open. Models / Ship / Datasets live only on the workspace strip (not here).
- */
-const NAV_GROUPS: NavGroup[] = [
-  {
-    title: 'Build',
-    items: [
-      { id: 'templates', label: 'Templates', icon: BookOpen },
-      { id: 'proposals', label: 'Agent inbox', icon: GitPullRequest },
-    ],
-  },
-  {
-    title: 'Library',
-    items: [
-      { id: 'plugins', label: 'Plugins', icon: Package },
-    ],
-  },
-  {
-    title: 'Deploy',
-    items: [
-      { id: 'workers', label: 'Worker fleet', icon: Server },
-    ],
-  },
-  {
-    title: 'Admin',
-    items: [
-      { id: 'credentials', label: 'Credentials', icon: Shield },
-      { id: 'system', label: 'Ops', icon: Activity },
-      { id: 'access', label: 'Access', icon: Shield },
-    ],
-  },
-]
+const ADMIN_OPEN_KEY = 'graphyn.nav.adminOpen'
 
 const VIEW_LABEL: Record<AppView, string> = {
   builder: 'Editor',
@@ -151,28 +126,28 @@ const NAV_HINTS: Partial<Record<AppView, string>> = {
   experiments: 'Compare runs — prefer Runs → Compare when a workspace is open',
   plugins: 'Plugins — install node packs for the Editor catalog',
   data: 'Datasets — shared Inputs/Outputs library (not run downloads)',
-  edge: 'Ship — edge package and devices',
+  edge: DEVICES_ENABLED ? 'Ship — edge package and devices' : 'Ship — package a trained model for devices',
   workers: 'Worker fleet — distributed workers (Mode B only)',
   projects: 'Home — workspace status, pipelines, linked data, runs',
   credentials: 'Credentials — platform connections & secrets by kind',
   system: 'Ops — health, schedules, webhooks, cleanup, audit',
   models: 'Models — registry stages and prod approve',
   access: 'Access — actor identity and future RBAC',
-  devices: 'Devices — fleet inventory (API pending)',
+  ...(DEVICES_ENABLED ? { devices: 'Devices — fleet inventory (API pending)' } : {}),
 }
 
-/** Compact last-run observe control — Overview / Run outputs / Compare live in a menu. */
-/** Dot colour for a finished run's outcome, folded into the run chip so the
- *  header doesn't carry a second pill saying the same thing in words. */
-const OUTCOME_DOT: Record<string, string> = {
-  failed: 'bg-rose-500',
-  cancelled: 'bg-ink-400',
-  succeeded: 'bg-emerald-500',
-  running: 'bg-amber-500',
+/** Last-run control: "Last run · <pipeline> · <status>" + an actions menu
+ *  (Overview / Run outputs / Compare). Status text is coloured only for
+ *  exceptions (failed / running / cancelled …); Done stays muted. */
+const OUTCOME_TEXT: Record<string, string> = {
+  failed: 'text-rose-700',
+  cancelled: 'text-ink-600',
+  running: 'text-amber-800',
 }
 
 function LastRunMenu({
   runId,
+  runName,
   showCompare,
   outcome,
   outcomeLabel,
@@ -180,8 +155,11 @@ function LastRunMenu({
   onOpenTrace,
   onOpenArtifacts,
   onOpenCompare,
+  compact = false,
 }: {
+  compact?: boolean
   runId: string
+  runName?: string | null
   showCompare: boolean
   outcome?: string | null
   outcomeLabel?: string | null
@@ -195,29 +173,59 @@ function LastRunMenu({
   const close = React.useCallback(() => setOpen(false), [])
   // Escape / outside click / "another menu opened" all close it (lib/menus).
   useMenuDismiss(open, close, rootRef)
+  const name = runName || runDisplayName({ run_id: runId })
   return (
     <div
       ref={rootRef}
-      className="relative flex items-center gap-0.5"
-      title={outcomeLabel ? `Last run ${outcomeLabel.toLowerCase()} · ${runId}` : `Last run ${runId}`}
+      className="relative flex min-w-0 items-center gap-0.5"
+      title={`Last run · ${name}${outcomeLabel ? ` · ${outcomeLabel}` : ''} (${runId})`}
     >
-      <button
-        type="button"
-        className="inline-flex items-center gap-1.5 rounded-l-full border border-ink-200 bg-white px-2.5 py-0.5 font-mono text-[11px] text-ink-700 hover:border-accent-400 hover:text-accent-800"
-        onClick={onOpenRun}
-      >
-        {outcome ? (
+      {compact ? (
+        // Narrow header: icon + status dot; name/status live in the tooltip.
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded-l-full border border-ink-200 bg-white px-2 py-1 text-ink-600 hover:border-accent-400 hover:text-accent-800"
+          aria-label={`Last run · ${name}${outcomeLabel ? ` · ${outcomeLabel}` : ''}`}
+          onClick={onOpenRun}
+        >
+          <History className="h-3.5 w-3.5" />
           <span
             aria-hidden
-            className={clsx('h-1.5 w-1.5 shrink-0 rounded-full', OUTCOME_DOT[outcome] ?? 'bg-ink-300')}
+            className={clsx(
+              'h-1.5 w-1.5 shrink-0 rounded-full',
+              outcome === 'running'
+                ? 'animate-pulse bg-amber-500'
+                : outcome === 'failed'
+                  ? 'bg-rose-500'
+                  : outcome === 'cancelled'
+                    ? 'bg-ink-400'
+                    : outcome
+                      ? 'bg-emerald-500'
+                      : 'bg-ink-300',
+            )}
           />
-        ) : null}
-        Last {shortRunId(runId)}
-        {outcomeLabel ? <span className="sr-only"> — {outcomeLabel}</span> : null}
-      </button>
+        </button>
+      ) : (
       <button
         type="button"
-        className="rounded-r-full border border-l-0 border-ink-200 bg-white px-1.5 py-0.5 text-[11px] text-ink-600 hover:border-accent-300 hover:text-accent-800"
+        className="inline-flex min-w-0 max-w-[18rem] items-center gap-1 rounded-l-full border border-ink-200 bg-white px-2.5 py-0.5 text-[11px] text-ink-600 hover:border-accent-400 hover:text-accent-800"
+        onClick={onOpenRun}
+      >
+        {outcome === 'running' ? (
+          <span aria-hidden className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500" />
+        ) : null}
+        <span className="hidden shrink-0 text-ink-400 xl:inline">Last run ·</span>
+        <span className="min-w-0 truncate font-medium text-ink-800">{name}</span>
+        {outcomeLabel ? (
+          <span className={clsx('shrink-0', (outcome && OUTCOME_TEXT[outcome]) || 'text-ink-500')}>
+            · {outcomeLabel}
+          </span>
+        ) : null}
+      </button>
+      )}
+      <button
+        type="button"
+        className="self-stretch rounded-r-full border border-l-0 border-ink-200 bg-white px-1.5 py-0.5 text-[11px] text-ink-600 hover:border-accent-300 hover:text-accent-800"
         aria-expanded={open}
         aria-haspopup="menu"
         aria-label="Last run actions"
@@ -271,6 +279,88 @@ function LastRunMenu({
   )
 }
 
+/** Icon-rail popover for a collapsible nav section (Admin): one icon, items in a menu. */
+function RailSectionMenu({
+  title,
+  active,
+  badge,
+  items,
+  onSelect,
+}: {
+  title: string
+  active: boolean
+  badge: number
+  items: Array<{
+    id: AppView
+    label: string
+    Icon: React.ComponentType<{ className?: string }>
+    active: boolean
+    hint?: string
+    badge: number
+  }>
+  onSelect: (id: AppView) => void
+}) {
+  const [open, setOpen] = React.useState(false)
+  const rootRef = React.useRef<HTMLDivElement>(null)
+  const close = React.useCallback(() => setOpen(false), [])
+  useMenuDismiss(open, close, rootRef)
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        className={clsx(
+          'relative flex h-8 w-8 items-center justify-center rounded-md transition',
+          active ? 'bg-accent-50 text-accent-800' : 'text-ink-500 hover:bg-white hover:text-ink-900',
+        )}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`${title} menu`}
+        title={`${title}: ${items.map((i) => i.label).join(', ')}`}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Shield className="h-4 w-4" />
+        {badge > 0 ? (
+          <span aria-hidden className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-amber-500" />
+        ) : null}
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label={title}
+          className="absolute left-full top-0 z-50 ml-1.5 min-w-[11rem] rounded-xl border border-ink-200 bg-white py-1 shadow-lg"
+        >
+          <div className="px-3 pb-1 pt-0.5 text-[11px] font-semibold text-ink-400">{title}</div>
+          {items.map(({ id, label, Icon, active: itemActive, hint, badge: itemBadge }) => (
+            <button
+              key={id}
+              type="button"
+              role="menuitem"
+              title={hint}
+              aria-current={itemActive ? 'page' : undefined}
+              className={clsx(
+                'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-ink-50',
+                itemActive ? 'font-medium text-accent-900' : 'text-ink-800',
+              )}
+              onClick={() => {
+                setOpen(false)
+                onSelect(id)
+              }}
+            >
+              <Icon className="h-3.5 w-3.5 shrink-0 text-ink-500" />
+              <span className="flex-1">{label}</span>
+              {itemBadge > 0 ? (
+                <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
+                  {itemBadge}
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export default function App() {
   const view = useAppStore((s) => s.view)
   const setView = useAppStore((s) => s.setView)
@@ -307,6 +397,8 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = React.useState(false)
   const [modeExplainerOpen, setModeExplainerOpen] = React.useState(false)
   const [tokenDraft, setTokenDraft] = React.useState('')
+  /** `GET /me` — header Settings tooltip + identity line in Settings (null on older APIs). */
+  const { me } = useMe()
   const [tokenVisible, setTokenVisible] = React.useState(false)
   const [authHonesty, setAuthHonesty] = React.useState<{
     auth_required?: boolean
@@ -315,27 +407,83 @@ export default function App() {
   const settingsPanelRef = React.useRef<HTMLDivElement>(null)
   const settingsTriggerRef = React.useRef<HTMLElement | null>(null)
   const tokenInputRef = React.useRef<HTMLInputElement>(null)
-  const [navOpen, setNavOpen] = React.useState(() => {
-    if (typeof window === 'undefined') return true
+  // Sidebar: the persisted preference only applies ≥1024 (laptop/desktop).
+  // Tablet is always the icon rail; phone hides it behind an overlay drawer
+  // (lib/viewport.ts `sidebarModeFor`). `navDrawerOpen` is transient.
+  const [navPref, setNavPref] = React.useState<'open' | 'collapsed' | null>(() => {
     try {
       const stored = localStorage.getItem('graphyn.layout.navOpen')
-      if (stored === '0') return false
-      if (stored === '1') return true
+      if (stored === '0') return 'collapsed'
+      if (stored === '1') return 'open'
     } catch {
       /* ignore */
     }
-    return window.matchMedia('(min-width: 768px)').matches
+    return null
   })
-  const [narrow, setNarrow] = React.useState(() =>
-    typeof window !== 'undefined' ? !window.matchMedia('(min-width: 768px)').matches : false,
-  )
+  const [navDrawerOpen, setNavDrawerOpen] = React.useState(false)
+  const { width: viewportWidth } = useViewport()
+  const sidebarMode = sidebarModeFor(viewportWidth, navPref)
+  const compactHeader = viewportWidth < BREAKPOINTS.laptop
+  // Drawer only exists below the full-sidebar mode; close it when we leave.
+  React.useEffect(() => {
+    if (sidebarMode === 'full') setNavDrawerOpen(false)
+  }, [sidebarMode])
+  React.useEffect(() => {
+    if (!navDrawerOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setNavDrawerOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [navDrawerOpen])
+  // The app shell never scrolls: each pane scrolls itself. `overflow: hidden`
+  // boxes can still be scrolled by scrollIntoView/focus, which pushed the header
+  // off-screen when a detail panel grew — snap such boxes back (index.css also
+  // uses `overflow: clip` on html/body/#root).
+  React.useEffect(() => {
+    const onScroll = (e: Event) => {
+      const t = e.target
+      if (t === document) {
+        if (window.scrollY || window.scrollX) window.scrollTo(0, 0)
+        return
+      }
+      if (t instanceof HTMLElement && (t.hasAttribute('data-shell-noscroll') || t === document.body || t.id === 'root')) {
+        if (t.scrollTop) t.scrollTop = 0
+        if (t.scrollLeft) t.scrollLeft = 0
+      }
+    }
+    document.addEventListener('scroll', onScroll, true)
+    return () => document.removeEventListener('scroll', onScroll, true)
+  }, [])
+  const [adminOpen, setAdminOpen] = React.useState(() => {
+    try {
+      return localStorage.getItem(ADMIN_OPEN_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
   React.useEffect(() => {
     try {
-      localStorage.setItem('graphyn.layout.navOpen', navOpen ? '1' : '0')
+      localStorage.setItem(ADMIN_OPEN_KEY, adminOpen ? '1' : '0')
     } catch {
       /* ignore */
     }
-  }, [navOpen])
+  }, [adminOpen])
+  const toggleSidebar = () => {
+    if (viewportWidth >= BREAKPOINTS.laptop) {
+      // Laptop/desktop: the user's persisted choice (full ↔ icon rail).
+      const next = sidebarMode === 'full' ? 'collapsed' : 'open'
+      setNavPref(next)
+      try {
+        localStorage.setItem('graphyn.layout.navOpen', next === 'open' ? '1' : '0')
+      } catch {
+        /* ignore */
+      }
+      return
+    }
+    // Tablet / phone: temporary overlay drawer with the full navigation.
+    setNavDrawerOpen((o) => !o)
+  }
 
   const [locationKey, setLocationKey] = React.useState(
     () => `${window.location.pathname}${window.location.search}`,
@@ -367,6 +515,9 @@ export default function App() {
     const canonical = parsedLocation.canonical
     if (!canonical || window.location.pathname === canonical) return
     window.history.replaceState(null, '', `${canonical}${window.location.search}`)
+    // Re-parse the canonical URL (replaceState fires no popstate) so the
+    // sidebar highlight / 404 state follow the redirect target.
+    setLocationKey(`${window.location.pathname}${window.location.search}`)
   }, [parsedLocation])
 
   /**
@@ -386,6 +537,7 @@ export default function App() {
   const [projectLatest, setProjectLatest] = React.useState<{
     run_id: string
     status?: string
+    name?: string
   } | null>(null)
   React.useEffect(() => {
     let cancelled = false
@@ -403,7 +555,9 @@ export default function App() {
         ).filter((r) => r && typeof r.run_id === 'string')
         if (cancelled) return
         const first = runs.length > 0 ? runs[0] : null
-        setProjectLatest(first ? { run_id: first.run_id, status: first.status } : null)
+        setProjectLatest(
+          first ? { run_id: first.run_id, status: first.status, name: runDisplayName(first) } : null,
+        )
         // Keep polling while the latest run is still non-terminal — otherwise
         // this one-shot fetch freezes the header chip at "Running" forever
         // once the user navigates away from whatever started the run (the
@@ -422,17 +576,6 @@ export default function App() {
       if (timer) window.clearTimeout(timer)
     }
   }, [activeProject, lastRunId, isRunning])
-
-  React.useEffect(() => {
-    const mq = window.matchMedia('(min-width: 768px)')
-    const apply = () => {
-      setNarrow(!mq.matches)
-      setNavOpen(mq.matches)
-    }
-    apply()
-    mq.addEventListener('change', apply)
-    return () => mq.removeEventListener('change', apply)
-  }, [])
 
   const refreshCatalog = React.useCallback(async () => {
     try {
@@ -730,6 +873,7 @@ export default function App() {
     setApiToken(tokenDraft)
     setSettingsOpen(false)
     pushToast(tokenDraft.trim() ? 'API token saved' : 'API token cleared', 'success')
+    notifyIdentityChanged()
     void refreshCatalog()
   }
 
@@ -746,12 +890,12 @@ export default function App() {
       pushToast('Open a workspace first', 'info')
       setView('projects')
       navigatePath(paths.workspaces())
-      if (narrow) setNavOpen(false)
+      setNavDrawerOpen(false)
       return
     }
     setView(id)
     navigatePath(path)
-    if (narrow) setNavOpen(false)
+    setNavDrawerOpen(false)
   }
 
   /** Switch workspace: clear active project, then show the Workspaces picker. */
@@ -760,7 +904,7 @@ export default function App() {
     closeProject()
     setView('projects')
     navigatePath(paths.workspaces())
-    if (narrow) setNavOpen(false)
+    setNavDrawerOpen(false)
   }
 
   React.useEffect(() => {
@@ -835,7 +979,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [view, settingsOpen, helpOpen, paletteOpen, modeExplainerOpen, narrow])
+  }, [view, settingsOpen, helpOpen, paletteOpen, modeExplainerOpen])
 
   /** Prefer Overview-style project latest run when a workspace is open; keep lastRunProject scoping. */
   // Only runs of the *active* workspace drive the header chip — a run opened
@@ -903,30 +1047,42 @@ export default function App() {
     ? statusMessage && statusMessage !== 'Running…'
       ? statusMessage
       : 'Running'
-    : statusMessage ||
-      (effectiveOutcome === 'failed'
-        ? 'Failed'
-        : effectiveOutcome === 'cancelled'
-          ? 'Cancelled'
-          : effectiveOutcome === 'succeeded'
-            ? 'Succeeded'
-            : effectiveOutcome === 'running'
-              ? 'Running'
-              : null)
-  const chipTone = isRunning
-    ? 'bg-amber-100 text-amber-900'
-    : effectiveOutcome === 'failed'
-      ? 'bg-rose-100 text-rose-800'
-      : effectiveOutcome === 'cancelled'
-        ? 'bg-ink-100 text-ink-600'
-        : effectiveOutcome === 'succeeded'
-          ? 'bg-emerald-100 text-emerald-800'
-          : effectiveOutcome === 'running'
-            ? 'bg-amber-100 text-amber-900'
-            : 'bg-ink-100 text-ink-600'
+    : statusMessage || (effectiveOutcome ? runStatusLabel(effectiveOutcome) : null)
+  // Shared vocabulary (lib/runDisplay): Done / Failed / Running / Queued / …
+  const lastRunStatusLabel = isRunning
+    ? 'Running'
+    : usingProjectLatest && projectStatus
+      ? runStatusLabel(projectStatus)
+      : effectiveOutcome
+        ? runStatusLabel(effectiveOutcome)
+        : null
+  const lastRunName =
+    usingProjectLatest && projectLatest?.run_id === shownLastRunId ? projectLatest?.name ?? null : null
+
+  /** Quiet backend/auth indicator: dot + one word, details in the tooltip. */
+  const modeWord = backendMode === 'distributed' ? 'Distributed' : 'Local'
+  const authPhrase =
+    bootStatus === 401
+      ? 'sign-in required'
+      : authHonesty?.auth_required
+        ? 'signed in'
+        : authHonesty
+          ? 'no sign-in required'
+          : null
+  const statusIndicator =
+    bootStatus === 401
+      ? { word: 'Sign in', dot: 'bg-amber-500', text: 'text-amber-900', tip: 'Sign-in required — paste your API token in Settings' }
+      : bootError
+        ? { word: 'Offline', dot: 'bg-rose-500', text: 'text-rose-800', tip: `Can't reach the API (${bootError}) — click for Mode A vs Mode B` }
+        : {
+            word: modeWord,
+            dot: backendMode === 'distributed' ? 'bg-accent-500' : 'bg-emerald-500',
+            text: 'text-ink-500',
+            tip: `${modeWord} backend${authPhrase ? ` · ${authPhrase}` : ''} — click for Mode A vs Mode B`,
+          }
 
   const mainContent = (
-    <main className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+    <main className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden" data-shell-noscroll>
       {window.location.pathname.startsWith('/login') ? (
         <LoginView />
       ) : parsedLocation.notFound ? (
@@ -967,169 +1123,272 @@ export default function App() {
     return jump ? `${hint} · Press ${jump}` : hint
   }
 
-  const navAside = (
+  // Highlight follows the URL: nested routes map to their parent row
+  // (Compare → Runs, Devices → Ship); a 404 highlights nothing.
+  const highlightId = parsedLocation.notFound || urlWorkspaceMissing ? null : navHighlightFor(view)
+  const activeSection = highlightId ? navSectionFor(highlightId) : null
+  const adminExpanded = adminOpen || activeSection === 'admin'
+
+  const renderNavRow = (id: AppView, label: string, opts: { workspaceScoped?: boolean } = {}) => {
+    const Icon = NAV_ICON[id] ?? Box
+    const active = highlightId === id
+    const isHome = id === 'projects'
+    // Work items other than Home need a workspace (greyed + tooltip otherwise).
+    const enabled = !opts.workspaceScoped || isHome || Boolean(activeProject)
+    return (
+      <button
+        key={id}
+        type="button"
+        disabled={!enabled}
+        aria-disabled={!enabled}
+        title={enabled ? navTitle(id) : 'Open a workspace first — Home stays available'}
+        onClick={() => go(id)}
+        className={clsx(
+          'ide-row',
+          !enabled && 'cursor-not-allowed opacity-35 grayscale-[0.35]',
+          active && 'is-active font-medium',
+          enabled && !active && 'text-ink-700',
+        )}
+        aria-current={active ? 'page' : undefined}
+        data-strip-role={opts.workspaceScoped ? (isHome ? 'home' : 'workspace-scoped') : undefined}
+        data-strip-enabled={opts.workspaceScoped ? (enabled ? 'true' : 'false') : undefined}
+      >
+        <Icon
+          className={clsx(
+            'h-3.5 w-3.5 shrink-0',
+            active ? 'text-accent-800' : enabled ? 'text-ink-500' : 'text-ink-300',
+          )}
+        />
+        <span className="flex-1 truncate">{label}</span>
+        {id === 'proposals' && pendingProposalCount > 0 && (
+          <span
+            className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900"
+            title={`${pendingProposalCount} pending proposal${pendingProposalCount === 1 ? '' : 's'}`}
+          >
+            {pendingProposalCount}
+          </span>
+        )}
+      </button>
+    )
+  }
+
+  const renderNavAside = (asDrawer: boolean) => (
     <aside
-              className={clsx(
-                'z-30 flex h-full min-h-0 flex-col border-r border-ink-200/80 bg-[#ebedf0]',
-                narrow ? 'absolute inset-y-0 left-0 w-[13.5rem] shadow-xl' : 'w-full',
-              )}
-            >
-              {/*
-                One fixed shape, always: Workspace strip (Home/Editor/Runs/Models/Ship/Datasets,
-                disabled without activeProject) then the same four NAV_GROUPS. Only enabled
-                state and highlight change — never a different collapsed Library&admin chrome.
-              */}
-              <nav className="flex-1 overflow-y-auto px-1.5 py-2" aria-label="Primary">
-                <div className="mb-2 space-y-0.5">
-                  <div className="flex items-center justify-between gap-2 px-2 pb-1">
-                    {activeProject ? (
-                      <>
-                        <div
-                          className="truncate text-[10px] font-semibold uppercase tracking-wide text-ink-400"
-                          title={activeProject}
-                        >
-                          Workspace: {activeProject}
-                        </div>
-                        <button
-                          type="button"
-                          className="shrink-0 text-[10px] font-medium text-ink-400 hover:text-ink-800"
-                          title="Switch workspace — show workspace picker"
-                          onClick={switchProject}
-                        >
-                          Switch
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <div className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">
-                          No workspace open
-                        </div>
-                        <button
-                          type="button"
-                          className="shrink-0 text-[10px] font-medium text-accent-800 hover:text-accent-950"
-                          title="Open a workspace"
-                          onClick={() => go('projects')}
-                        >
-                          Open
-                        </button>
-                      </>
-                    )}
-                  </div>
-                  <div className="space-y-0.5">
-                    {WORKSPACE_NAV_ITEMS.map(({ id, label, icon: Icon }) => {
-                      const active = view === id
-                      const isHome = id === 'projects'
-                      // Home always clickable; other strip items greyed-disabled without workspace.
-                      const enabled = isHome || Boolean(activeProject)
-                      return (
-                        <button
-                          key={`ws-${id}`}
-                          type="button"
-                          disabled={!enabled}
-                          aria-disabled={!enabled}
-                          title={
-                            enabled
-                              ? navTitle(id)
-                              : 'Open a workspace first — Home stays available'
-                          }
-                          onClick={() => go(id)}
-                          className={clsx(
-                            'ide-row',
-                            !enabled && 'cursor-not-allowed opacity-35 grayscale-[0.35]',
-                            active && 'is-active font-medium',
-                            enabled && !active && (isHome ? 'font-medium text-ink-900' : 'text-ink-700'),
-                          )}
-                          aria-current={active ? 'page' : undefined}
-                          data-strip-role={isHome ? 'home' : 'workspace-scoped'}
-                          data-strip-enabled={enabled ? 'true' : 'false'}
-                        >
-                          <Icon
-                            className={clsx(
-                              'h-3.5 w-3.5 shrink-0',
-                              active
-                                ? 'text-accent-800'
-                                : enabled
-                                  ? isHome
-                                    ? 'text-accent-700'
-                                    : 'text-ink-500'
-                                  : 'text-ink-300',
-                            )}
-                          />
-                          <span className="flex-1 truncate">{label}</span>
-                          {isHome && enabled && !activeProject ? (
-                            <span
-                              className={clsx(
-                                'shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide',
-                                active
-                                  ? 'bg-ink-100 text-ink-600'
-                                  : 'bg-accent-100 text-accent-900',
-                              )}
-                              title="No workspace open — Home opens the workspace picker"
-                            >
-                              Pick
-                            </span>
-                          ) : null}
-                        </button>
-                      )
-                    })}
-                  </div>
+      className={clsx(
+        'z-30 flex h-full min-h-0 flex-col border-r border-ink-200/80 bg-[#ebedf0]',
+        asDrawer ? 'absolute inset-y-0 left-0 w-[min(15rem,85vw)] shadow-xl' : 'w-full',
+      )}
+      aria-label={asDrawer ? 'Navigation' : undefined}
+    >
+      {/*
+        Fixed shape: workspace switcher, then Work (workspace-scoped, disabled
+        without a workspace), Library, and a collapsible Admin section (closed
+        by default; auto-open while one of its pages is active).
+      */}
+      <nav className="flex-1 overflow-y-auto px-1.5 py-2" aria-label="Primary">
+        <div className="mb-2 flex items-center justify-between gap-2 rounded-md px-2 py-1">
+          {activeProject ? (
+            <>
+              <div className="min-w-0">
+                <div className="text-[10px] text-ink-400">Workspace</div>
+                <div className="truncate text-[12px] font-semibold text-ink-900" title={activeProject}>
+                  {activeProject}
                 </div>
-                {NAV_GROUPS.map((group) => (
-                  <div key={group.title} className="mb-3">
-                    <div className="ide-section-title px-2 pb-1">{group.title}</div>
-                    <div className="space-y-0.5">
-                      {group.items.map(({ id, label, icon: Icon }) => {
-                        const active = view === id
-                        return (
-                          <button
-                            key={id}
-                            type="button"
-                            title={navTitle(id)}
-                            onClick={() => go(id)}
-                            className={clsx('ide-row', active && 'is-active font-medium')}
-                            aria-current={active ? 'page' : undefined}
-                          >
-                            <Icon className={clsx('h-3.5 w-3.5', active ? 'text-accent-800' : 'text-ink-400')} />
-                            <span className="flex-1 truncate">{label}</span>
-                            {id === 'proposals' && pendingProposalCount > 0 && (
-                              <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
-                                {pendingProposalCount}
-                              </span>
-                            )}
-                          </button>
-                        )
-                      })}
-                    </div>
+              </div>
+              <button
+                type="button"
+                className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-ink-500 hover:bg-white hover:text-ink-900"
+                title="Switch workspace — show workspace picker"
+                onClick={switchProject}
+              >
+                Switch
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="text-[12px] text-ink-500">No workspace open</div>
+              <button
+                type="button"
+                className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-accent-800 hover:bg-white hover:text-accent-950"
+                title="Open a workspace"
+                onClick={() => go('projects')}
+              >
+                Open
+              </button>
+            </>
+          )}
+        </div>
+        {NAV_SECTIONS.map((section) => {
+          if (section.collapsible) {
+            const childActive = activeSection === section.id
+            return (
+              <div key={section.id} className="mb-3" data-nav-section={section.id}>
+                <button
+                  type="button"
+                  className={clsx(
+                    'flex w-full items-center gap-1 rounded-md px-2 pb-1 pt-0.5 text-left hover:text-ink-900',
+                    childActive && !adminExpanded && 'text-accent-900',
+                  )}
+                  aria-expanded={adminExpanded}
+                  aria-controls={`nav-section-${section.id}`}
+                  title={
+                    childActive
+                      ? `${section.title} — contains the current page`
+                      : adminExpanded
+                        ? `Hide ${section.title}`
+                        : `Show ${section.title}: ${section.items.map((i) => i.label).join(', ')}`
+                  }
+                  onClick={() => {
+                    if (childActive) return
+                    setAdminOpen((o) => !o)
+                  }}
+                >
+                  <ChevronDown
+                    className={clsx(
+                      'h-3 w-3 shrink-0 text-ink-400 transition-transform',
+                      !adminExpanded && '-rotate-90',
+                    )}
+                  />
+                  <span className="ide-section-title flex-1">{section.title}</span>
+                  {!adminExpanded && pendingProposalCount > 0 ? (
+                    <span
+                      className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900"
+                      title={`${pendingProposalCount} pending in Agent inbox`}
+                    >
+                      {pendingProposalCount}
+                    </span>
+                  ) : null}
+                </button>
+                {adminExpanded ? (
+                  <div id={`nav-section-${section.id}`} className="space-y-0.5">
+                    {section.items.map((item) => renderNavRow(item.id, item.label))}
                   </div>
-                ))}
-              </nav>
-            </aside>
+                ) : null}
+              </div>
+            )
+          }
+          return (
+            <div key={section.id} className="mb-3" data-nav-section={section.id}>
+              <div className="ide-section-title px-2 pb-1">{section.title}</div>
+              <div className="space-y-0.5">
+                {section.items.map((item) =>
+                  renderNavRow(item.id, item.label, { workspaceScoped: section.id === 'work' }),
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </nav>
+    </aside>
   )
 
+  /** Tablet (and collapsed laptop/desktop) icon rail: icons + tooltips; Admin as an icon menu. */
+  const renderRailButton = (id: AppView, label: string, opts: { workspaceScoped?: boolean } = {}) => {
+    const Icon = NAV_ICON[id] ?? Box
+    const active = highlightId === id
+    const enabled = !opts.workspaceScoped || id === 'projects' || Boolean(activeProject)
+    return (
+      <button
+        key={id}
+        type="button"
+        disabled={!enabled}
+        aria-disabled={!enabled}
+        aria-label={label}
+        aria-current={active ? 'page' : undefined}
+        title={enabled ? navTitle(id) ?? label : `${label} — open a workspace first`}
+        onClick={() => go(id)}
+        className={clsx(
+          'relative flex h-8 w-8 items-center justify-center rounded-md transition',
+          active ? 'bg-accent-50 text-accent-800' : 'text-ink-500 hover:bg-white hover:text-ink-900',
+          !enabled && 'cursor-not-allowed opacity-35',
+        )}
+      >
+        <Icon className="h-4 w-4" />
+        {id === 'proposals' && pendingProposalCount > 0 ? (
+          <span aria-hidden className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-amber-500" />
+        ) : null}
+      </button>
+    )
+  }
+
+  const navRail = (
+    <aside
+      className="z-20 flex h-full w-12 shrink-0 flex-col items-center border-r border-ink-200/80 bg-[#ebedf0] py-2"
+      aria-label="Primary"
+      data-sidebar-mode="rail"
+    >
+      <button
+        type="button"
+        className="mb-2 flex h-8 w-8 items-center justify-center rounded-md border border-ink-200 bg-white text-[11px] font-semibold text-ink-700 hover:border-accent-300"
+        title={activeProject ? `Workspace: ${activeProject} — switch workspace` : 'No workspace open — open one'}
+        aria-label={activeProject ? `Workspace ${activeProject} — switch` : 'Open a workspace'}
+        onClick={activeProject ? switchProject : () => go('projects')}
+      >
+        {activeProject ? activeProject.slice(0, 2).toUpperCase() : '+'}
+      </button>
+      <nav className="flex min-h-0 flex-1 flex-col items-center gap-0.5 overflow-y-auto" aria-label="Primary">
+        {NAV_SECTIONS.map((section, idx) =>
+          section.collapsible ? (
+            <div key={section.id} className="mt-1 border-t border-ink-200/80 pt-1.5" data-nav-section={section.id}>
+              <RailSectionMenu
+                title={section.title}
+                active={activeSection === section.id}
+                badge={pendingProposalCount}
+                items={section.items.map((item) => ({
+                  id: item.id,
+                  label: item.label,
+                  Icon: NAV_ICON[item.id] ?? Box,
+                  active: highlightId === item.id,
+                  hint: navTitle(item.id),
+                  badge: item.id === 'proposals' ? pendingProposalCount : 0,
+                }))}
+                onSelect={(id) => go(id)}
+              />
+            </div>
+          ) : (
+            <div
+              key={section.id}
+              className={clsx('flex flex-col items-center gap-0.5', idx > 0 && 'mt-1 border-t border-ink-200/80 pt-1.5')}
+              data-nav-section={section.id}
+            >
+              {section.items.map((item) =>
+                renderRailButton(item.id, item.label, { workspaceScoped: section.id === 'work' }),
+              )}
+            </div>
+          ),
+        )}
+      </nav>
+    </aside>
+  )
 
   return (
     <ErrorBoundary>
       <LayoutPrefsProvider>
-      <div className="flex h-full flex-col overflow-hidden bg-[#f0f2f5]">
-        <header className="relative z-40 flex h-11 shrink-0 items-center justify-between gap-3 border-b border-ink-200/80 bg-white px-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <button
-              type="button"
-              className="btn-quiet md:hidden"
-              onClick={() => setNavOpen((o) => !o)}
-              aria-label={navOpen ? 'Close navigation' : 'Open navigation'}
-            >
-              <Menu className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              className="btn-quiet hidden md:inline-flex"
-              onClick={() => setNavOpen((o) => !o)}
-              aria-label={navOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-            >
-              <PanelLeftClose className={clsx('h-4 w-4', !navOpen && 'rotate-180')} />
-            </button>
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent-500 text-ink-950">
+      <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[#f0f2f5]" data-shell-noscroll>
+        <header className="relative z-40 flex h-11 shrink-0 items-center justify-between gap-2 border-b border-ink-200/80 bg-white px-2 sm:gap-3 sm:px-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {sidebarMode === 'full' || viewportWidth >= BREAKPOINTS.laptop ? (
+              <button
+                type="button"
+                className="btn-quiet shrink-0"
+                onClick={toggleSidebar}
+                aria-label={sidebarMode === 'full' ? 'Collapse sidebar' : 'Expand sidebar'}
+                title={sidebarMode === 'full' ? 'Collapse sidebar to icons' : 'Expand sidebar'}
+              >
+                <PanelLeftClose className={clsx('h-4 w-4', sidebarMode !== 'full' && 'rotate-180')} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn-quiet shrink-0"
+                onClick={toggleSidebar}
+                aria-expanded={navDrawerOpen}
+                aria-label={navDrawerOpen ? 'Close navigation' : 'Open navigation'}
+              >
+                <Menu className="h-4 w-4" />
+              </button>
+            )}
+            <div className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent-500 text-ink-950 min-[400px]:flex">
               <Boxes className="h-3.5 w-3.5" />
             </div>
             <div className="min-w-0 leading-tight">
@@ -1142,8 +1401,9 @@ export default function App() {
               ) : null}
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            {/* Single status chip: mode + connection (Auth banner handles 401 CTA) */}
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+            {/* Quiet status indicator: dot + "Local" / "Distributed" (exceptions
+                "Sign in" / "Offline" coloured). Mode + auth details live in the tooltip. */}
             <button
               type="button"
               onClick={() => {
@@ -1152,62 +1412,42 @@ export default function App() {
               }}
               aria-haspopup="dialog"
               aria-expanded={modeExplainerOpen}
+              aria-label={statusIndicator.tip}
               className={clsx(
-                'hidden items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium sm:inline-flex',
-                bootStatus === 401
-                  ? 'border-amber-200 bg-amber-50 text-amber-900'
-                  : bootError
-                    ? 'border-rose-200 bg-rose-50 text-rose-800'
-                    : backendMode === 'distributed'
-                      ? 'border-accent-300 bg-accent-50 text-accent-950'
-                      : 'border-ink-200 bg-white text-ink-600 hover:border-ink-300',
+                'hidden items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[11px] font-medium hover:bg-ink-50 sm:inline-flex',
+                statusIndicator.text,
               )}
-              title={
-                bootStatus === 401
-                  ? 'Paste API token in Settings'
-                  : bootError
-                    ? `${bootError} — click for Mode A vs Mode B`
-                    : 'Click for Mode A vs Mode B'
-              }
+              title={statusIndicator.tip}
+              data-testid="backend-status"
             >
-              {bootStatus === 401
-                ? 'Sign in'
-                : bootError
-                  ? 'Offline'
-                  : backendMode === 'distributed'
-                    ? 'Distributed'
-                    : 'Local'}
-              {authHonesty?.auth_required && !bootError && bootStatus !== 401 ? (
-                <span className="text-ink-400">· Auth</span>
-              ) : null}
+              <span aria-hidden className={clsx('h-1.5 w-1.5 rounded-full', statusIndicator.dot)} />
+              {statusIndicator.word}
             </button>
             {(() => {
-              // A finished run used to get TWO adjacent chips for the same thing: a
-              // bare outcome word ("Succeeded" — at what?) and the "Last <id>" menu
-              // right beside it. The outcome is now a dot inside that run chip, so
-              // only the in-flight case (and a status with no run id yet) still needs
-              // a pill of its own.
+              // One run indicator: the Last-run control carries name + status.
+              // A separate pill only for an in-flight run with no id yet, or a
+              // progress message ("Running 3/7 nodes") beside the Last-run control.
               if (!chipLabel) return null
-              if (isRunning) {
+              if (isRunning && (!shownLastRunId || chipLabel !== 'Running')) {
                 return (
-                  <span className={clsx('inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold', chipTone)}>
-                    {chipLabel}
+                  <span className="hidden max-w-[14rem] items-center gap-1.5 truncate rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-medium text-amber-900 ring-1 ring-inset ring-amber-200 lg:inline-flex">
+                    <span aria-hidden className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500" />
+                    <span className="truncate">{chipLabel}</span>
                   </span>
                 )
               }
-              if (!shownLastRunId) {
+              if (!isRunning && !shownLastRunId) {
                 return (
-                  <span className={clsx('hidden max-w-[12rem] truncate rounded-full px-2.5 py-0.5 text-[11px] font-medium lg:inline', chipTone)}>
+                  <span className="hidden max-w-[12rem] truncate text-[11px] text-ink-500 lg:inline">
                     {chipLabel}
                   </span>
                 )
               }
               return null
             })()}
-            {/* One Switch only — sidebar Workspace strip. Header keeps a single
-                "Open workspace" / "Back to …" affordance on global pages when the
-                URL has no workspace id (hidden on the Workspaces picker itself). */}
-            {(!activeProject || !workspaceOpen) && !(!activeProject && view === 'projects') && (
+            {/* "Back to <workspace>" / "Open workspace" duplicates the sidebar's
+                workspace switcher — show it only while the sidebar is hidden. */}
+            {sidebarMode !== 'full' && !compactHeader && (!activeProject || !workspaceOpen) && !(!activeProject && view === 'projects') && (
               <button
                 type="button"
                 className={clsx(
@@ -1240,9 +1480,11 @@ export default function App() {
             {shownLastRunId && (
               <LastRunMenu
                 runId={shownLastRunId}
+                compact={compactHeader}
+                runName={lastRunName}
                 showCompare
-                outcome={isRunning ? null : effectiveOutcome}
-                outcomeLabel={isRunning ? null : chipLabel}
+                outcome={isRunning ? 'running' : effectiveOutcome}
+                outcomeLabel={lastRunStatusLabel}
                 onOpenRun={guarded(() =>
                   openRun(shownLastRunId, activeProject ? { project: activeProject } : undefined),
                 )}
@@ -1270,6 +1512,11 @@ export default function App() {
               className="btn-icon"
               onClick={openSettings}
               aria-label="Settings"
+              title={
+                me && me.actor
+                  ? `Settings · signed in as ${me.actor}${me.actorVerified ? ' (verified)' : ' (not verified)'}`
+                  : 'Settings'
+              }
             >
               <Settings className="h-4 w-4" />
             </button>
@@ -1287,16 +1534,19 @@ export default function App() {
           </div>
         )}
 
-        <div className="relative flex min-h-0 flex-1 overflow-hidden">
-          {navOpen && narrow && (
-            <button
-              type="button"
-              className="absolute inset-0 z-20 bg-ink-950/30 md:hidden"
-              aria-label="Close navigation"
-              onClick={() => setNavOpen(false)}
-            />
-          )}
-          {navOpen && !narrow ? (
+        <div className="relative flex min-h-0 flex-1 overflow-hidden" data-sidebar-mode={sidebarMode} data-shell-noscroll>
+          {navDrawerOpen && sidebarMode !== 'full' ? (
+            <>
+              <button
+                type="button"
+                className="absolute inset-0 z-20 cursor-default bg-ink-950/30"
+                aria-label="Close navigation"
+                onClick={() => setNavDrawerOpen(false)}
+              />
+              {renderNavAside(true)}
+            </>
+          ) : null}
+          {sidebarMode === 'full' ? (
             <SplitPane
               className="h-full min-h-0 w-full flex-1"
               storageKey={LAYOUT_KEYS.nav}
@@ -1305,11 +1555,11 @@ export default function App() {
               maxSize={300}
               paneOverflow="hidden"
             >
-              {[navAside, mainContent]}
+              {[renderNavAside(false), mainContent]}
             </SplitPane>
           ) : (
             <>
-              {navOpen ? navAside : null}
+              {sidebarMode === 'rail' ? navRail : null}
               {mainContent}
             </>
           )}
@@ -1418,6 +1668,17 @@ export default function App() {
                   <X className="h-4 w-4" />
                 </button>
               </div>
+              {me ? (
+                <div className="mb-3 flex flex-wrap items-center gap-1.5 rounded-lg bg-ink-50 px-3 py-2 text-[12px] text-ink-600">
+                  <span>Signed in as</span>
+                  <ActorName actor={me.actor} verified={me.actorVerified} claimed={me.claimedActor} bold className="text-ink-900" />
+                  {!me.actorVerified ? (
+                    <span className="text-ink-400" title="Your administrator can give you a named token (GRAPHYN_API_TOKENS)">
+                      · not verified
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
               <label className="block text-sm text-ink-600">
                 API Bearer token
                 <div className="mt-1 flex items-center gap-2">

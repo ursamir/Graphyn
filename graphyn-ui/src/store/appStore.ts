@@ -107,7 +107,8 @@ interface AppState {
   setFocusRunsTab: (tab: FocusRunsTab) => void
   openRun: (id: string, opts?: { project?: string; panel?: FocusRunPanel }) => void
   /** Prefer Runs → Lineage. Artifact-id-only resolves via GET /artifacts/{id}. */
-  openTrace: (opts: { artifactId?: string; runId?: string; project?: string }) => void
+  /** `step` = node id to focus in Overview (`?step=`). */
+  openTrace: (opts: { artifactId?: string; runId?: string; project?: string; step?: string }) => void
   /** Prefer Runs → Run outputs. Artifact-id-only resolves via GET /artifacts/{id}. */
   openArtifacts: (opts?: { runId?: string; artifactId?: string; project?: string }) => void
   openExperiments: (opts?: { runIds?: string[] }) => void
@@ -247,10 +248,13 @@ function landRunPanel(
   set: (partial: Partial<AppState>) => void,
   runId: string,
   panel: 'lineage' | 'artifacts',
+  step?: string,
 ) {
   const W = get().activeProject || ''
   const seg = panel === 'artifacts' ? 'outputs' : 'lineage'
-  if (W) navigatePath(paths.runPanel(W, runId, seg))
+  // `?step=<node_id>` → Runs focuses that step (features/runs/stepQuery.ts).
+  const stepQs = step?.trim() ? `?step=${encodeURIComponent(step.trim())}` : ''
+  if (W) navigatePath(`${paths.runPanel(W, runId, seg)}${stepQs}`)
   else navigatePath(paths.workspaces())
   set({
     view: 'runs',
@@ -296,7 +300,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       focusRunPanel: opts?.panel ?? null,
     })
   },
-  openTrace: ({ artifactId, runId, project }) => {
+  openTrace: ({ artifactId, runId, project, step }) => {
     const proj = project?.trim() || ''
     if (proj) {
       persistActiveProject(proj)
@@ -306,7 +310,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const rid = runId?.trim() || ''
     // Run id wins even when an artifact id is also present (old Library path).
     if (rid) {
-      landRunPanel(get, set, rid, 'lineage')
+      landRunPanel(get, set, rid, 'lineage', step)
       return
     }
     if (aid) {

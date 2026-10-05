@@ -22,6 +22,7 @@
 | Models | `register_model` (optional `model_path` / `node_id` / `allow_untrained`; compiled_untrained model_builder outputs are refused by default), `list_models`, `get_model`, `request_model_prod`, `approve_model_prod` |
 | Ship | `create_ship_package`, `get_ship_package`, `list_ship_packages`, `download_ship_package`, `promote_ship_package` |
 | Schedules / webhooks | `list_schedules`, `upsert_schedule`, `enable_schedule`, `delete_schedule`, `run_schedule_now`, `get_webhooks`, `put_webhooks`, `test_webhook` |
+| Approval gates | `list_pending_gates`, `decide_gate` (approve requires `GRAPHYN_MCP_HUMAN_APPROVAL=1`) |
 | Datasets / workers | `list_dataset_versions`, `get_dataset_version`, `upload_dataset_file`, `list_workers`, `list_jobs` |
 | Credentials | `list_credentials`, `create_credential`, `get_credential`, `update_credential`, `revoke_credential` |
 | Notifications | `list_notifications`, `mark_notifications_read` |

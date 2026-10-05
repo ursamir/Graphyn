@@ -1,7 +1,7 @@
 import React from 'react'
 import { GitCompare as EmptyGitCompare, MousePointerClick as EmptyMousePointerClick } from 'lucide-react'
 import { FlaskConical, GitBranch, RefreshCw } from 'lucide-react'
-import { apiJson } from '../../api/client'
+import { ApiError, apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import {
   EmptyState,
@@ -10,6 +10,9 @@ import {
   NeedProjectPrompt,
   StatusBadge,
 } from '../../components/ui'
+import { CompareDiffView } from './CompareDiffView'
+import { compareDiffCsv, parseCompareDiff, type CompareDiff } from './compareDiff'
+import { runDisplayName } from '../../lib/runDisplay'
 import {
   formatLocaleDateTime,
   formatRelativeTime,
@@ -18,15 +21,14 @@ import {
   prettyScalar,
   shortRunId,
 } from '../../lib/format'
-import { MetricBars } from '../../components/MetricBars'
-import { MasterDetail, WorkbenchPage } from '../../layout'
+import { MasterDetail, MasterDetailToggle, WorkbenchPage } from '../../layout'
 import { paths } from '../../routes/paths'
 import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 import { fetchRunGraph } from '../../lib/runGraph'
 import { compareHasRows, enrichCompareParams } from './compareEnrich'
 import { compareNodeLabels, isRunScopedPathParam, paramKeyLabel } from '../runs/runCompare'
 import { canvasPathView } from '../builder/canvasPaths'
-import { formatMetricValue } from '../../lib/metrics'
+import { formatMetricValue, metricLabel, metricPhraseOf, pickPrimaryMetric } from '../../lib/metrics'
 import type { GraphIR } from '../../types/graph'
 
 type ExperimentRun = {
@@ -139,6 +141,29 @@ function downloadCompareCsv(compare: ComparePayload) {
   URL.revokeObjectURL(url)
 }
 
+function downloadText(text: string, filename: string, type = 'text/csv;charset=utf-8') {
+  const blob = new Blob([text], { type })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+/** Picker row metric: the run's primary metric, formatted ("Test accuracy 75.6%"). */
+function runRowMetric(r: ExperimentRun): string {
+  const m = r.metrics
+  if (!m || typeof m !== 'object') return ''
+  const flat: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(m)) {
+    flat[k] = Array.isArray(v) && v.length && typeof v[v.length - 1] === 'number' ? v[v.length - 1] : v
+  }
+  return metricPhraseOf(pickPrimaryMetric(flat)) ?? ''
+}
+
 function runMetaField(r: ExperimentRun, key: 'code_hash' | 'data_version'): string | null {
   const direct = r[key]
   if (typeof direct === 'string' && direct.trim()) return direct.trim()
@@ -191,6 +216,12 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
   /** Show `…output_path` rows that only differ by their runs/<id> folder. */
   const [showRunPaths, setShowRunPaths] = React.useState(false)
   const [compareLoading, setCompareLoading] = React.useState(false)
+  /** GET /runs/compare/diff result (null → old /experiments/compare view). */
+  const [diff, setDiff] = React.useState<CompareDiff | null>(null)
+  /** "Show all settings" → all=1. */
+  const [diffAll, setDiffAll] = React.useState(false)
+  /** Older API without /runs/compare/diff (404) → stay on the old view this session. */
+  const diffUnavailableRef = React.useRef(false)
   const compareRef = React.useRef<HTMLDivElement | null>(null)
   const autoComparedKey = React.useRef<string>('')
 
@@ -287,7 +318,7 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
     })
   }
 
-  const runCompare = React.useCallback(async (ids?: string[]) => {
+  const runCompare = React.useCallback(async (ids?: string[], opts: { all?: boolean } = {}) => {
     const target = ids ?? selectedIds
     if (target.length < 2) {
       pushToast('Select 2–5 runs to compare', 'info')
@@ -296,6 +327,31 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
     setCompareLoading(true)
     setError(null)
     try {
+      if (!diffUnavailableRef.current) {
+        const all = opts.all ?? diffAll
+        try {
+          const rawDiff = await apiJson<unknown>('/runs/compare/diff', {
+            query: { ids: target.join(','), all: all ? 1 : undefined },
+            timeoutMs: 120_000,
+          })
+          const parsed = parseCompareDiff(rawDiff)
+          if (parsed) {
+            setDiff(parsed)
+            setCompare(null)
+            requestAnimationFrame(() => {
+              compareRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+            })
+            return
+          }
+        } catch (err) {
+          if (err instanceof ApiError && (err.status === 404 || err.status === 405)) {
+            diffUnavailableRef.current = true
+          } else {
+            throw err
+          }
+        }
+      }
+      setDiff(null)
       const raw = await apiJson<ComparePayload>('/experiments/compare', {
         query: { run_ids: target.join(',') },
       })
@@ -324,9 +380,45 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
     } finally {
       setCompareLoading(false)
     }
-  }, [selectedIds, pushToast])
+  }, [selectedIds, pushToast, diffAll])
+
+  const toggleDiffAll = () => {
+    const next = !diffAll
+    setDiffAll(next)
+    if (diff) void runCompare(diff.runs.map((r) => r.runId), { all: next })
+  }
+
+  const exportDiffCsv = () => {
+    if (!diff) return
+    downloadText(compareDiffCsv(diff), `compare-${diff.runs.map((r) => r.short).join('-')}.csv`)
+    pushToast('Compare CSV downloaded', 'success')
+  }
+
+  const diffBody = diff ? (
+    <div ref={compareRef} className="space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <div className="text-sm font-medium text-ink-900">What changed</div>
+          <div className="text-xs text-ink-500">
+            {diff.runs.length} runs · differences highlighted{compareLoading ? ' · updating…' : ''}
+          </div>
+        </div>
+        <button type="button" className="btn-secondary" onClick={exportDiffCsv}>
+          Export CSV
+        </button>
+      </div>
+      <CompareDiffView
+        diff={diff}
+        showAll={diffAll}
+        onToggleAll={toggleDiffAll}
+        onOpenRun={(rid) => openRun(rid)}
+        busy={compareLoading}
+      />
+    </div>
+  ) : null
 
   const clearCompare = () => {
+    setDiff(null)
     setCompare(null)
     setSelectedIds([])
     autoComparedKey.current = ''
@@ -404,6 +496,8 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
   if (embedded) {
     return (
       <MasterDetail
+        listLabel="runs"
+        storageKey="graphyn.compare"
         master={
           <div className="flex h-full min-h-0 flex-col gap-2">
             <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
@@ -449,53 +543,32 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                 }
               />
             ) : (
-              <ul className="min-h-0 flex-1 space-y-1.5 overflow-y-auto [scrollbar-gutter:stable]">
+              <ul className="min-h-0 flex-1 divide-y divide-ink-100 overflow-y-auto rounded-lg border border-ink-200/70 [scrollbar-gutter:stable]">
                 {tableRuns.map((r) => {
                   const checked = selectedIds.includes(r.run_id)
-                  const metric = (() => {
-                    const m = r.metrics
-                    if (!m || typeof m !== 'object') return ''
-                    for (const k of PREFERRED_METRICS) {
-                      const v = m[k]
-                      if (typeof v === 'number' && Number.isFinite(v)) return `${k} ${v}`
-                      if (Array.isArray(v) && typeof v[v.length - 1] === 'number') {
-                        return `${k} ${v[v.length - 1]}`
-                      }
-                    }
-                    const first = Object.entries(m)[0]
-                    if (!first) return ''
-                    const [k, v] = first
-                    if (typeof v === 'number') return `${k} ${v}`
-                    return ''
-                  })()
+                  const metric = runRowMetric(r)
                   return (
                     <li key={r.run_id}>
                       <label
-                        className={`flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-xl border px-3 py-2.5 text-left shadow-sm transition ${
-                          checked
-                            ? 'border-accent-200 bg-accent-50/80 shadow-soft'
-                            : 'border-ink-200/70 bg-white hover:border-ink-300 hover:bg-ink-50/80'
+                        className={`ide-row min-w-0 cursor-pointer flex-col items-stretch gap-0.5 !px-2.5 !py-2 ${
+                          checked ? 'is-active' : ''
                         }`}
                       >
-                        <div className="flex min-w-0 items-start justify-between gap-2">
-                          <div className="flex min-w-0 flex-1 items-start gap-2">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => toggleSelect(r.run_id)}
-                              className="mt-0.5 shrink-0 rounded border-ink-300"
-                              aria-label={`Select ${r.run_id}`}
-                            />
-                            <div
-                              className="min-w-0 flex-1 truncate text-sm font-medium text-ink-900"
-                              title={String(r.graph_name ?? '') || undefined}
-                            >
-                              {r.graph_name
-                                ? humanizeTemplateName(String(r.graph_name))
-                                : shortRunId(r.run_id)}
-                            </div>
+                        <div className="flex min-w-0 items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleSelect(r.run_id)}
+                            className="h-4 w-4 shrink-0 rounded border-ink-300"
+                            aria-label={`Select ${shortRunId(r.run_id)} for compare`}
+                          />
+                          <div
+                            className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink-900"
+                            title={String(r.graph_name ?? '') || undefined}
+                          >
+                            {runDisplayName(r)}
                           </div>
-                          <StatusBadge status={r.status || 'unknown'} />
+                          <StatusBadge kind="run" status={r.status || ''} />
                         </div>
                         <div className="flex min-w-0 items-center justify-between gap-2 pl-6 text-[11px] text-ink-500">
                           <span className="min-w-0 truncate tabular-nums" title={metric || undefined}>
@@ -519,11 +592,16 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
           </div>
         }
         detail={
+          <>
+          <MasterDetailToggle className="mb-2" />
+          {
           selectedIds.length < 2 ? (
             <EmptyState icon={EmptyMousePointerClick}
               title="Select runs to compare"
               description="Tick at least two runs on the left. Results (params, metrics, charts) appear here."
             />
+          ) : diffBody ? (
+            diffBody
           ) : compareLoading && !compare ? (
             <LoadingBlock label="Comparing…" />
           ) : !compare ? (
@@ -585,24 +663,10 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                   onOpenRun={openRun}
                 />
               </div>
-              {compare.metric_keys && compare.metric_keys.length > 0 ? (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {compare.metric_keys.map((key) => {
-                    const series = compare.runs
-                      .map((r) => {
-                        const raw = r.metrics?.[key]
-                        const n = typeof raw === 'number' ? raw : Number(raw)
-                        if (!Number.isFinite(n)) return null
-                        return { label: shortRunId(r.run_id), value: n }
-                      })
-                      .filter((s): s is { label: string; value: number } => !!s)
-                    if (series.length === 0) return null
-                    return <MetricBars key={key} title={key} series={series} />
-                  })}
-                </div>
-              ) : null}
             </div>
           )
+          }
+          </>
         }
       />
     )
@@ -619,7 +683,7 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
               Compare ({selectedIds.length})
             </button>
           )}
-          {compare && (
+          {(compare || diff) && (
             <button type="button" className="btn-secondary" onClick={clearCompare}>
               Clear
             </button>
@@ -668,7 +732,7 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
         />
       )}
 
-      {selectedIds.length === 0 && tableRuns.length > 0 && !compare ? (
+      {selectedIds.length === 0 && tableRuns.length > 0 && !compare && !diff ? (
         <div role="status" className="rounded-xl border border-ink-200 bg-ink-50/80 px-3 py-2 text-sm text-ink-700">
           Select two runs from Runs → History (or tick two rows below) to compare.
         </div>
@@ -752,8 +816,8 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                         <th className="px-3 py-2.5 font-medium">data_version</th>
                       ) : null}
                       {columns.map((k) => (
-                        <th key={k} className="px-3 py-2.5 font-medium tabular-nums">
-                          {k}
+                        <th key={k} className="px-3 py-2.5 font-medium tabular-nums" title={k}>
+                          {metricLabel(k)}
                         </th>
                       ))}
                       <th className="px-3 py-2.5 font-medium">Open</th>
@@ -789,7 +853,7 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                             </button>
                           </td>
                           <td className="px-3 py-2">
-                            <StatusBadge status={r.status || 'unknown'} />
+                            <StatusBadge kind="run" status={r.status || ''} />
                           </td>
                           <td className="px-3 py-2 text-ink-600 truncate max-w-[10rem]" title={r.graph_name || undefined}>
                             {r.graph_name ? humanizeTemplateName(String(r.graph_name)) : '—'}
@@ -815,7 +879,7 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                           ) : null}
                           {columns.map((k) => (
                             <td key={k} className="px-3 py-2 tabular-nums text-ink-800">
-                              {fmtMetric(r.metrics?.[k])}
+                              {fmtMetricDisplay(r.metrics?.[k], k)}
                             </td>
                           ))}
                           <td className="px-3 py-2">
@@ -849,7 +913,8 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
               </div>
             </div>
 
-            {compare && (
+            {diffBody}
+            {!diff && compare && (
               <div
                 ref={compareRef}
                 className="rounded-2xl border border-ink-200/80 bg-white shadow-sm overflow-hidden"
@@ -916,7 +981,7 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                                 </button>
                               </td>
                               <td className="px-2 py-1.5">
-                                <StatusBadge status={r.status || 'unknown'} />
+                                <StatusBadge kind="run" status={r.status || ''} />
                               </td>
                               <td className="px-2 py-1.5 text-ink-600">
                                 {r.graph_name ? humanizeTemplateName(String(r.graph_name)) : '—'}
@@ -966,22 +1031,6 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                         onOpenRun={openRun}
                       />
                     )}
-                    {compare.metric_keys.length > 0 ? (
-                      <div className="grid gap-3 border-t border-ink-100 p-4 sm:grid-cols-2">
-                        {compare.metric_keys.map((key) => {
-                          const series = compare.runs
-                            .map((r) => {
-                              const raw = r.metrics?.[key]
-                              const n = typeof raw === 'number' ? raw : Number(raw)
-                              if (!Number.isFinite(n)) return null
-                              return { label: shortRunId(r.run_id), value: n }
-                            })
-                            .filter((s): s is { label: string; value: number } => !!s)
-                          if (series.length === 0) return null
-                          return <MetricBars key={key} title={key} series={series} />
-                        })}
-                      </div>
-                    ) : null}
                   </div>
                 )}
               </div>
@@ -1087,7 +1136,7 @@ function CompareTable({
                     }`}
                     title={k}
                   >
-                    {keyLabel ? keyLabel(k) : k}
+                    {keyLabel ? keyLabel(k) : format ? metricLabel(k) : k}
                   </td>
                   {vals.map((v, i) => {
                     const text = fmt(v, k)

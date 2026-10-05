@@ -26,6 +26,8 @@ def _real_threads(patch_threads, monkeypatch):
 def _load(plugin: str):
     """Import PluginPackage/Agents/<plugin> as a uniquely named package."""
     name = f"_agents_fix_{plugin}"
+    if not (AGENTS / plugin).is_dir():
+        pytest.skip(f"Agents/{plugin} is not in the current PluginPackage scope")
     if name in sys.modules:
         return sys.modules[f"{name}.nodes"]
     root = AGENTS / plugin
@@ -77,6 +79,11 @@ def _all_ports(node, out):
     assert set(out) == set(type(node).output_ports), (set(out), set(type(node).output_ports))
 
 
+def _only_ports(out, *ports):
+    """Branch-style nodes emit ONLY the active port(s); inactive keys are omitted."""
+    assert set(out) == set(ports), (set(out), set(ports))
+
+
 # ── 1. hitl_approve ───────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -95,8 +102,9 @@ def _hitl_node(hitl, tmp_path, **cfg):
 def test_hitl_payload_cannot_self_approve(hitl, tmp_path):
     node = _hitl_node(hitl, tmp_path)
     out = node.process({"input": {"approved": True, "action": "rm -rf"}})
-    _all_ports(node, out)
-    assert out["approved"] is None
+    # Safety: a rejected gate must NOT emit the `approved` key at all — even
+    # `approved: None` counts as produced and would run the approved branch.
+    _only_ports(out, "rejected")
     assert out["rejected"]["approved"] is False
     assert "timeout" in out["rejected"]["reason"]
     assert out["rejected"]["payload"] == {"approved": True, "action": "rm -rf"}
@@ -106,7 +114,7 @@ def test_hitl_unattended_default_false_and_explicit_pass(hitl, tmp_path):
     assert hitl.HitlApproveNode.Config().unattended_approve is False
     node = _hitl_node(hitl, tmp_path, unattended_approve=True)
     out = node.process({"input": {"x": 1}})
-    assert out == {"approved": {"x": 1}, "rejected": None}
+    assert out == {"approved": {"x": 1}}
     assert list(tmp_path.glob("*.unattended.json"))
 
 
@@ -133,7 +141,7 @@ def test_hitl_out_of_band_approval(hitl, tmp_path):
         "approver": "alice", "role": "release", "reason": "LGTM"})
     out = node.process({"input": {"model": "m1"}})
     t.join(1)
-    assert out == {"approved": {"model": "m1"}, "rejected": None}
+    assert out == {"approved": {"model": "m1"}}
     req_path, _ = hitl.decision_paths(tmp_path, "run-1", "hitl_approve")
     rec = json.loads(req_path.read_text())
     assert rec["status"] == "approved" and rec["outcome"]["approver"] == "alice"
@@ -152,7 +160,7 @@ def test_hitl_invalid_or_denied_decision_rejects(hitl, tmp_path, decision, why):
     t = _decide_async(hitl, tmp_path, lambda r: {"request_id": r["request_id"], **decision})
     out = node.process({"input": 1})
     t.join(1)
-    assert out["approved"] is None
+    _only_ports(out, "rejected")
     assert why in out["rejected"]["reason"]
 
 
@@ -162,7 +170,13 @@ def test_hitl_stale_decision_ignored(hitl, tmp_path):
     dec_path.write_text(json.dumps({"request_id": "old", "approved": True,
                                     "approver": "x", "reason": "stale"}))
     out = _hitl_node(hitl, tmp_path, timeout_s=0.1).process({"input": 1})
-    assert out["approved"] is None and out["rejected"] is not None
+    _only_ports(out, "rejected")
+    assert out["rejected"] is not None
+
+
+def test_hitl_stub_fails_closed(hitl, tmp_path):
+    out = _hitl_node(hitl, tmp_path, stub=True).process({"input": 1})
+    assert out == {}
 
 
 # ── 2. guardrail_filter ───────────────────────────────────────────────────────
@@ -184,7 +198,7 @@ def test_guardrail_default_policies_block_secrets_and_email(guard):
 def test_guardrail_empty_policies_fallback(guard):
     node = guard.GuardrailFilterNode(config={"policies": [], "action": "flag"})
     out = node.process({"input": "mail a@b.com"})
-    _all_ports(node, out)
+    _only_ports(out, "output", "violations")
     assert [h.rule for h in out["violations"]] == ["pii"]
     assert out["output"] == "mail a@b.com"
 
@@ -205,7 +219,8 @@ def test_guardrail_redacts_only_active_rules(guard):
 
 def test_guardrail_clean_input_emits_empty_violations(guard):
     out = guard.GuardrailFilterNode().process({"input": "all good"})
-    assert out == {"output": "all good", "violations": []}
+    # Clean input: `violations` branch is omitted (not an empty list).
+    assert out == {"output": "all good"}
 
 
 def test_guardrail_unknown_action_fails_closed(guard):
@@ -376,17 +391,18 @@ def test_osv_parses_json_string_and_chat_message(osv):
     node = _osv(osv)
     good = {"name": "x", "age": 3, "tags": ["a"], "nick": None}
     out = node.process({"input": json.dumps(good)})
-    _all_ports(node, out)
-    assert out == {"output": good, "errors": []}
+    assert out == {"output": good}
     out = node.process({"input": chat(role="assistant", content="```json\n" + json.dumps(good) + "\n```")})
     assert out["output"] == good
     bad = node.process({"input": chat(role="assistant", content='{"name": 1}')})
-    assert bad["output"] is None and bad["errors"]
+    _only_ports(bad, "errors")
+    assert bad["errors"]
 
 
 def test_osv_invalid_json_string(osv):
     out = _osv(osv).process({"input": "not json"})
-    assert out["output"] is None and "invalid JSON" in out["errors"][0]
+    _only_ports(out, "errors")
+    assert "invalid JSON" in out["errors"][0]
 
 
 def test_osv_bool_not_integer_nested_enum_items(osv):

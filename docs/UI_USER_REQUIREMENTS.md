@@ -124,7 +124,7 @@ Same canvas. Nodes with IR `placement` (auto/worker/pool/gpu) wait for matching 
 | **More menu** (shipped) | Save template (+ name), Import graph, Export graph, secondary actions. |
 | **Canvas** (shipped) | Zoom/pan/fit; connect ports; delete wire (**Remove connection**); select node; empty canvas CTAs. |
 | **Empty canvas CTAs** (shipped) | **Open Templates** (and related next-click help). |
-| **Inspector** (shipped) | Graph settings or selected node/edge fields from plugin schema; **Clear selection**; **No config fields** when schema empty. |
+| **Inspector** (shipped) | Opens only for a selected node/edge or **Graph settings** (toolbar); docked ≥ 1280 px, overlay drawer below, bottom sheet < 768 px; **Close** (Esc). Fields from plugin schema; “Loading step settings…” / “Couldn't load step settings” + Retry (auto-retry) while the catalog is unavailable; **No config fields** only when the catalog entry has zero fields. Model builder ↔ Trainer learning-rate note says which value training uses. |
 | **Node chrome** (shipped) | Configure / Remove; port types on hover; status. |
 | **Execution log** (shipped) | Collapsible; “No events yet.”; resize handle; Open run when `lastRunId`. |
 | **Action error banner** (shipped) | Retry / Open run. |

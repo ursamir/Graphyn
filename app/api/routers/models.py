@@ -2,7 +2,8 @@
 """
 Bounded Context:  REST API Layer
 Responsibility:   HTTP endpoints for the lightweight model registry.
-Owns:             /api/v1/models routes; registry error → HTTP mapping
+Owns:             /api/v1/models routes (incl. GET /models/{name}/lineage —
+                  made-from / used-in); registry error → HTTP mapping
                   (run missing 404, run not succeeded 409, direct
                   stage=prod 403 — prod only via request-prod/approve-prod,
                   compiled_untrained 422, model_not_in_run 422). Body
@@ -12,8 +13,10 @@ Owns:             /api/v1/models routes; registry error → HTTP mapping
                   artifact path/format/size/metrics/labels).
 Public Surface:   FastAPI router mounted at /api/v1.
 Must NOT:         Contain registry persistence — delegate to model_registry.
-Dependencies:     fastapi, app.core.mlops.model_registry, app.api.actor,
-                  app.api.run_ids.
+Dependencies:     fastapi, app.core.mlops.model_registry,
+                  app.core.mlops.model_lineage (GET /models/{name}/lineage),
+                  app.domain.project_manager (project roots for ship packages),
+                  app.api.actor, app.api.run_ids.
 Reason To Change: New registry endpoint or response schema.
 """
 from __future__ import annotations
@@ -71,6 +74,43 @@ def get_model_endpoint(name: str):
     ensure_store_readable()
     try:
         return describe_model(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _project_dirs() -> list:
+    """Project roots (for ship-package lookup); best-effort, never raises."""
+    try:
+        from app.domain.project_manager import ProjectManager
+
+        pm = ProjectManager()
+        out = []
+        for row in pm.list_all():
+            name = row.get("name") if isinstance(row, dict) else None
+            if not name:
+                continue
+            try:
+                out.append(pm._require_project(str(name)))
+            except Exception:
+                continue
+        return out
+    except Exception:
+        return []
+
+
+@router.get("/{name}/lineage", summary="Model lineage: made from / used in")
+def get_model_lineage_endpoint(name: str):
+    """``{name, description, stages: {stage: {run_id, node_id, path_id,
+    artifact_path, format, model_hash, made_from: {...}}}, pending_prod,
+    used_in: [...], packages: [...]}`` — see docs/API_REFERENCE.md."""
+    from app.api.store_guard import ensure_store_readable
+    from app.core.mlops.model_lineage import model_lineage
+
+    ensure_store_readable()
+    try:
+        return model_lineage(name, project_dirs=_project_dirs())
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

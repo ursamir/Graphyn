@@ -9,7 +9,7 @@ import { stampProjectOnGraph } from '../../lib/projectStamp'
 import type { GraphIR } from '../../types/graph'
 import { useMenuDismiss } from '../../lib/menus'
 import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock } from '../../components/ui'
-import { MasterDetail, WorkbenchPage } from '../../layout'
+import { MasterDetail, MasterDetailToggle, WorkbenchPage } from '../../layout'
 import { MarketplaceBrowse } from './MarketplaceBrowse'
 import { loadMarketplaceCatalog } from './marketplaceCatalog'
 import { humanizeTemplateName, humanNodeLabel, stripIsolatedPrefix } from '../../lib/format'
@@ -17,6 +17,7 @@ import { workspaceErrorMessage, workspaceNameError } from '../../lib/workspaceNa
 import { buildNodeTypePluginMap, summarizeMissing, type PluginManifestLike } from './missingPlugins'
 import { apiFetch } from '../../api/client'
 import { probePathExists } from '../edge/edgeDeployTemplate'
+import { applyTemplateFilter, templateFilterValue } from './templateFilter'
 import {
   findStep,
   groupTemplates,
@@ -484,8 +485,17 @@ export default function TemplatesView() {
      otherwise selecting a plugin would rewrite every other chip's count to 0 and
      you could never widen the selection without clearing it first. */
   const facetPool = (items ?? []).filter(matchesTabAndSearch)
+  /** Search-only pool (any kind) — counts for the single "Show" filter control. */
+  const searchPool = filter === 'all' ? facetPool : (items ?? []).filter((t) => {
+    const q = search.trim()
+    if (!q) return true
+    return [t.name, t.title ?? '', humanizeTemplateName(t.name), t.description ?? '', ...(t.tags ?? []), ...(t.node_types ?? []), ...(t.required_plugins ?? [])]
+      .join(' ')
+      .toLowerCase()
+      .includes(q.toLowerCase())
+  })
   const pluginCounts = new Map<string, number>()
-  for (const t of facetPool) {
+  for (const t of searchPool) {
     for (const p of t.required_plugins ?? []) pluginCounts.set(p, (pluginCounts.get(p) ?? 0) + 1)
   }
   const facets = [...pluginCounts.entries()]
@@ -523,11 +533,20 @@ export default function TemplatesView() {
       }
       return (a.title || humanizeTemplateName(a.name)).localeCompare(b.title || humanizeTemplateName(b.name))
     })
-  const exampleCount = (items ?? []).filter((t) => isExample(t.name)).length
-  const savedCount = (items ?? []).filter((t) => !isExample(t.name)).length
+  const exampleCount = searchPool.filter((t) => isExample(t.name)).length
+  const savedCount = searchPool.filter((t) => !isExample(t.name)).length
   const workspaceCount = (items ?? []).length
   const marketplaceCount = marketplaceTotal ?? 0
-  const allCount = workspaceCount + marketplaceCount
+  const runnableCount = searchPool.filter(
+    (t) => runnableOf(t) || Boolean(t.group && runnableGroups.has(String(t.group))),
+  ).length
+  const filterState = { filter: filter === 'marketplace' ? 'all' : filter, runnableOnly, plugins: activePlugins } as const
+  const pickFilter = (value: string) => {
+    const next = applyTemplateFilter(value, { ...filterState, plugins: activePlugins })
+    setFilter(next.filter)
+    setActivePlugins(next.plugins)
+    if (next.runnableOnly !== runnableOnly) setRunnableOnly(next.runnableOnly)
+  }
 
   const shownLabel = (() => {
     if (filter === 'marketplace') {
@@ -535,10 +554,6 @@ export default function TemplatesView() {
       return `${marketplaceStats.loaded} on page · ${marketplaceStats.matched} matched · ${marketplaceTotal} in catalog`
     }
     if (items == null) return 'Loading…'
-    if (filter === 'all') {
-      const mkt = marketplaceTotal == null ? '…' : String(marketplaceTotal)
-      return `${filtered.length} workspace · ${mkt} marketplace`
-    }
     return `${filtered.length} shown`
   })()
 
@@ -619,25 +634,27 @@ export default function TemplatesView() {
           className="field-control mt-0 w-full pl-8 text-sm"
         />
       </div>
-      <div className="flex flex-wrap gap-1.5">
-        {(
-          [
-            ['all', 'All', allCount, items != null && marketplaceTotal != null],
-            ['examples', 'Examples', exampleCount, items != null],
-            ['saved', 'Saved', savedCount, items != null],
-            ['marketplace', 'Marketplace', marketplaceCount, marketplaceTotal != null],
-          ] as const
-        ).map(([id, label, count, ready]) => (
-          <button
-            key={id}
-            type="button"
-            className={filter === id ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
-            onClick={() => setFilter(id as typeof filter)}
-            data-testid={id === 'marketplace' ? 'templates-tab-marketplace' : undefined}
-          >
-            {label} {ready ? count : '…'}
-          </button>
-        ))}
+      {/* Two tabs: this server's starters (default, small) vs the Marketplace catalog. */}
+      <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Template source">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={filter !== 'marketplace'}
+          className={filter !== 'marketplace' ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
+          onClick={() => setFilter('all')}
+        >
+          Starters {items != null ? workspaceCount : '…'}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={filter === 'marketplace'}
+          className={filter === 'marketplace' ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
+          onClick={() => setFilter('marketplace')}
+          data-testid="templates-tab-marketplace"
+        >
+          Marketplace {marketplaceTotal != null ? marketplaceCount : '…'}
+        </button>
       </div>
     </div>
   )
@@ -658,7 +675,7 @@ export default function TemplatesView() {
                 {tpl.title || humanizeTemplateName(name)}
               </h2>
               {isExample(name) && filter !== 'examples' && (
-                <span className="shrink-0 rounded-md bg-ink-100 px-1.5 py-px text-type-meta font-medium uppercase tracking-wide text-ink-500">
+                <span className="shrink-0 rounded-md bg-ink-100 px-1.5 py-px text-type-meta font-medium text-ink-500">
                   Example
                 </span>
               )}
@@ -846,7 +863,7 @@ export default function TemplatesView() {
         <dl className="grid gap-1.5 text-type-secondary text-ink-600">
           {tpl.inputs?.length ? (
             <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-2">
-              <dt className="text-type-meta font-medium uppercase tracking-wide text-ink-400">Inputs</dt>
+              <dt className="text-type-meta font-medium text-ink-400">Inputs</dt>
               <dd>
                 {inputLabel ? (
                   <span className="flex flex-wrap gap-1">
@@ -874,7 +891,7 @@ export default function TemplatesView() {
           ) : null}
           {tpl.outputs?.length ? (
             <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-2">
-              <dt className="text-type-meta font-medium uppercase tracking-wide text-ink-400">Outputs</dt>
+              <dt className="text-type-meta font-medium text-ink-400">Outputs</dt>
               <dd>
                 {chipList(tpl.outputs, 'None declared', (s) =>
                   s.includes('/') ? shortPath(s) : humanNodeLabel(s),
@@ -884,7 +901,7 @@ export default function TemplatesView() {
           ) : null}
           {tpl.required_plugins?.length ? (
             <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-2">
-              <dt className="text-type-meta font-medium uppercase tracking-wide text-ink-400">Plugins</dt>
+              <dt className="text-type-meta font-medium text-ink-400">Plugins</dt>
               <dd className="flex flex-wrap gap-1">
                 {tpl.required_plugins.map((p) => {
                   const on = activePlugins.includes(p)
@@ -1000,8 +1017,8 @@ export default function TemplatesView() {
       title="Templates"
       description={
         activeProject
-          ? `Starter graphs to copy into a workspace. “Open in Editor” copies one into ${activeProject}, where you can edit and run it — the original template is left untouched. Workspace starters + Marketplace catalog share this page.`
-          : 'Starter graphs to copy into a workspace. Opening one asks which workspace to copy it into, then loads it in the Editor. Workspace starters + Marketplace catalog share this page.'
+          ? `Starter graphs to copy into a workspace. “Open in Editor” copies one into ${activeProject}; the original template is left untouched.`
+          : 'Starter graphs to copy into a workspace. Opening one asks which workspace to copy it into, then loads it in the Editor.'
       }
       actions={
         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -1113,87 +1130,40 @@ export default function TemplatesView() {
                   </select>
                 </label>
                 <label
-                  className="flex items-center gap-1.5 text-[12px] text-ink-600"
-                  title="Hide templates that use nodes this server doesn't have installed"
+                  className="flex items-center gap-1.5 text-[12px] text-ink-500"
+                  title="Runnable here hides templates that use nodes this server doesn't have installed"
                 >
-                  <input
-                    type="checkbox"
-                    checked={runnableOnly}
-                    onChange={(e) => setRunnableOnly(e.target.checked)}
+                  Show
+                  <select
+                    className="rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px] text-ink-800"
+                    value={templateFilterValue(filterState)}
+                    onChange={(e) => pickFilter(e.target.value)}
                     data-testid="templates-runnable-only"
-                  />
-                  Runnable here
-                  {runnableOnly && hiddenNotRunnable > 0 ? (
-                    <button
-                      type="button"
-                      className="text-ink-400 underline-offset-2 hover:text-ink-800 hover:underline"
-                      onClick={() => setRunnableOnly(false)}
-                    >
-                      ({hiddenNotRunnable} hidden — show all)
-                    </button>
-                  ) : null}
+                    aria-label="Show templates"
+                  >
+                    <option value="runnable">Runnable here ({runnableCount})</option>
+                    <option value="all">All starters ({searchPool.length})</option>
+                    <option value="examples">Examples ({exampleCount})</option>
+                    <option value="saved">Saved ({savedCount})</option>
+                    {activePlugins.length > 1 ? (
+                      <option value="plugins">Needs {activePlugins.join(' + ')}</option>
+                    ) : null}
+                    {facets.length > 0 ? (
+                      <optgroup label="Needs plugin">
+                        {facets.map(([p, n]) => (
+                          <option key={p} value={`plugin:${p}`}>
+                            {p} ({n})
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : null}
+                  </select>
                 </label>
                 <span className="ml-auto text-[12px] text-ink-400">{shownLabel}</span>
               </>
             )}
           </div>
 
-          {filter !== 'marketplace' && facets.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-ink-400">
-                Plugin
-              </span>
-              {facets.map(([p, n]) => {
-                const on = activePlugins.includes(p)
-                return (
-                  <button
-                    key={p}
-                    type="button"
-                    aria-pressed={on}
-                    className={`rounded-md border px-1.5 py-0.5 text-[11px] transition ${
-                      on
-                        ? 'border-accent-400 bg-accent-50 font-medium text-accent-900'
-                        : 'border-ink-200 bg-white text-ink-600 hover:border-accent-300 hover:text-accent-800'
-                    }`}
-                    onClick={() => togglePlugin(p)}
-                  >
-                    {p} <span className={on ? 'text-accent-700' : 'text-ink-400'}>{n}</span>
-                  </button>
-                )
-              })}
-              {activePlugins.length > 0 && (
-                <button
-                  type="button"
-                  className="ml-1 text-[11px] font-medium text-ink-500 hover:text-ink-900"
-                  onClick={() => setActivePlugins([])}
-                >
-                  Clear {activePlugins.length} filter{activePlugins.length === 1 ? '' : 's'}
-                </button>
-              )}
-            </div>
-          )}
-
-          {filter === 'all' ? (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-ink-100 bg-ink-50/70 px-3 py-2 text-[12px] text-ink-600">
-              <span>
-                Workspace starters below
-                {marketplaceTotal != null ? (
-                  <>
-                    {' '}
-                    ·{' '}
-                    <span className="font-medium text-ink-800">{marketplaceTotal}</span> in Marketplace
-                  </>
-                ) : null}
-              </span>
-              <button
-                type="button"
-                className="btn-quiet text-[12px]"
-                onClick={() => setFilter('marketplace')}
-              >
-                Browse Marketplace
-              </button>
-            </div>
-          ) : null}
         </div>
 
         {filter === 'marketplace' ? (
@@ -1217,7 +1187,7 @@ export default function TemplatesView() {
               }
               description={
                 hiddenNotRunnable > 0
-                  ? `${hiddenNotRunnable} template${hiddenNotRunnable === 1 ? '' : 's'} need plugins this server doesn't have. Turn off “Runnable here” to see them.`
+                  ? `${hiddenNotRunnable} template${hiddenNotRunnable === 1 ? '' : 's'} need plugins this server doesn't have. Show “All starters” to see them.`
                   : activePlugins.length > 0
                   ? `Nothing requires ${activePlugins.join(' + ')}${search.trim() ? ` and matches “${search.trim()}”` : ''}.`
                   : search.trim()
@@ -1251,6 +1221,8 @@ export default function TemplatesView() {
           <MasterDetail
             className="min-h-0 flex-1 px-4 pb-4 sm:px-6"
             listLabel="templates"
+            storageKey="graphyn.templates"
+            selectedKey={selectedName ?? null}
             collapsible
             defaultSize={300}
             masterClassName="!bg-transparent"
@@ -1263,7 +1235,7 @@ export default function TemplatesView() {
                       <li key={`group:${entry.group}`} className="bg-accent-50/30 px-1 py-1.5">
                         <div className="px-2 pb-1">
                           <span className="block truncate text-[12px] font-semibold text-ink-950">{entry.title}</span>
-                          <span className="text-[10px] uppercase tracking-wide text-ink-400">
+                          <span className="text-[11px] text-ink-400">
                             Guided · {entry.steps.length} steps
                           </span>
                         </div>
@@ -1299,6 +1271,7 @@ export default function TemplatesView() {
                       <button
                         type="button"
                         onClick={() => setSelectedName(tpl.name)}
+                        title={tpl.name}
                         className={clsx(
                           'ide-row w-full flex-col items-start gap-0.5 !py-2 !px-3',
                           active && 'is-active',
@@ -1317,12 +1290,6 @@ export default function TemplatesView() {
                             </span>
                           ) : null}
                         </span>
-                        <span
-                          className="w-full truncate font-mono text-[11px] text-ink-400"
-                          title={tpl.name}
-                        >
-                          {tpl.name}
-                        </span>
                       </button>
                     </li>
                   )
@@ -1331,7 +1298,10 @@ export default function TemplatesView() {
             }
             detail={
               selectedTpl ? (
-                renderTemplateDetail(selectedTpl)
+                <>
+                  <MasterDetailToggle className="mb-2" />
+                  {renderTemplateDetail(selectedTpl)}
+                </>
               ) : (
                 <EmptyState
                   compact

@@ -860,20 +860,19 @@ async def _run_pipeline_body(
             # node whose upstream is excluded / unproduced.
             inputs.update(node_overrides)
 
-            # Skip when a required port is unproduced (condition / branch / upstream skip).
+            # Skip when a required port is unproduced, or when EVERY incoming
+            # edge is unproduced (condition / branch / upstream skip) — G1.
             from app.core.execution.skip_logic import should_skip_for_unproduced
 
-            skip_view = {
-                node_id: [e for e in incoming[node_id] if e[2] not in provided_ports]
-            }
             skip_node, skip_reason = should_skip_for_unproduced(
                 node_id=node_id,
                 node=node,
-                incoming=skip_view,
+                incoming=incoming,
                 node_outputs=node_outputs,
                 skipped=branch_skipped,
                 edge_conditions=edge_conditions,
                 condition_results=_condition_results,
+                provided_ports=provided_ports,
             )
             if skip_node:
                 logger.node_skip(node_id, node_type, reason=skip_reason or "condition_false")
@@ -929,6 +928,10 @@ async def _run_pipeline_body(
                 except Exception as exc:
                     logger.node_error(node_type, idx, exc, node_id=node_id)
                     run.save_logs(logger.logs)
+                    # G6: egress made before the failure is still audited.
+                    from app.core.execution.external_calls import drain_external_calls
+
+                    drain_external_calls(run, node, node_id, node_type)
                     if not _is_cancelled(run):
                         _mark_failed(
                             run,
@@ -1007,6 +1010,10 @@ async def _run_pipeline_body(
                         node_id,
                         _pub_exc,
                     )
+                # G6: external call audit side-channel → run meta.
+                from app.core.execution.external_calls import drain_external_calls
+
+                drain_external_calls(run, node, node_id, node_type)
 
             node_duration = time.time() - node_start_time
             # SA-O-CNT: list length for list ports, 1 per non-None scalar port.

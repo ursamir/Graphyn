@@ -1,6 +1,7 @@
 import React from 'react'
 import clsx from 'clsx'
-import { Archive, Download, Loader2, MoreHorizontal, Pause, Play, RefreshCw, Repeat, ShieldCheck, SlidersHorizontal, Workflow } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { Archive, Download, Loader2, MoreHorizontal, Pause, Play, RefreshCw, Repeat, Rocket, Search, ShieldCheck, SlidersHorizontal, Workflow, X } from 'lucide-react'
 import { ApiError, apiJson, apiUrl, getApiToken } from '../../api/client'
 import type { GraphIR } from '../../types/graph'
 import { emptyGraph } from '../../types/graph'
@@ -10,6 +11,7 @@ import { useAppStore } from '../../store/appStore'
 import { runMatchesProject } from '../../lib/projectStamp'
 import { usePolling } from '../../lib/usePolling'
 import {
+  isAwaitingApproval,
   isLiveRunStatus,
   isTerminalRunStatus,
   normalizeRunStatus,
@@ -18,7 +20,6 @@ import {
 import {
   ConfirmButton,
   CollapsibleJson,
-  CopyableMono,
   EmptyState,
   ErrorBanner,
   LoadingBlock,
@@ -30,7 +31,8 @@ import {
 import { FieldSelect } from '../../components/FieldSelect'
 import { SplitPane } from '../../components/SplitPane'
 import { FileViewer } from '../../components/FileViewer'
-import { MasterDetail, ViewShell } from '../../layout'
+import { MasterDetail, MasterDetailToggle, useLayoutPrefs, ViewShell } from '../../layout'
+import { useElementWidth } from '../../lib/viewport'
 import { formatBytes } from '../../lib/fileKind'
 import {
   formatExecutionLine,
@@ -49,7 +51,6 @@ import { paths, type RunPanel } from '../../routes/paths'
 import { goView, onPathChange } from '../../routes/nav'
 import { RunLineagePanel } from './RunLineagePanel'
 import { apiErrorCode } from '../../api/errorCode'
-import { PipelineStack } from './PipelineStack'
 import ExperimentsView, { type ExperimentsViewHandle } from '../experiments/ExperimentsView'
 import {
   executionOrderFromRun,
@@ -59,6 +60,7 @@ import {
   normalizeOutputsResponse,
   orderOutputGroups,
   artifactSlugFromPath,
+  isPackageRun,
   listRunModelCandidates,
   runHasModelOutput,
   runLevelFileCue,
@@ -93,7 +95,6 @@ import {
   pathsFromSummary,
   pickBestPath,
   rankModelOptions,
-  regressionFromHistory,
   runTitle,
   suggestModelName,
   type ModelOption,
@@ -111,8 +112,21 @@ import {
   type RunningNode,
 } from './runProgress'
 import { ProgressLogLine, RunResultsBanner } from './RunResults'
+import { ShipPackageSummaryForPath } from '../edge/ShipPackageSummary'
+import { isShipManifestPath } from '../edge/shipManifest'
 import { useEvaluatorOutputs } from './useRunResults'
 import { ReplayPanel, RunRecordCard, VerifyChecklist } from './RunRecord'
+import { ApprovalGates } from './ApprovalGates'
+import { resilienceByNode } from './runWorkflow'
+import {
+  branchContextByNode,
+  branchingNodesOf,
+  isMlMultiPath,
+  skipReasonsByNode,
+  stepDisplayNames,
+  stripPathSuffix,
+} from './runFlow'
+import { parseStepParam, searchWithoutStep } from './stepQuery'
 import {
   cacheSourcesFromNodeStats,
   compactNodeLabel,
@@ -121,18 +135,48 @@ import {
   failuresByNode,
   groupVerify,
   isArchivedRun,
+  lastVerifyOf,
+  lastVerifyText,
   linkableRunId,
   nodeLabelsFromRun,
   normalizeVerify,
+  parseLastVerify,
   parseReplayConflict,
+  parseVerifyCounts,
   pickProve,
   replayOfRun,
   replayRunId,
   type InputChange,
+  type LastVerify,
+  type VerifyCounts,
 } from './runRecord'
+import { ActorName } from '../../components/ActorName'
+import { modelStageLabel } from '../models/modelLineage'
 import { relabelLine } from '../builder/journalLog'
 import { unscopeRunPaths } from '../builder/graphDrift'
 import { FailureDetails } from './FailureDetails'
+import {
+  comparableRegression,
+  friendlyArtifactName,
+  graphNameOf,
+  isComparableRun,
+  pathCountOf,
+  runFailureReason,
+  stepPickerOptions,
+} from './runOverview'
+import { ShortId, StepPicker } from './RunOverviewParts'
+import { usePaneWidth } from './usePaneWidth'
+import {
+  lastLogsForNode,
+  orderOutputGroupsByImportance,
+  pickDefaultOutput,
+} from './stepDetails'
+
+/** Close the `<details>` menu that contains the clicked item. */
+function closeMenu(e: React.MouseEvent<HTMLElement>) {
+  const d = e.currentTarget.closest('details')
+  if (d) d.open = false
+}
 
 /** Run ids whose GET /runs/{id} returned 404 this session — never auto-reopened. */
 const MISSING_RUN_IDS = new Set<string>()
@@ -278,6 +322,7 @@ function isLiveStatus(status?: string | null): boolean {
 
 /** Short list-friendly status text (StatusBadge otherwise echoes raw API casing). */
 function shortStatusLabel(status?: string | null): string {
+  if (isAwaitingApproval(status)) return 'Awaiting approval'
   switch (normalizeRunStatus(status)) {
     case 'completed':
       return 'Done'
@@ -556,21 +601,38 @@ function CompareRunsTab({
   )
 }
 
+const RUNS_LIST_WIDTH_KEY = 'graphyn.runs.listWidth'
+
 /**
  * One layout always: MasterDetail edge-to-edge (sidebar already says Runs).
  * No ViewShell title strip — selecting a run must not change the outer chrome.
+ * The run list collapses only via MasterDetail's own toggle (persisted) — never
+ * per tab, so Overview / Run outputs / Logs keep the same list state.
  */
 function RunsShell({
   list,
   detail,
+  selectedKey,
+  onBack,
 }: {
   list: React.ReactNode
   detail: React.ReactNode
+  selectedKey: string | null
+  onBack: () => void
 }) {
+  const { mode: layoutMode } = useLayoutPrefs()
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--surface-muted)]">
       <MasterDetail
         listLabel="runs"
+        storageKey="graphyn.runs"
+        // Own list width (not the shared master width other pages narrow):
+        // run names + the filter row need ≥ 300 px at 1366–1536 wide.
+        widthKey={layoutMode === 'container-content' ? undefined : RUNS_LIST_WIDTH_KEY}
+        defaultSize={360}
+        minSize={300}
+        selectedKey={selectedKey}
+        onBack={onBack}
         master={list}
         detail={detail}
         collapsible
@@ -642,7 +704,7 @@ function LiveRunMonitor({
       ) : null}
       {useSteps && (running.length > 0 || doneSteps.length > 0) ? (
         <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-ink-500">
-          <span className="font-semibold uppercase tracking-wide text-ink-400">Steps</span>
+          <span className="font-medium text-ink-500">Steps</span>
           {running.map((r) => (
             <span key={r.id} className="inline-flex items-center gap-1 font-medium text-sky-800" title={`${r.id} · running`}>
               <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
@@ -662,7 +724,7 @@ function LiveRunMonitor({
         </div>
       ) : !useSteps && nodeStats.length > 0 ? (
         <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-ink-500">
-          <span className="font-semibold uppercase tracking-wide text-ink-400">Nodes</span>
+          <span className="font-medium text-ink-500">Nodes</span>
           {nodeStats.slice(0, 8).map((n, i) => (
             <span key={i} className="inline-flex items-center gap-1">
               <span className="font-medium text-ink-800">
@@ -728,6 +790,10 @@ export default function RunsView() {
   const [error, setError] = React.useState<string | null>(null)
   const [statusFilter, setStatusFilter] = React.useState<string>('all')
   const [nameQuery, setNameQuery] = React.useState('')
+  /** Filter row width → icon-only search when the text box would be < ~90 px. */
+  const [filterRowRef, filterRowWidth] = useElementWidth<HTMLDivElement>()
+  const [searchOpen, setSearchOpen] = React.useState(false)
+  const searchIconOnly = filterRowWidth > 0 && filterRowWidth < 300 && !searchOpen && !nameQuery
   const [metricName, setMetricName] = React.useState('')
   const [metricMin, setMetricMin] = React.useState('')
   const [promoteAlias, setPromoteAlias] = React.useState<'latest' | 'staging' | 'prod'>('latest')
@@ -765,6 +831,11 @@ export default function RunsView() {
   const [showUntrained, setShowUntrained] = React.useState(false)
   const livePollTickRef = React.useRef(0)
   const evaluatorOutputs = useEvaluatorOutputs(selected, outputFiles)
+  /** deployment_packager sidecar `<package>.manifest.json` → its package path. */
+  const shipPackagePath = React.useMemo(() => {
+    const f = outputFiles.find((o) => isShipManifestPath(o.path))
+    return f ? f.path.replace(/\.manifest\.json$/i, '') : null
+  }, [outputFiles])
   /** List filter: include archived runs (`GET /runs?include_archived=1`). */
   const [showArchived, setShowArchived] = React.useState(false)
   /** Replay exactly: confirm panel / in-flight / 409 inputs_changed diff. */
@@ -778,12 +849,38 @@ export default function RunsView() {
     status: string
     verifiedAt: string
     groups: ReturnType<typeof groupVerify>
+    /** Server summary counts / who verified / history size (newer APIs). */
+    counts: VerifyCounts | null
+    actor: { name: string; verified: boolean | null; claimed: string } | null
+    historyCount: number | null
+    /** Same outcome as a `last_verify` row → Run record summary line. */
+    last: LastVerify | null
   } | null>(null)
   const [verifyBusy, setVerifyBusy] = React.useState(false)
   /** Advanced "Delete permanently" typed confirmation. */
   const [purgeOpen, setPurgeOpen] = React.useState(false)
   const [purgeText, setPurgeText] = React.useState('')
   const [archiveBusy, setArchiveBusy] = React.useState(false)
+  /** Run detail pane width — header actions / path table adapt to it (not the viewport). */
+  const [detailPaneRef, detailPaneWidth] = usePaneWidth<HTMLDivElement>()
+  /** < 900 px: Verify / Replay / Open in Ship move into ⋯. */
+  const compactActions = detailPaneWidth > 0 && detailPaneWidth < 900
+  /** < 700 px: path table → stacked cards. */
+  const narrowDetail = detailPaneWidth > 0 && detailPaneWidth < 700
+  const nodeCatalog = useAppStore((s) => s.catalog)
+
+  // Register dialog: Esc closes it.
+  React.useEffect(() => {
+    if (!promoteOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setPromoteOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [promoteOpen])
 
   const goBackToRuns = React.useCallback(() => {
     setFocusRunsTab('history')
@@ -794,6 +891,9 @@ export default function RunsView() {
   React.useEffect(() => {
     const qs = new URLSearchParams(window.location.search)
     if (qs.get('status') === 'active') setStatusFilter('active')
+    // ?q= seeds the search box (e.g. q=trigger:webhook from the Editor Triggers dock).
+    const q = qs.get('q')
+    if (q) setNameQuery(q)
   }, [])
 
   // Tab focus comes from store / pathname (/runs/live, /runs/compare) via App — no hash sync.
@@ -891,8 +991,12 @@ export default function RunsView() {
               setPanel(p)
             }
             void open(parsed.runId)
-          } else if (p) {
-            setPanel(p)
+          } else {
+            const step = consumeStepParam()
+            if (step) {
+              setFocusNodeId(step)
+              setPanel('lineage')
+            } else if (p) setPanel(p)
           }
         } else if (selectedRef.current) {
           clearSelection()
@@ -901,6 +1005,17 @@ export default function RunsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   )
+
+  /**
+   * `?step=<node_id>` (Models → How it was made): read it once and drop it from
+   * the address bar so later run switches don't re-apply it.
+   */
+  const consumeStepParam = (): string | null => {
+    const step = parseStepParam(window.location.search)
+    if (!step) return null
+    window.history.replaceState(null, '', `${window.location.pathname}${searchWithoutStep(window.location.search)}`)
+    return step
+  }
 
   /** Drop the detail selection (e.g. "Back to runs" from a not-found run). */
   const clearSelection = () => {
@@ -954,7 +1069,13 @@ export default function RunsView() {
     setExpandedNodeFiles({})
     setRunArtifacts([])
     setSelectedOutputPath(null)
-    setFocusNodeId(null)
+    // Deep link `?step=` focuses that step on Overview (path group opens, inline details shown).
+    const urlStep = consumeStepParam()
+    setFocusNodeId(urlStep)
+    if (urlStep) {
+      pendingPanelRef.current = 'lineage'
+      setPanel('lineage')
+    }
     setPromoteOpen(false)
     setPromoteCandidateId(null)
     setAskAgentOpen(false)
@@ -1069,7 +1190,7 @@ export default function RunsView() {
     if (!selected) return false
     const metaStatus = (detail?.meta as { status?: string } | undefined)?.status
     const s = String(status?.status ?? metaStatus ?? '').toLowerCase()
-    return s === 'running' || s === 'paused'
+    return s === 'running' || s === 'paused' || isAwaitingApproval(s)
   })()
   usePolling(
     async () => {
@@ -1230,7 +1351,7 @@ export default function RunsView() {
               stage: 'staging',
             }),
           })
-          pushToast(`Registered model ${name} @ staging`, 'success')
+          pushToast(`Registered model ${name} in Staging`, 'success')
         } catch {
           /* registry optional if alias-only */
         }
@@ -1509,19 +1630,52 @@ export default function RunsView() {
     const runId = selected
     setVerifyBusy(true)
     try {
-      const raw = await apiJson<Record<string, unknown>>(`/runs/${encodeURIComponent(runId)}/verify`, {
-        timeoutMs: 300_000,
-        retries: 0,
-      })
+      // POST records the verify (who/when) server-side; older APIs only have GET (405 → retry).
+      const verifyPath = `/runs/${encodeURIComponent(runId)}/verify`
+      let raw: Record<string, unknown>
+      try {
+        raw = await apiJson<Record<string, unknown>>(verifyPath, {
+          method: 'POST',
+          body: JSON.stringify({}),
+          timeoutMs: 300_000,
+          retries: 0,
+        })
+      } catch (err) {
+        if (!(err instanceof ApiError && err.status === 405)) throw err
+        raw = await apiJson<Record<string, unknown>>(verifyPath, { timeoutMs: 300_000, retries: 0 })
+      }
       if (selectedRef.current !== runId) return
       const v = normalizeVerify(raw)
+      const last = parseLastVerify(raw)
+      const hc = Number(raw?.history_count)
       setVerifyResult({
         runId,
         ok: v.ok,
         status: v.status,
-        verifiedAt: String(raw?.verified_at ?? new Date().toISOString()),
+        verifiedAt: String(raw?.checked_at ?? raw?.verified_at ?? new Date().toISOString()),
         groups: groupVerify(v.items),
+        counts: parseVerifyCounts(raw?.summary),
+        actor:
+          last && last.actor
+            ? { name: last.actor, verified: last.actorVerified, claimed: last.claimedActor }
+            : null,
+        historyCount: Number.isFinite(hc) ? hc : null,
+        last: last ? { ...last, ok: last.ok ?? v.ok } : null,
       })
+      // Keep the list row's verified tick and the detail's last_verify in step without a reload.
+      if (last) {
+        const lv = {
+          checked_at: last.checkedAt,
+          actor: last.actor,
+          actor_verified: last.actorVerified,
+          ok: last.ok ?? v.ok,
+          status: last.status,
+          passed: last.passed,
+          total: last.total,
+        }
+        setRuns((prev) => (prev ? prev.map((r) => (r.run_id === runId ? { ...r, last_verify: lv } : r)) : prev))
+        setDetail((prev) => (prev && selectedRef.current === runId ? { ...prev, last_verify: lv } : prev))
+      }
     } catch (err) {
       if (err instanceof ApiError && (err.status === 404 || err.status === 405) && !auditApi) {
         pushToast('This server version cannot verify runs yet', 'info')
@@ -1609,6 +1763,29 @@ export default function RunsView() {
   const selectedSummary = runs?.find((r) => r.run_id === selected)
   const detailMeta =
     detail?.meta && typeof detail.meta === 'object' ? (detail.meta as Record<string, unknown>) : null
+  /** Last verify: this session's Verify response, else GET /runs/{id} / list row `last_verify`. */
+  const headerLastVerify: LastVerify | null =
+    (verifyResult && verifyResult.runId === selected ? verifyResult.last : null) ??
+    lastVerifyOf(detail) ??
+    lastVerifyOf(selectedSummary)
+  /** Who started the selected run (record → meta → detail) + identity proof. */
+  const runActor = (() => {
+    const pv = (pickProve(detail) ?? {}) as Record<string, unknown>
+    const srcs = [pv, detailMeta ?? {}, (detail ?? {}) as Record<string, unknown>]
+    const pick = (k: string) => {
+      for (const o of srcs) {
+        const v = o[k]
+        if (typeof v === 'string' && v.trim()) return v.trim()
+      }
+      return ''
+    }
+    const verifiedRaw = srcs.map((o) => o.actor_verified).find((v) => typeof v === 'boolean')
+    return {
+      name: pick('actor'),
+      verified: typeof verifiedRaw === 'boolean' ? verifiedRaw : null,
+      claimed: pick('claimed_actor'),
+    }
+  })()
   const runNodeStats = (
     Array.isArray(debug?.node_stats)
       ? debug.node_stats
@@ -1673,6 +1850,14 @@ export default function RunsView() {
       : null,
     graphName,
   })
+  /** Ship / deploy package run — its output is a package, not a model. */
+  const packageRun = isPackageRun({
+    graphNodeTypes: Array.isArray(stackGraph?.nodes)
+      ? stackGraph.nodes.map((n) => (n as { node_type?: string }).node_type)
+      : null,
+    artifacts: runArtifacts,
+    graphName,
+  })
   /**
    * Node list for the run: every graph node in execution order (so a node that
    * never ran after a failure still shows, numbered correctly), status from
@@ -1703,20 +1888,31 @@ export default function RunsView() {
     return items
   })()
 
-  const pipelineShape = computePipelineShape(
+  /** Fork/parallel shape from the graph edges (before deciding whether it is an ML multi-path run). */
+  const rawShape = computePipelineShape(
     rawStackItems.map((i) => i.id),
     stackGraph && Array.isArray(stackGraph.edges) ? stackGraph.edges : null,
   )
+  const graphNodeList = (Array.isArray(stackGraph?.nodes) ? stackGraph!.nodes : []) as Array<{
+    id?: unknown
+    node_type?: unknown
+    label?: unknown
+    on_error?: unknown
+  }>
+  const nodeTypeOfId = (id: string): string | null =>
+    String(graphNodeList.find((n) => String(n?.id ?? '') === id)?.node_type ?? '') ||
+    rawStackItems.find((i) => i.id === id)?.nodeType ||
+    null
 
   // ── Results (backend summary, else evaluator metrics.json fallback) ──
   const backendPaths = (() => {
     const fromDetail = pathsFromSummary(detail)
     return fromDetail.length ? fromDetail : pathsFromSummary(selectedSummary)
   })()
-  const pathResults: PathResult[] = (() => {
+  const resultsFor = (shape: typeof rawShape): PathResult[] => {
     if (backendPaths.length === 0) {
       return fallbackPathResults({
-        shape: pipelineShape,
+        shape,
         graphNodes: (stackGraph?.nodes as Parameters<typeof fallbackPathResults>[0]['graphNodes']) ?? null,
         metricsByNode: evaluatorOutputs.metricsByNode,
       })
@@ -1727,7 +1923,16 @@ export default function RunsView() {
       const hit = p.nodeIds.filter((id) => evaluatorOutputs.metricsByNode[id] != null).pop()
       return hit ? { ...p, metricsNodeId: hit } : p
     })
-  })()
+  }
+  const rawPathResults = resultsFor(rawShape)
+  /**
+   * Path A… grouping only for ML-style multi-path runs (≥2 paths with metrics,
+   * or ≥2 branches that train / evaluate). Workflow fan-out (if_switch /
+   * approvals / error branches) reads as one ordered step list.
+   */
+  const mlMultiPath = isMlMultiPath({ shape: rawShape, paths: rawPathResults, nodeTypeOf: nodeTypeOfId })
+  const pipelineShape = mlMultiPath ? rawShape : computePipelineShape(rawStackItems.map((i) => i.id), null)
+  const pathResults: PathResult[] = mlMultiPath || backendPaths.length > 0 ? rawPathResults : resultsFor(pipelineShape)
   const bestPath = pickBestPath(pathResults, bestPathIdFromSummary(detail) ?? bestPathIdFromSummary(selectedSummary))
   const runPrimary = primaryMetric(detail) ?? primaryMetric(selectedSummary) ?? bestPath?.primary ?? null
   // Overview Metrics box: best path on multi-path runs (matches the results banner).
@@ -1748,27 +1953,49 @@ export default function RunsView() {
   const multiPath = isMultiTrackShape(pipelineShape) && pathResults.length > 1
   /** Backend path-aware labels (meta.node_labels / record / node_stats[].node_label). */
   const backendNodeLabels = nodeLabelsFromRun(detail, runNodeStats)
+  /** Plugin catalog label for a node type ("IF Switch", "HTTP Request"). */
+  const catalogTypeLabel = (nodeType: string): string =>
+    nodeCatalog.find((n) => n.node_type === nodeType)?.label || humanNodeLabel(nodeType)
+  /** Workflow step names: IR label → node id (shared type) → catalog type label. */
+  const stepNames = stepDisplayNames(graphNodeList, catalogTypeLabel)
+  /** Non-ML runs: never "Http request · Path C" — IR label / id / catalog label instead. */
+  const flowLabel = (id: string): string | undefined => {
+    const n = stepNames.get(id)
+    if (n) return n.title
+    const b = backendNodeLabels.get(id)
+    return b ? stripPathSuffix(compactNodeLabel(b)) : undefined
+  }
   const pipelineStackItems = disambiguateByPath(rawStackItems, (id) => {
     if (!multiPath) return null
     const p = nodePaths.get(id)
     return p ? `Path ${p.letter}` : null
   }).map(({ id, label, status }) => {
+    if (!mlMultiPath) return { id, label: flowLabel(id) ?? label, status }
     const b = backendNodeLabels.get(id)
     return { id, label: b ? compactNodeLabel(b) : label, status }
   })
-  /** node id → step label for logs / stories / registry ids (backend label first). */
+  /** node id → step label for logs / stories / registry ids (backend label first on ML runs). */
   const stepLabel = (id: string): string | undefined => {
+    if (!mlMultiPath) return flowLabel(id) ?? pipelineStackItems.find((it) => it.id === id)?.label
     const b = backendNodeLabels.get(id)
     if (b) return compactNodeLabel(b)
     return pipelineStackItems.find((it) => it.id === id)?.label
   }
-  const nodeTypeLabel = (nodeType: string): string => humanNodeLabel(nodeType)
+  /** Workflow context for the step list: branch taken, skip reasons. */
+  const flowBranching = branchingNodesOf(graphNodeList)
+  const branchContext = branchContextByNode(
+    (Array.isArray(stackGraph?.edges) ? stackGraph!.edges : []) as Parameters<typeof branchContextByNode>[0],
+    { branchingNodes: flowBranching.branching, errorPorts: flowBranching.errorPorts },
+  )
+  const skipReasons = skipReasonsByNode(logs)
+  const nodeTypeLabel = catalogTypeLabel
   /** Cached steps → the run whose outputs were reused (`cache_source_run_id`). */
   const cacheSources = cacheSourcesFromNodeStats(
     runNodeStats,
     (pickProve(detail) as { cache?: unknown } | null)?.cache,
   )
   const stepFailures = failuresByNode(logs)
+  const stepResilience = React.useMemo(() => resilienceByNode(detail?.logs), [detail?.logs])
   const replayOf = replayOfRun(detail) || replayOfRun(selectedSummary)
   const selectedArchived = isArchivedRun(detail) || isArchivedRun(selectedSummary)
   const runDataset = datasetFromRun({
@@ -1776,29 +2003,36 @@ export default function RunsView() {
     events: logs,
     graphNodes: (stackGraph?.nodes as Parameters<typeof datasetFromRun>[0]['graphNodes']) ?? null,
   })
+  /**
+   * Regression line: only against earlier runs of the SAME pipeline (graph name)
+   * and path count. A backend regression whose previous run is not comparable
+   * (or not loaded) is replaced by the best comparable run, else hidden.
+   */
   const runRegression: RegressionView | null = (() => {
-    const reg = regressionOf(detail) ?? regressionOf(selectedSummary)
-    if (reg && runPrimary) {
-      return {
-        delta: reg.delta,
-        previousValue: reg.previousValue,
-        previousRunId: reg.previousRunId,
-        metricName:
-          String(
-            ((detail?.regression ?? detailMeta?.regression ?? selectedSummary?.regression) as { metric?: unknown } | undefined)
-              ?.metric ?? '',
-          ) || runPrimary.name,
-      }
-    }
     if (!selected || !runPrimary) return null
-    return regressionFromHistory({
+    const reg = regressionOf(detail) ?? regressionOf(selectedSummary)
+    const backend: RegressionView | null = reg
+      ? {
+          delta: reg.delta,
+          previousValue: reg.previousValue,
+          previousRunId: reg.previousRunId,
+          metricName:
+            String(
+              ((detail?.regression ?? detailMeta?.regression ?? selectedSummary?.regression) as { metric?: unknown } | undefined)
+                ?.metric ?? '',
+            ) || runPrimary.name,
+        }
+      : null
+    return comparableRegression({
       runId: selected,
       graphName,
+      pathCount: backendPaths.length || (multiPath ? pathResults.length : null),
       createdAt:
         (selectedSummary?.created_at as string | undefined) ??
         (detailMeta?.created_at as string | undefined) ??
         null,
       current: runPrimary,
+      backend,
       rows: (runs || []) as Array<Record<string, unknown>>,
       metricOf: (row) => primaryMetric(row),
     })
@@ -1854,6 +2088,11 @@ export default function RunsView() {
     focusSeededForRun.current = selected
   }, [runningNowKey, selected, runStatus])
 
+  /** Compact step dropdown for Logs / Run outputs / Checkpoints. */
+  const stepOptions = stepPickerOptions(
+    pipelineStackItems,
+    isMultiTrackShape(pipelineShape) ? pipelineShape.laneOf : null,
+  )
   const focusLabel = focusNodeId
     ? pipelineStackItems.find((i) => focusMatchesNode(focusNodeId, i.id))?.label ||
       displayNodeLabel(focusNodeId, { withCue: true })
@@ -2011,7 +2250,10 @@ export default function RunsView() {
       if (statusNeedle && !statusMatchesFilter(r.status, statusNeedle)) return false
       if (q) {
         const rawName = String(r.graph_name ?? '')
-        const hay = `${rawName} ${runDisplayName(r)} ${r.run_id}`.toLowerCase()
+        const rr = r as unknown as { trigger?: unknown; actor?: unknown; meta?: { trigger?: unknown } }
+        const trigger = String(rr.trigger ?? rr.meta?.trigger ?? '')
+        // `trigger:webhook` / `trigger:schedule` and the actor are searchable too.
+        const hay = `${rawName} ${runDisplayName(r)} ${r.run_id} ${trigger ? `trigger:${trigger}` : ''} ${String(rr.actor ?? '')}`.toLowerCase()
         if (!hay.includes(q)) return false
       }
       if (metricKey) {
@@ -2086,11 +2328,16 @@ export default function RunsView() {
 
   return (
     <RunsShell
+      selectedKey={selected}
+      onBack={() => {
+        clearSelection()
+        if (activeProject) navigatePath(paths.runs(activeProject))
+      }}
       list={
         <div className="flex h-full min-h-0 flex-col">
         <div className="shrink-0 space-y-1.5 border-b border-ink-100 bg-white px-2.5 py-1.5 pr-9">
         {error && <ErrorBanner message={error} onRetry={() => void load()} />}
-        <div className="flex min-w-0 items-center gap-1.5">
+        <div ref={filterRowRef} className="flex min-w-0 items-center gap-1.5">
             <FieldSelect
               className="w-[7.25rem] shrink-0"
               allowEmpty={false}
@@ -2109,13 +2356,29 @@ export default function RunsView() {
               ]}
               triggerClassName="!mt-0 !py-1 rounded-md border border-ink-200 bg-white px-2 text-[12px] text-ink-800"
             />
-            <input
-              value={nameQuery}
-              onChange={(e) => setNameQuery(e.target.value)}
-              placeholder="Filter runs…"
-              aria-label="Filter by graph name or run id"
-              className="min-w-0 flex-1 rounded-md border border-ink-200 px-2 py-1 text-[12px]"
-            />
+            {searchIconOnly ? (
+              <button
+                type="button"
+                className="btn-quiet ml-auto shrink-0 !px-1.5 !py-1"
+                title="Filter runs by name or id"
+                aria-label="Filter runs"
+                onClick={() => setSearchOpen(true)}
+              >
+                <Search className="h-3.5 w-3.5" />
+              </button>
+            ) : (
+              <input
+                value={nameQuery}
+                onChange={(e) => setNameQuery(e.target.value)}
+                onBlur={() => {
+                  if (!nameQuery.trim()) setSearchOpen(false)
+                }}
+                autoFocus={searchOpen && !nameQuery}
+                placeholder="Filter runs…"
+                aria-label="Filter by graph name or run id"
+                className="min-w-[3rem] flex-1 rounded-md border border-ink-200 px-2 py-1 text-[12px]"
+              />
+            )}
             <button
               type="button"
               className={clsx(
@@ -2255,22 +2518,36 @@ export default function RunsView() {
                   paths: pathsFromSummary(r),
                   bestPathId: bestPathIdFromSummary(r),
                 }) ?? formatRunMetric(r.metrics)
-              const rowReg = regressionOf(r)
+              // Row arrow only against a comparable earlier run (same pipeline + path count).
+              const rowRegRaw = regressionOf(r)
+              const rowReg =
+                rowRegRaw?.previousRunId &&
+                (runs || []).some(
+                  (o) =>
+                    o.run_id === rowRegRaw.previousRunId &&
+                    isComparableRun(o, { graphName: graphNameOf(r), pathCount: pathCountOf(r) }),
+                )
+                  ? rowRegRaw
+                  : null
+              const rowFailed = normalizeRunStatus(r.status) === 'failed'
+              const failReason = rowFailed ? runFailureReason(r) : null
+              const rowReplayOf = replayOfRun(r)
               const foreignProject =
                 r.project && String(r.project).trim() && String(r.project) !== activeProject
                   ? String(r.project)
                   : null
               const checked = compareIds.includes(r.run_id)
+              const rowVerify = lastVerifyOf(r)
               return (
               <li key={r.run_id} className="flex min-w-0 items-stretch">
                 <label
-                  className="flex shrink-0 items-center border-r border-ink-100 px-2"
+                  className="flex w-10 shrink-0 cursor-pointer items-center justify-center self-stretch border-r border-ink-100 hover:bg-ink-50 has-[:disabled]:cursor-not-allowed"
                   title="Select for compare"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <input
                     type="checkbox"
-                    className="h-3.5 w-3.5 rounded border-ink-300"
+                    className="h-4 w-4 cursor-pointer rounded border-ink-300"
                     checked={checked}
                     disabled={!checked && compareIds.length >= 5}
                     onChange={() => toggleCompareId(r.run_id)}
@@ -2298,14 +2575,18 @@ export default function RunsView() {
                       {runDisplayName(r)}
                     </div>
                     {isArchivedRun(r) ? (
-                      <span className="shrink-0 rounded-full bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-500">
+                      <span className="shrink-0 rounded-full bg-ink-100 px-1.5 py-0.5 text-[10px] font-medium text-ink-600">
                         Archived
                       </span>
                     ) : null}
-                    <StatusBadge status={shortStatusLabel(r.status)} />
+                    {isAwaitingApproval(r.status) ? (
+                      <StatusBadge kind="run" status={String(r.status)} />
+                    ) : (
+                      <StatusBadge status={shortStatusLabel(r.status)} />
+                    )}
                     {isStaleRunning(r.status, r.created_at) ? (
                       <span
-                        className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900"
+                        className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900"
                         title={`Still RUNNING after ${formatRelativeTime(r.created_at)} — may be a zombie journal`}
                       >
                         Stale
@@ -2313,12 +2594,29 @@ export default function RunsView() {
                     ) : null}
                   </div>
                   <div className="flex min-w-0 items-center justify-between gap-2 text-[11px] text-ink-500">
-                    <span className="min-w-0 truncate tabular-nums" title={metric || foreignProject || undefined}>
-                      {metric || foreignProject || '\u00a0'}
-                      {metric && rowReg && rowReg.delta < -0.005 ? (
+                    <span
+                      className="min-w-0 truncate tabular-nums"
+                      title={
+                        [rowReplayOf ? `Replay of run ${rowReplayOf}` : '', failReason || metric || foreignProject || '']
+                          .filter(Boolean)
+                          .join(' · ') || undefined
+                      }
+                    >
+                      {linkableRunId(rowReplayOf) ? (
+                        <span className="text-ink-400">
+                          Replay of <span className="font-mono">{shortRunId(rowReplayOf)}</span>
+                          {failReason || metric || foreignProject ? ' · ' : ''}
+                        </span>
+                      ) : null}
+                      {failReason ? (
+                        <span className="text-ink-600">{failReason}</span>
+                      ) : (
+                        metric || foreignProject || (rowReplayOf ? '' : '\u00a0')
+                      )}
+                      {!failReason && metric && rowReg && rowReg.delta < -0.005 ? (
                         <span
                           className="ml-1 font-semibold text-rose-700"
-                          title={`Lower than the best earlier run${
+                          title={`Lower than the best earlier run of this pipeline${
                             rowReg.previousValue != null
                               ? ` (${formatMetricValue(primaryMetric(r)?.name || '', rowReg.previousValue)})`
                               : ''
@@ -2332,7 +2630,15 @@ export default function RunsView() {
                       <span title={formatLocaleDateTime(r.created_at)}>
                         {formatRelativeTime(r.created_at)}
                       </span>
-                      <span className="font-mono text-ink-400" title={r.run_id}>
+                      <span className="inline-flex items-center gap-0.5 font-mono text-ink-400" title={r.run_id}>
+                        {rowVerify?.ok ? (
+                          <span
+                            className="inline-flex"
+                            title={`Last verify passed${rowVerify.checkedAt ? ` · ${formatLocaleDateTime(rowVerify.checkedAt)}` : ''}${rowVerify.actor ? ` · by ${rowVerify.actor}` : ''}`}
+                          >
+                            <ShieldCheck className="h-3 w-3 text-emerald-600" aria-label="verified" />
+                          </span>
+                        ) : null}
                         {shortRunId(r.run_id)}
                       </span>
                     </span>
@@ -2415,7 +2721,7 @@ export default function RunsView() {
           />
           </div>
         ) : (
-          <div className="flex h-full min-h-0 flex-col">
+          <div ref={detailPaneRef} className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
             {selectedHiddenByFilters && (
               <div
                 role="status"
@@ -2436,18 +2742,26 @@ export default function RunsView() {
               return (
             <div className="shrink-0 space-y-1 border-b border-ink-100 bg-white px-3 py-1.5">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <StatusBadge status={shortStatusLabel(runStatus)} />
+                <MasterDetailToggle />
+                {isAwaitingApproval(runStatus) ? (
+                  <StatusBadge kind="run" status={String(runStatus)} />
+                ) : (
+                  <StatusBadge status={shortStatusLabel(runStatus)} />
+                )}
                 {isStaleRunning(
                   runStatus,
                   selectedSummary?.created_at ??
                     (detail?.meta as { created_at?: string } | undefined)?.created_at,
                 ) && (
-                  <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
+                  <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
                     Stale
                   </span>
                 )}
                 <span
-                  className="min-w-0 max-w-[14rem] truncate text-[13px] font-semibold text-ink-950 sm:max-w-[20rem]"
+                  className={clsx(
+                    'min-w-0 truncate text-[13px] font-semibold text-ink-950',
+                    compactActions ? 'max-w-[16rem]' : 'max-w-[24rem]',
+                  )}
                   title={selected || undefined}
                 >
                   {headerTitle}
@@ -2464,10 +2778,24 @@ export default function RunsView() {
                       (detail?.meta as { created_at?: string } | undefined)?.created_at,
                   )}
                 </span>
-                <span className="inline-flex items-center font-mono text-[11px] text-ink-400" title={`Run id ${selected}`}>
-                  {!headerTitle.includes(shortRunId(selected || '')) ? shortRunId(selected || '') : null}
-                  {selected ? <CopyableMono value={selected} title="Copy full run id" copyOnly /> : null}
-                </span>
+                {selected ? <ShortId value={selected} label="run id" /> : null}
+                {headerLastVerify ? (
+                  <span
+                    className={clsx(
+                      'inline-flex items-center gap-0.5 text-[11px]',
+                      headerLastVerify.ok ? 'text-emerald-700' : 'text-rose-700',
+                    )}
+                    title={lastVerifyText(headerLastVerify).text}
+                  >
+                    <ShieldCheck className="h-3 w-3" aria-hidden />
+                    {headerLastVerify.ok ? 'Verified' : headerLastVerify.status === 'unsealed' ? 'Not sealed' : 'Verify failed'}
+                  </span>
+                ) : null}
+                {runActor.name ? (
+                  <span className="inline-flex min-w-0 items-center gap-1 text-[11px] text-ink-500">
+                    by <ActorName actor={runActor.name} verified={runActor.verified} claimed={runActor.claimed} className="text-ink-700" />
+                  </span>
+                ) : null}
                 {live && status?.progress_pct != null ? (
                   <SlimProgress pct={Number(status.progress_pct)} />
                 ) : null}
@@ -2486,6 +2814,7 @@ export default function RunsView() {
                     <button
                       type="button"
                       className="font-mono text-accent-800 underline-offset-2 hover:underline"
+                      title={`Open run ${sourceRunId}`}
                       onClick={() => {
                         pendingPanelRef.current = 'lineage'
                         void open(sourceRunId)
@@ -2514,27 +2843,17 @@ export default function RunsView() {
                 ) : null}
                 {selectedArchived ? (
                   <span
-                    className="rounded-full bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-600"
+                    className="rounded-full bg-ink-100 px-1.5 py-0.5 text-[10px] font-medium text-ink-600"
                     title="Archived runs are hidden from the list; the record and files are kept"
                   >
                     Archived
                   </span>
                 ) : null}
-                <div className="ml-auto flex shrink-0 flex-wrap items-center gap-0.5">
-                  {canOpenGraph ? (
-                    <button
-                      type="button"
-                      className="btn-quiet !px-2 !py-1 text-[11px]"
-                      title="Open this run’s graph in the Editor"
-                      onClick={() => void openGraphInBuilder()}
-                    >
-                      <Workflow className="h-3.5 w-3.5" /> Editor
-                    </button>
-                  ) : null}
+                <div className="ml-auto flex shrink-0 flex-wrap items-center gap-1">
                   {['running', 'paused'].includes(st) ? (
                     <details className="relative">
                       <summary
-                        className="btn-quiet !px-2 !py-1 text-[11px] cursor-pointer list-none [&::-webkit-details-marker]:hidden"
+                        className="btn-secondary !px-2 !py-1 text-[11px] cursor-pointer list-none [&::-webkit-details-marker]:hidden"
                         title="Pause, resume, or cancel this run"
                       >
                         Manage
@@ -2567,38 +2886,17 @@ export default function RunsView() {
                       </div>
                     </details>
                   ) : null}
-                  {succeeded && runProducedModel ? (
-                    <button
-                      type="button"
-                      className={
-                        promoteOpen && panel === 'lineage'
-                          ? 'btn-secondary !px-2 !py-1 text-[11px]'
-                          : 'btn-quiet !px-2 !py-1 text-[11px]'
-                      }
-                      aria-expanded={promoteOpen && panel === 'lineage'}
-                      title={
-                        promoteOpen && panel === 'lineage'
-                          ? 'Hide the save-model form'
-                          : 'Save a model from this run to Models'
-                      }
-                      onClick={() => {
-                        setPromoteOpen((v) => {
-                          const next = !v
-                          if (next) {
-                            setPromoteCandidateId(null)
-                            setRegModelName('')
-                            setRegModelSlug('')
-                            setPanel('lineage')
-                          }
-                          return next
-                        })
-                      }}
-                    >
-                      {promoteOpen && panel === 'lineage' ? 'Close' : 'Register model'}
-                    </button>
-                  ) : null}
-                  {!live && auditApi ? (
+                  {!live && auditApi && !compactActions ? (
                     <>
+                      <button
+                        type="button"
+                        className="btn-quiet !px-2 !py-1 text-[11px]"
+                        disabled={verifyBusy}
+                        title="Re-check the record hash, chain, graph snapshot, inputs and outputs"
+                        onClick={() => void verifyRun()}
+                      >
+                        <ShieldCheck className="h-3.5 w-3.5" /> {verifyBusy ? 'Verifying…' : 'Verify'}
+                      </button>
                       <button
                         type="button"
                         className={clsx('btn-quiet !px-2 !py-1 text-[11px]', replayOpen && 'text-accent-800')}
@@ -2611,38 +2909,53 @@ export default function RunsView() {
                       >
                         <Repeat className="h-3.5 w-3.5" /> Replay exactly
                       </button>
-                      <button
-                        type="button"
-                        className="btn-quiet !px-2 !py-1 text-[11px]"
-                        disabled={verifyBusy}
-                        title="Re-check the record hash, chain, graph snapshot, inputs and outputs"
-                        onClick={() => void verifyRun()}
-                      >
-                        <ShieldCheck className="h-3.5 w-3.5" /> {verifyBusy ? 'Verifying…' : 'Verify'}
-                      </button>
                     </>
                   ) : null}
-                  {!['running', 'paused'].includes(st) && auditApi ? (
-                    selectedArchived ? (
-                      <button
-                        type="button"
-                        className="btn-quiet !px-2 !py-1 text-[11px]"
-                        title="Show this run in the list again"
-                        onClick={() => void restoreRun(selected)}
-                      >
-                        <Archive className="h-3.5 w-3.5" /> Restore
-                      </button>
-                    ) : (
-                      <ConfirmButton
-                        label="Archive"
-                        confirmLabel="Archive run? (kept, hidden)"
-                        disabled={archiveBusy}
-                        className="!px-2 !py-1 text-[11px]"
-                        onConfirm={() => void archiveRun()}
-                      />
-                    )
+                  {/* Primary action last (rightmost): Register model, or the package for Ship runs. */}
+                  {succeeded && packageRun ? (
+                    <>
+                      {activeProject && !compactActions ? (
+                        <button
+                          type="button"
+                          className="btn-secondary !px-2 !py-1 text-[11px]"
+                          title="Open Ship with this run’s package"
+                          onClick={() =>
+                            navigatePath(`${paths.ship(activeProject)}?run_id=${encodeURIComponent(selected)}`)
+                          }
+                        >
+                          <Rocket className="h-3.5 w-3.5" /> Open in Ship
+                        </button>
+                      ) : null}
+                      {outputFiles.length > 0 ? (
+                        <button
+                          type="button"
+                          className="btn-primary !px-2 !py-1 text-[11px]"
+                          title="Download this run’s package files as a zip (one folder per step)"
+                          onClick={() => void downloadZip()}
+                        >
+                          <Download className="h-3.5 w-3.5" /> Download package
+                        </button>
+                      ) : null}
+                    </>
                   ) : null}
-                  {!['running', 'paused'].includes(st) ? (
+                  {succeeded && runProducedModel ? (
+                    <button
+                      type="button"
+                      className="btn-primary !px-2 !py-1 text-[11px]"
+                      aria-haspopup="dialog"
+                      aria-expanded={promoteOpen}
+                      title="Save a model from this run to Models"
+                      onClick={() => {
+                        setPromoteCandidateId(null)
+                        setRegModelName('')
+                        setRegModelSlug('')
+                        setPromoteOpen(true)
+                      }}
+                    >
+                      Register model
+                    </button>
+                  ) : null}
+                  {canOpenGraph || !live ? (
                     <details className="relative">
                       <summary
                         className="btn-quiet !px-1.5 !py-1 text-[11px] cursor-pointer list-none [&::-webkit-details-marker]:hidden"
@@ -2651,23 +2964,105 @@ export default function RunsView() {
                       >
                         <MoreHorizontal className="h-3.5 w-3.5" />
                       </summary>
-                      <div className="absolute right-0 z-30 mt-1 flex w-60 flex-col gap-1 rounded-xl border border-ink-200 bg-white p-2 text-[12px] shadow-lg">
-                        <div className="px-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">Advanced</div>
-                        <button
-                          type="button"
-                          className="btn-quiet w-full justify-start !px-2 !py-1 text-[12px] text-rose-700"
-                          onClick={() => {
-                            setPurgeText('')
-                            setPurgeOpen(true)
-                          }}
-                        >
-                          Delete permanently…
-                        </button>
-                        <p className="px-1 text-[11px] text-ink-400">
-                          {auditApi
-                            ? 'Removes the run’s files and journal for good. Archive keeps the audit record.'
-                            : 'This server cannot archive runs — deleting removes the run for good.'}
-                        </p>
+                      <div className="absolute right-0 z-30 mt-1 flex w-64 max-w-[calc(100vw-2rem)] flex-col gap-0.5 rounded-xl border border-ink-200 bg-white p-1.5 text-[12px] shadow-lg">
+                        {compactActions && !live && auditApi ? (
+                          <>
+                            <button
+                              type="button"
+                              className="btn-quiet w-full justify-start !px-2 !py-1 text-[12px]"
+                              disabled={verifyBusy}
+                              title="Re-check the record hash, chain, graph snapshot, inputs and outputs"
+                              onClick={(e) => {
+                                closeMenu(e)
+                                void verifyRun()
+                              }}
+                            >
+                              <ShieldCheck className="h-3.5 w-3.5" /> {verifyBusy ? 'Verifying…' : 'Verify'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-quiet w-full justify-start !px-2 !py-1 text-[12px]"
+                              title="Start a new run from this run’s exact graph snapshot and seed"
+                              onClick={(e) => {
+                                closeMenu(e)
+                                setReplayConflict(null)
+                                setReplayOpen(true)
+                              }}
+                            >
+                              <Repeat className="h-3.5 w-3.5" /> Replay exactly
+                            </button>
+                          </>
+                        ) : null}
+                        {compactActions && succeeded && packageRun && activeProject ? (
+                          <button
+                            type="button"
+                            className="btn-quiet w-full justify-start !px-2 !py-1 text-[12px]"
+                            title="Open Ship with this run’s package"
+                            onClick={(e) => {
+                              closeMenu(e)
+                              navigatePath(`${paths.ship(activeProject)}?run_id=${encodeURIComponent(selected)}`)
+                            }}
+                          >
+                            <Rocket className="h-3.5 w-3.5" /> Open in Ship
+                          </button>
+                        ) : null}
+                        {canOpenGraph ? (
+                          <button
+                            type="button"
+                            className="btn-quiet w-full justify-start !px-2 !py-1 text-[12px]"
+                            title="Open this run’s graph in the Editor"
+                            onClick={(e) => {
+                              closeMenu(e)
+                              void openGraphInBuilder()
+                            }}
+                          >
+                            <Workflow className="h-3.5 w-3.5" /> Open in Editor
+                          </button>
+                        ) : null}
+                        {!live && auditApi ? (
+                          selectedArchived ? (
+                            <button
+                              type="button"
+                              className="btn-quiet w-full justify-start !px-2 !py-1 text-[12px]"
+                              title="Show this run in the list again"
+                              onClick={(e) => {
+                                closeMenu(e)
+                                void restoreRun(selected)
+                              }}
+                            >
+                              <Archive className="h-3.5 w-3.5" /> Restore
+                            </button>
+                          ) : (
+                            <ConfirmButton
+                              label="Archive"
+                              confirmLabel="Archive run? (kept, hidden)"
+                              disabled={archiveBusy}
+                              className="w-full justify-start !px-2 !py-1 text-[12px]"
+                              onConfirm={() => void archiveRun()}
+                            />
+                          )
+                        ) : null}
+                        {!live ? (
+                          <>
+                            <div className="my-1 border-t border-ink-100" />
+                            <button
+                              type="button"
+                              className="btn-quiet w-full justify-start !px-2 !py-1 text-[12px] text-rose-700"
+                              onClick={(e) => {
+                                closeMenu(e)
+                                setPurgeText('')
+                                setPurgeOpen(true)
+                              }}
+                            >
+                              Delete permanently…
+                            </button>
+                            <p className="px-2 pb-1 text-[11px] text-ink-400">
+                              {auditApi
+                                ? 'Removes the run’s files and journal for good. Archive keeps the audit record.'
+                                : 'This server cannot archive runs — deleting removes the run for good.'}
+                            </p>
+                          </>
+                        ) : null}
                       </div>
                     </details>
                   ) : null}
@@ -2704,6 +3099,10 @@ export default function RunsView() {
                   verifiedAt={verifyResult.verifiedAt}
                   labelFor={stepLabel}
                   onClose={() => setVerifyResult(null)}
+                  counts={verifyResult.counts}
+                  actor={verifyResult.actor}
+                  runId={selected}
+                  historyCount={verifyResult.historyCount}
                 />
               ) : null}
               {purgeOpen ? (
@@ -2763,19 +3162,31 @@ export default function RunsView() {
                 />
               ) : null}
 
-              <IdeTabs
-                aria-label="Run detail"
-                value={panel}
-                options={detailPanelOptions.map((p) => ({
-                  id: p,
-                  label: PANEL_LABELS[p],
-                }))}
-                onChange={(next) => {
-                  setPanel(next as DetailPanel)
-                  // Register/stage form lives on Overview — close when leaving that tab.
-                  if (next !== 'lineage' && promoteOpen) setPromoteOpen(false)
-                }}
-              />
+              {/* Ship package run: contents + sha256, how to run, self-test (packager sidecar). */}
+              {!live && panel === 'lineage' && shipPackagePath ? (
+                <ShipPackageSummaryForPath
+                  packagePath={shipPackagePath}
+                  refreshKey={selected}
+                  onOpenRun={(rid) => {
+                    pushNextUrlRef.current = true
+                    pendingPanelRef.current = 'lineage'
+                    void open(rid)
+                  }}
+                />
+              ) : null}
+
+              {/* One row always: tabs scroll sideways instead of wrapping. */}
+              <div className="-mx-3 overflow-x-auto px-3 [scrollbar-width:none] [&>.ide-tabs]:!flex-nowrap [&_.ide-tab]:shrink-0 [&_.ide-tab]:whitespace-nowrap">
+                <IdeTabs
+                  aria-label="Run detail"
+                  value={panel}
+                  options={detailPanelOptions.map((p) => ({
+                    id: p,
+                    label: PANEL_LABELS[p],
+                  }))}
+                  onChange={(next) => setPanel(next as DetailPanel)}
+                />
+              </div>
 
               {isStaleRunning(
                 runStatus,
@@ -2795,7 +3206,7 @@ export default function RunsView() {
                   </span>
                   <div className="flex flex-wrap gap-1.5">
                     <button type="button" className="btn-primary !px-2 !py-1 text-[11px]" onClick={() => void openGraphInBuilder()}>
-                      Editor
+                      Open in Editor
                     </button>
                     <button type="button" className="btn-secondary !px-2 !py-1 text-[11px]" onClick={() => setPanel('logs')}>
                       Logs
@@ -2876,28 +3287,41 @@ export default function RunsView() {
                 </div>
               ) : null}
 
-              {succeeded && runProducedModel && promoteOpen && panel === 'lineage' ? (
-                <div id="run-promote-panel" className="rounded-xl border border-accent-200/70 bg-white px-3 py-2.5 shadow-sm space-y-2">
-                  <div className="flex flex-wrap items-start justify-between gap-2">
+              {succeeded && runProducedModel && promoteOpen ? createPortal(
+                <div
+                  className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/30 p-4"
+                  onMouseDown={(e) => {
+                    if (e.target === e.currentTarget) setPromoteOpen(false)
+                  }}
+                >
+                <div
+                  id="run-promote-panel"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="run-promote-title"
+                  className="flex max-h-[calc(100dvh-2rem)] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-ink-200 bg-white shadow-xl"
+                >
+                  <div className="flex shrink-0 items-start justify-between gap-2 border-b border-ink-100 px-4 py-2.5">
                     <div className="min-w-0">
-                      <div className="text-[12px] font-semibold text-ink-900">Save a model from this run</div>
+                      <h2 id="run-promote-title" className="text-[13px] font-semibold text-ink-900">Register a model from this run</h2>
                       <p className="mt-0.5 text-[11px] text-ink-500">
                         Pick the model to keep and give it a name — it appears under Models, ready to test or ship to a device.
                       </p>
                     </div>
                     <button
                       type="button"
-                      className="btn-quiet shrink-0 !px-2 !py-1 text-[11px]"
+                      className="btn-quiet shrink-0 !px-1.5 !py-1"
+                      aria-label="Close"
+                      title="Close (Esc)"
                       onClick={() => setPromoteOpen(false)}
                     >
-                      Close
+                      <X className="h-4 w-4" />
                     </button>
                   </div>
+                  <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-3">
                   {rankedModelOptions.length > 0 ? (
                     <div className="space-y-1.5">
-                      <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-                        Which model?
-                      </div>
+                      <div className="text-[12px] font-medium text-ink-700">Which model?</div>
                       {visibleModelOptions.length === 0 ? (
                         <p className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[12px] text-amber-950">
                           This run has no trained model — only an untrained architecture. Check that training ran, or show
@@ -2905,7 +3329,7 @@ export default function RunsView() {
                         </p>
                       ) : null}
                       <ul
-                        className="max-h-52 space-y-1 overflow-y-auto [scrollbar-gutter:stable]"
+                        className="space-y-1"
                         role="radiogroup"
                         aria-label="Model to save"
                       >
@@ -2916,7 +3340,8 @@ export default function RunsView() {
                           const pm = Object.keys(o.metrics).length
                             ? primaryMetric({ metrics: o.metrics })
                             : null
-                          const fileName = o.path.replace(/\/+$/, '').split('/').pop() || o.path
+                          // compiled_<hex>.keras → "Untrained model (architecture)" (raw path in the tooltip).
+                          const fileName = friendlyArtifactName(o.path).label
                           return (
                             <li key={o.id}>
                               <label
@@ -2978,7 +3403,11 @@ export default function RunsView() {
                           <input
                             className="mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
                             value={regModelName}
+                            autoFocus
                             onChange={(e) => setRegModelName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !registerBusy && selectedModelOption) void registerModelFromRun()
+                            }}
                             placeholder="my-model"
                           />
                           {(() => {
@@ -2989,21 +3418,13 @@ export default function RunsView() {
                             return (
                               <span className="mt-1 block text-[11px] text-amber-800">
                                 “{regModelName.trim()}” already exists — saving makes this run its new{' '}
-                                <b>staging</b> version
-                                {staging && staging !== selected ? ` (replaces staging from run ${shortRunId(staging)})` : ''}
+                                <b>Staging</b> version
+                                {staging && staging !== selected ? ` (replaces Staging from run ${shortRunId(staging)})` : ''}
                                 {prod ? `; prod stays on run ${shortRunId(prod)}` : ''}. Pick another name for a separate model.
                               </span>
                             )
                           })()}
                         </label>
-                        <button
-                          type="button"
-                          className="btn-primary !px-2.5 !py-1.5 text-[12px]"
-                          disabled={registerBusy || !selectedModelOption}
-                          onClick={() => void registerModelFromRun()}
-                        >
-                          {registerBusy ? 'Saving…' : 'Save model'}
-                        </button>
                       </div>
                     </div>
                   ) : (
@@ -3048,7 +3469,7 @@ export default function RunsView() {
                             aria-label="Release channel"
                             options={[
                               { value: 'latest', label: 'Latest' },
-                              { value: 'staging', label: 'Testing (staging)' },
+                              { value: 'staging', label: 'Staging' },
                               { value: 'prod', label: 'Production' },
                             ]}
                             triggerClassName="!mt-0 rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
@@ -3066,9 +3487,7 @@ export default function RunsView() {
                   {runModels.length > 0 ? (
                     <div className="space-y-1.5 border-t border-ink-100 pt-2">
                       <div className="flex items-center justify-between gap-2">
-                        <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-                          Already saved from this run
-                        </div>
+                        <div className="text-[12px] font-medium text-ink-700">Already saved from this run</div>
                         <button
                           type="button"
                           className="btn-quiet !px-1.5 !py-0.5 text-[11px]"
@@ -3091,7 +3510,7 @@ export default function RunsView() {
                               <span className="font-medium text-ink-900">{m.name}</span>
                               <span className="text-[11px] text-ink-500">
                                 {stages.length
-                                  ? stages.map((k) => (k === 'prod' ? 'production' : k === 'staging' ? 'testing' : k)).join(' · ')
+                                  ? stages.map((k) => modelStageLabel(k)).join(' · ')
                                   : 'saved'}
                               </span>
                             </li>
@@ -3100,7 +3519,24 @@ export default function RunsView() {
                       </ul>
                     </div>
                   ) : null}
+                  </div>
+                  <div className="flex shrink-0 items-center justify-end gap-2 border-t border-ink-100 bg-white px-4 py-2.5">
+                    <button type="button" className="btn-quiet !px-2.5 !py-1.5 text-[12px]" onClick={() => setPromoteOpen(false)}>
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-primary !px-3 !py-1.5 text-[12px]"
+                      disabled={registerBusy || !selectedModelOption}
+                      title={!selectedModelOption ? 'Pick a model first' : undefined}
+                      onClick={() => void registerModelFromRun()}
+                    >
+                      {registerBusy ? 'Saving…' : 'Save model'}
+                    </button>
+                  </div>
                 </div>
+                </div>,
+                document.body,
               ) : null}
 
               {!succeeded && !failed && !cancelled && runModels.length > 0 ? (
@@ -3124,19 +3560,9 @@ export default function RunsView() {
               />
             ) : null}
 
-            <div className="flex min-h-0 flex-1 gap-3 overflow-hidden px-3 py-2">
-              <PipelineStack
-                items={pipelineStackItems}
-                value={focusNodeId}
-                onChange={setFocusNodeId}
-                laneOf={isMultiTrackShape(pipelineShape) ? pipelineShape.laneOf : null}
-                laneTitle={(lane) => {
-                  const p = lanePaths.get(lane)
-                  return p ? pathDisplayName(p) : null
-                }}
-                progressOf={(id) => liveProgress.get(id) ?? null}
-                className="min-h-0 max-h-full [scrollbar-gutter:stable]"
-              />
+            {/* No left step column: Overview focuses steps from "What happened";
+                Logs / Run outputs / Checkpoints use the compact step picker. */}
+            <div className="flex min-h-0 flex-1 overflow-hidden px-3 py-2">
               <div
                 className={clsx(
                   'min-h-0 min-w-0 flex-1 [scrollbar-gutter:stable]',
@@ -3147,16 +3573,12 @@ export default function RunsView() {
               >
             {panel === 'logs' && (
               <div className="space-y-2">
-                {visibleLogs.length > 0 ? (
-                  <div className="flex items-center gap-2 text-[11px] text-ink-500">
+                {visibleLogs.length > 0 || focusNodeId ? (
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-ink-500">
+                    <StepPicker options={stepOptions} value={focusNodeId} onChange={setFocusNodeId} />
                     <span>
                       {`${visibleLogs.length.toLocaleString()} line${visibleLogs.length === 1 ? '' : 's'}`}
-                      {focusNodeId ? (
-                        <>
-                          {' '}
-                          · <span className="font-medium text-ink-700">{focusLabel}</span>
-                        </>
-                      ) : isMultiTrackShape(pipelineShape) ? (
+                      {focusNodeId ? null : isMultiTrackShape(pipelineShape) ? (
                         <> · {pipelineShape.branches.length} paths in this run</>
                       ) : null}
                     </span>
@@ -3189,6 +3611,9 @@ export default function RunsView() {
             )}
             {panel === 'checkpoints' && (
               <div className="space-y-2">
+                {checkpoints.length > 0 ? (
+                  <StepPicker options={stepOptions} value={focusNodeId} onChange={setFocusNodeId} />
+                ) : null}
                 {(() => {
                   const visible = focusNodeId
                     ? checkpoints.filter((c) => focusMatchesNode(focusNodeId, c))
@@ -3283,19 +3708,50 @@ export default function RunsView() {
                       : undefined,
                     events: logs,
                   })
+                  // All steps: most important first — the best path's Evaluator /
+                  // Trainer / Edge Optimizer, other paths, other steps, run-level,
+                  // and dataset ingest (hundreds of input wavs) last.
+                  const bestLaneForOutputs = (() => {
+                    if (!multiPath || !bestPath) return null
+                    for (const [lane, lp] of lanePaths) if (lane !== 'shared' && lp.pathId === bestPath.pathId) return lane
+                    return null
+                  })()
+                  const sourceIds = new Set(
+                    pipelineStackItems
+                      .map((i) => i.id)
+                      .filter(
+                        (id) =>
+                          Array.isArray(stackGraph?.edges) &&
+                          stackGraph.edges.length > 0 &&
+                          !stackGraph.edges.some((e) => String((e as { dst_id?: unknown }).dst_id) === id),
+                      ),
+                  )
                   const order = focusNodeId
                     ? orderOutputGroups(
                         execOrder.filter((id) => focusMatchesNode(focusNodeId, id)),
                         groups.keys(),
                       ).filter((k) => k !== 'run')
-                    : orderOutputGroups(execOrder, groups.keys())
+                    : orderOutputGroupsByImportance(
+                        orderOutputGroups(execOrder, groups.keys()),
+                        (id) => ({
+                          nodeType:
+                            ((stackGraph?.nodes || []) as Array<{ id?: unknown; node_type?: unknown }>).find(
+                              (n) => String(n.id) === id,
+                            )?.node_type as string | undefined,
+                          lane: isMultiTrackShape(pipelineShape) ? pipelineShape.laneOf.get(id) ?? null : null,
+                          isSource: sourceIds.has(id),
+                        }),
+                        bestLaneForOutputs,
+                      )
                   // Only files visible for the current focus — never keep a prior step's
                   // selection (e.g. 7.wav) while showing "No file outputs" for another node.
                   const visibleFiles = order.flatMap((g) => groups.get(g) || [])
                   const selectedFile =
                     (selectedOutputPath
                       ? visibleFiles.find((f) => f.path === selectedOutputPath)
-                      : undefined) || visibleFiles[0]
+                      : undefined) ||
+                    pickDefaultOutput(order.filter((g) => g !== 'run').map((g) => groups.get(g) || [])) ||
+                    visibleFiles[0]
 
                   const showAllForNode = async (nid: string) => {
                     if (!selected) return
@@ -3364,39 +3820,40 @@ export default function RunsView() {
 
                   const activePath = selectedFile?.path ?? null
                   const renderFileList = (files: OutputFile[], group: string) => (
-                    <ul className="space-y-1">
+                    <ul className="space-y-0.5">
                       {files.map((f) => {
                         const active = activePath === f.path
                         const cue = group === 'run' ? runLevelFileCue(f.name) : null
+                        // compiled_<hex>.keras → "Untrained model (architecture)"; raw name in the tooltip / path line.
+                        const friendly = friendlyArtifactName(f.name)
                         return (
                           <li key={`${f.path}-${f.name}`}>
                             <button
                               type="button"
-                              className={`w-full min-w-0 rounded-lg border px-2.5 py-2 text-left transition ${
-                                active
-                                  ? 'border-accent-400 bg-accent-50/60 shadow-sm'
-                                  : 'border-ink-100 bg-white hover:border-ink-200'
+                              className={`w-full min-w-0 rounded-md px-2 py-1.5 text-left transition ${
+                                active ? 'bg-accent-50 ring-1 ring-accent-300' : 'hover:bg-ink-50'
                               }`}
+                              title={shortOutputPath(f.path, { runId: selected })}
                               onClick={() => {
                                 setSelectedOutputPath(f.path)
                                 if (group !== 'run') setFocusNodeId(group)
                               }}
                             >
-                              <div className="truncate text-sm font-medium text-ink-900">
-                                {cue ? cue.title : f.name}
+                              <div
+                                className="text-[13px] font-medium leading-snug text-ink-900 [overflow-wrap:anywhere]"
+                              >
+                                {cue ? cue.title : friendly.label}
                               </div>
                               {cue ? (
-                                <div className="truncate text-[11px] text-ink-500" title={cue.hint}>
+                                <div className="text-[11px] text-ink-500" title={cue.hint}>
                                   {cue.hint}
                                 </div>
                               ) : null}
-                              <div
-                                className="truncate font-mono text-[10px] text-ink-400"
-                                title={f.path}
-                              >
-                                {cue ? f.name : shortOutputPath(f.path, { runId: selected })}
-                                {cue ? ` · ${formatBytes(f.size)}` : null}
-                              </div>
+                              {cue ? (
+                                <div className="font-mono text-[10px] leading-snug text-ink-400 [overflow-wrap:anywhere]">
+                                  {f.name} · {formatBytes(f.size)}
+                                </div>
+                              ) : null}
                               {!cue ? (
                                 <div className="text-[11px] text-ink-500">
                                   {f.kind} · {formatBytes(f.size)}
@@ -3412,28 +3869,21 @@ export default function RunsView() {
                   return (
                     <>
                       <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-ink-500">
+                        <StepPicker options={stepOptions} value={focusNodeId} onChange={setFocusNodeId} />
                         {displayPath ? (
                           <span className="min-w-0 truncate font-mono" title={displayPath}>
                             {displayPath}
                           </span>
                         ) : null}
-                        {isLatest ? (
-                          <span className="shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
-                            Latest
-                          </span>
-                        ) : null}
+                        {isLatest ? <span className="shrink-0 text-ink-600">· latest</span> : null}
                         {focusNodeId ? (
-                          <span className="shrink-0">
-                            {focusLabel}
-                            {' · '}
-                            <button
-                              type="button"
-                              className="font-medium text-accent-800 underline-offset-2 hover:underline"
-                              onClick={() => setFocusNodeId(null)}
-                            >
-                              Show all
-                            </button>
-                          </span>
+                          <button
+                            type="button"
+                            className="shrink-0 font-medium text-accent-800 underline-offset-2 hover:underline"
+                            onClick={() => setFocusNodeId(null)}
+                          >
+                            Show all steps
+                          </button>
                         ) : null}
                         {outputFiles.length > 0 ? (
                           <button
@@ -3461,12 +3911,14 @@ export default function RunsView() {
                         </div>
                       ) : (
                         <SplitPane
-                          className="min-h-0 flex-1 rounded-xl border border-ink-200"
-                          defaultSize={240}
-                          minSize={180}
-                          maxSize={320}
-                          secondaryMinSize={320}
-                          storageKey="graphyn.layout.nested"
+                          className="min-h-0 flex-1 rounded-xl border border-ink-200 bg-white"
+                          // Narrow detail pane: file list above the preview instead of side by side.
+                          orientation={narrowDetail ? 'vertical' : 'horizontal'}
+                          defaultSize={narrowDetail ? 220 : 360}
+                          minSize={narrowDetail ? 120 : 240}
+                          maxSize={narrowDetail ? 480 : 640}
+                          secondaryMinSize={narrowDetail ? 160 : 360}
+                          storageKey={narrowDetail ? 'graphyn.layout.runOutputs.stack' : 'graphyn.layout.runOutputs'}
                           paneOverflow="hidden"
                         >
                           {[
@@ -3478,14 +3930,9 @@ export default function RunsView() {
                                     ?.label || displayNodeLabel(group, { withCue: true })
                                 if (group === 'run') {
                                   return (
-                                    <div
-                                      key="run"
-                                      className="rounded-xl border border-dashed border-ink-200 bg-ink-50/50 p-2"
-                                    >
-                                      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                                        Whole run
-                                      </div>
-                                      <p className="mb-2 text-[11px] text-ink-400">
+                                    <div key="run" className="border-t border-dashed border-ink-200 pt-2">
+                                      <div className="text-[12px] font-semibold text-ink-800">Whole run</div>
+                                      <p className="mb-1 text-[11px] text-ink-400">
                                         Graph, summary, and replay records for the entire run — not one step’s files.
                                       </p>
                                       {renderFileList(files, 'run')}
@@ -3495,11 +3942,9 @@ export default function RunsView() {
                                 if (files.length === 0) {
                                   return (
                                     <div key={group} className="space-y-1">
-                                      <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                                        {groupLabel}
-                                      </div>
+                                      <div className="text-[12px] font-semibold text-ink-800">{groupLabel}</div>
                                       <p
-                                        className="rounded-lg border border-dashed border-ink-200 px-2.5 py-1.5 text-[11px] text-ink-400"
+                                        className="text-[11px] text-ink-400"
                                         title="This step passed its results to the next node in memory and wrote no files"
                                       >
                                         Passed data in memory (no files)
@@ -3518,7 +3963,8 @@ export default function RunsView() {
                                     {!focusNodeId ? (
                                       <button
                                         type="button"
-                                        className="text-[11px] font-semibold uppercase tracking-wide text-ink-500 hover:text-ink-800"
+                                        className="text-left text-[12px] font-semibold text-ink-800 hover:text-accent-800"
+                                        title="Show only this step’s files"
                                         onClick={() => setFocusNodeId(group)}
                                       >
                                         {groupLabel}
@@ -3526,17 +3972,13 @@ export default function RunsView() {
                                     ) : null}
                                     {outputs.length > 0 ? (
                                       <div>
-                                        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
-                                          Outputs
-                                        </div>
+                                        {inputs.length > 0 ? <div className="mb-0.5 text-[11px] text-ink-400">Outputs</div> : null}
                                         {renderFileList(outputs, group)}
                                       </div>
                                     ) : null}
                                     {inputs.length > 0 ? (
                                       <div>
-                                        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
-                                          Inputs
-                                        </div>
+                                        <div className="mb-0.5 text-[11px] text-ink-400">Inputs</div>
                                         {renderFileList(inputs, group)}
                                       </div>
                                     ) : null}
@@ -3564,28 +4006,15 @@ export default function RunsView() {
                 })()}
               </div>
             )}
-            {panel === 'lineage' && selected && !focusNodeId ? (
-              <RunRecordCard
-                runId={selected}
-                detail={detail}
-                graphSeed={(stackGraph?.metadata as { seed?: unknown } | undefined)?.seed}
-                nodeTypeLabel={nodeTypeLabel}
-                onOpenRun={(rid) => {
-                  pushNextUrlRef.current = true
-                  pendingPanelRef.current = 'lineage'
-                  void open(rid)
-                }}
-                onViewRaw={() => {
-                  const hit = outputFiles.find((f) => f.name === 'prove.json' && f.path.includes(selected))
-                  setFocusNodeId(null)
-                  setSelectedOutputPath(hit?.path ?? `workspace/runs/${selected}/prove.json`)
-                  setPanel('artifacts')
-                }}
-              />
-            ) : null}
             {panel === 'lineage' && selected ? (
               <RunLineagePanel
                 runId={selected}
+                liveStatus={runStatus}
+                pathGrouping={mlMultiPath}
+                stepNames={mlMultiPath ? null : stepNames}
+                branchContext={mlMultiPath ? null : branchContext}
+                skipReasons={skipReasons}
+                stepStatuses={new Map(pipelineStackItems.map((i) => [i.id, i.status ?? '']))}
                 focusNodeId={focusNodeId}
                 runMeta={
                   (detail?.meta && typeof detail.meta === 'object'
@@ -3608,6 +4037,15 @@ export default function RunsView() {
                 }
                 cacheSources={cacheSources}
                 stepFailures={stepFailures}
+                stepResilience={stepResilience}
+                topSlot={
+                  <ApprovalGates
+                    runId={selected}
+                    runStatus={runStatus}
+                    labelFor={(id) => stepLabel(id) ?? pipelineStackItems.find((i) => focusMatchesNode(id, i.id))?.label}
+                    onDecided={() => void refetchRunDetail(selected)}
+                  />
+                }
                 runLabelFor={(rid) => {
                   const row = runs?.find((r) => r.run_id === rid)
                   return row ? runDisplayName(row) : undefined
@@ -3617,10 +4055,58 @@ export default function RunsView() {
                   pendingPanelRef.current = 'lineage'
                   void open(rid)
                 }}
+                paths={pathResults}
                 lanePaths={lanePaths}
                 nodePaths={nodePaths}
+                recordSlot={
+                  <RunRecordCard
+                    stepLabel={(id) => stepLabel(id) ?? pipelineStackItems.find((i) => focusMatchesNode(id, i.id))?.label}
+                    verify={verifyResult && verifyResult.runId === selected ? { ok: verifyResult.ok, status: verifyResult.status } : null}
+                    lastVerify={headerLastVerify}
+                    runId={selected}
+                    detail={detail}
+                    graphSeed={(stackGraph?.metadata as { seed?: unknown } | undefined)?.seed}
+                    nodeTypeLabel={nodeTypeLabel}
+                    onOpenRun={(rid) => {
+                      pushNextUrlRef.current = true
+                      pendingPanelRef.current = 'lineage'
+                      void open(rid)
+                    }}
+                    onViewRaw={() => {
+                      const hit = outputFiles.find((f) => f.name === 'prove.json' && f.path.includes(selected))
+                      setFocusNodeId(null)
+                      setSelectedOutputPath(hit?.path ?? `workspace/runs/${selected}/prove.json`)
+                      setPanel('artifacts')
+                    }}
+                  />
+                }
                 bestPathId={pathResults.length > 1 ? bestPath?.pathId ?? null : null}
                 evaluator={evaluatorOutputs}
+                narrow={narrowDetail}
+                graphNodes={(stackGraph?.nodes as Array<{ id?: unknown; node_type?: unknown; config?: unknown }> | undefined) ?? null}
+                schemaFor={(t) => nodeCatalog.find((n) => n.node_type === t)?.config_schema ?? null}
+                stepLogs={(nid) => {
+                  const res = lastLogsForNode(formattedLogs, nid, (row) => row.nodeHint, focusMatchesNode, 20)
+                  return {
+                    total: res.total,
+                    lines: res.rows.map((row) => ({
+                      key: String(row.i),
+                      clock: row.clock,
+                      text: row.line.text,
+                      failed: row.failed,
+                    })),
+                  }
+                }}
+                onOpenLogs={(nid) => {
+                  setFocusNodeId(nid)
+                  setPanel('logs')
+                }}
+                onOpenFile={(path) => {
+                  // All steps, so the file is visible whichever group it lands in.
+                  setFocusNodeId(null)
+                  setSelectedOutputPath(path)
+                  setPanel('artifacts')
+                }}
                 onFocusStep={setFocusNodeId}
                 onBrowseOutputs={(nodeId) => {
                   setFocusNodeId(nodeId || null)

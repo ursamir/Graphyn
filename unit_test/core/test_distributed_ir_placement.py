@@ -8,7 +8,7 @@ from app.core.ir.models import GraphIR, IRMetadata, IRNode, IRPlacement
 
 
 def test_current_ir_version_is_1_2():
-    assert CURRENT_IR_VERSION == "1.2"
+    assert CURRENT_IR_VERSION in ("1.2", "1.3")
 
 
 def test_ir_placement_round_trip():

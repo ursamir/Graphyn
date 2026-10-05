@@ -7,7 +7,9 @@ Owns:             Node (generic base class), SISO wrapper installation logic,
                   _maybe_wrap_siso(), _install_siso_wrapper().
 Public Surface:   Node[InputT, OutputT] — subclass to implement a node;
                   Node.publish_files / take_published_file_trees for path
-                  side-effect announcements (plain dicts; no BC6 imports).
+                  side-effect announcements (plain dicts; no BC6 imports);
+                  Node.record_external_call / take_external_calls for the
+                  egress audit side-channel (redacted URL + body hashes).
 Must NOT:         Import from app.domain, app.api, app.core.execution.orchestrator,
                   app.core.execution.planner, or any BC4/BC5/BC6 module.
 Dependencies:     BC2 (nodes.config, nodes.ports, nodes.retry, nodes.compat,
@@ -112,6 +114,111 @@ class Node(Generic[InputT, OutputT]):
         # Path side-effects announced during process(); drained by the run
         # layer into file_tree artifacts. Plain dicts only — no BC6 imports.
         self._published_file_trees: list[dict[str, Any]] = []
+        # External (network) calls made during process(); drained by the run
+        # layer into meta ``external_calls`` and the sealed audit record.
+        self._external_calls: list[dict[str, Any]] = []
+
+    # ── External call audit side-channel (G6) ─────────────────────────────────
+    @staticmethod
+    def redact_url(url: str) -> str:
+        """Strip userinfo, query string and fragment from *url* (keep scheme/host/port/path)."""
+        from urllib.parse import urlsplit, urlunsplit
+
+        raw = str(url or "")
+        try:
+            parts = urlsplit(raw)
+        except ValueError:
+            return raw.split("?", 1)[0].split("#", 1)[0]
+        host = parts.hostname or ""
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        try:
+            port = parts.port
+        except ValueError:
+            port = None
+        netloc = f"{host}:{port}" if port else host
+        return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+
+    @staticmethod
+    def body_sha256(data: Any) -> str | None:
+        """``sha256:<hex>`` of a request/response body (bytes/str/JSON-able); None for None."""
+        if data is None:
+            return None
+        import hashlib as _hashlib
+        import json as _json
+
+        if isinstance(data, (bytes, bytearray, memoryview)):
+            raw = bytes(data)
+        elif isinstance(data, str):
+            raw = data.encode("utf-8")
+        else:
+            raw = _json.dumps(data, sort_keys=True, default=str).encode("utf-8")
+        return "sha256:" + _hashlib.sha256(raw).hexdigest()
+
+    def record_external_call(
+        self,
+        kind: str,
+        method: str,
+        url: str,
+        status: int | str | None = None,
+        *,
+        request_sha256: "str | bytes | None" = None,
+        response_sha256: "str | bytes | None" = None,
+        duration_ms: float | None = None,
+        connection_id: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Announce one outbound call (HTTP, SMTP, LLM API, …) for the run audit.
+
+        Never stores secrets: the URL is redacted (no userinfo / query /
+        fragment) and bodies are recorded only as hashes. ``request_sha256`` /
+        ``response_sha256`` accept a ready ``sha256:<hex>`` digest, or raw
+        bytes / str / JSON-able data which is hashed here. The executor drains these into run meta
+        ``external_calls`` and the sealed ``prove.json`` record.
+        """
+        def _digest(v: Any) -> str | None:
+            if v is None:
+                return None
+            if isinstance(v, str) and v.startswith("sha256:"):
+                return v
+            return self.body_sha256(v)
+
+        entry: dict[str, Any] = {
+            "kind": str(kind or "http"),
+            "method": str(method or "").upper(),
+            "url": self.redact_url(url),
+            "status": status,
+            "request_sha256": _digest(request_sha256),
+            "response_sha256": _digest(response_sha256),
+            "duration_ms": round(float(duration_ms), 2) if duration_ms is not None else None,
+            "connection_id": str(connection_id) if connection_id else None,
+        }
+        if error:
+            entry["error"] = str(error)[:300]
+        try:
+            from datetime import datetime as _dt, timezone as _tz
+
+            entry["ts"] = _dt.now(_tz.utc).isoformat()
+        except Exception:
+            pass
+        if not hasattr(self, "_external_calls"):
+            self._external_calls = []
+        self._external_calls.append(entry)
+
+    def take_external_calls(self) -> list[dict[str, Any]]:
+        """Drain queued ``record_external_call`` entries (run layer only)."""
+        calls = list(getattr(self, "_external_calls", None) or [])
+        if hasattr(self, "_external_calls"):
+            self._external_calls.clear()
+        return calls
+
+    def accept_external_calls(self, calls: list[dict[str, Any]] | tuple[dict[str, Any], ...]) -> None:
+        """Re-queue entries returned from an isolated worker (host-side)."""
+        if not hasattr(self, "_external_calls"):
+            self._external_calls = []
+        for item in calls or ():
+            if isinstance(item, dict) and item.get("url") is not None:
+                self._external_calls.append(item)
 
     def publish_files(
         self,

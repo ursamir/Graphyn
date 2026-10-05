@@ -1,0 +1,19 @@
+[plugin]
+name             = "webhook-trigger"
+version          = "1.0.0"
+description      = "Source node fed by an inbound signed webhook (POST /api/v1/hooks/{workspace}/{pipeline}); emits body, headers and query."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["webhook", "trigger", "workflow", "common"]
+
+dependencies = []
+
+runtime = "inprocess"
+node_types = ["webhook_trigger"]
+
+[config_schema.webhook_trigger]
+header_allowlist = { type = "array", title = "Header allowlist", default = [], description = "When set, keep only these lower-case header names (the API already filters to a safe allowlist; empty = keep what the API passed)." }
+sample_body = { type = "object", title = "Sample body", default = {}, description = "Body emitted on manual runs (no webhook payload). Never put secrets here." }

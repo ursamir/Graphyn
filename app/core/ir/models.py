@@ -3,7 +3,8 @@ Bounded Context:  BC1 — Graph Language
 Responsibility:   Define the canonical, versioned, immutable data model for
                   pipeline graphs. The single source of truth for graph structure.
 Owns:             GraphIR, IRNode, IREdge, IRMetadata, IRParameter,
-                  IRCapabilityMetadata, IRPlacement — all frozen Pydantic models.
+                  IRCapabilityMetadata, IRPlacement, IROnError, IRRetry — all
+                  frozen Pydantic models; ERROR_PORT_DEFAULT.
 Public Surface:   All model classes above.
 Must NOT:         Import from app.core.nodes, app.core.execution.orchestrator,
                   app.core.sdk, app.domain, or app.api.
@@ -19,7 +20,7 @@ import re
 from types import MappingProxyType
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_serializer, model_validator
 
 # Regex for valid node IDs: alphanumeric, underscores, hyphens only (Req 1.4.4)
 _NODE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -160,6 +161,80 @@ class IRPlacement(BaseModel):
         return v
 
 
+ERROR_PORT_DEFAULT = "error"
+"""Synthetic output port that carries a routed node failure (IR 1.3+)."""
+
+_PORT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+class IROnError(BaseModel):
+    """Per-node failure policy (IR 1.3+). Omitted / ``None`` → ``fail``.
+
+    * ``fail``     — the run fails (pre-1.3 behaviour).
+    * ``continue`` — the node produces no outputs; the run continues and the
+      node's dependants are skipped (unproduced inputs).
+    * ``route``    — the failure becomes the value of the synthetic output
+      ``port`` (default ``"error"``): ``{ok: False, error_type, message,
+      node_id, attempt}``. Normal outputs are omitted, so the success branch
+      is skipped and an edge from ``<node>.error`` runs instead.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    mode: Literal["fail", "continue", "route"] = "fail"
+    port: str = ERROR_PORT_DEFAULT
+
+    @field_validator("port")
+    @classmethod
+    def _port_valid(cls, v: str) -> str:
+        v = (v or "").strip() or ERROR_PORT_DEFAULT
+        if not _PORT_NAME_RE.match(v):
+            raise ValueError(f"IROnError.port {v!r} must match [A-Za-z0-9_-]{{1,64}}")
+        return v
+
+
+class IRRetry(BaseModel):
+    """Per-node retry policy (IR 1.3+). Overrides the node class RetryPolicy.
+
+    ``max_attempts`` counts the first attempt. Wait before retry *i* (0-based)
+    is ``min(backoff_s * 2**i, max_backoff_s)``. ``on`` selects which failures
+    are retried: ``exception`` (any exception) and/or ``timeout`` (exceptions
+    whose class name contains ``Timeout``, incl. ``TimeoutError``).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    max_attempts: int = 1
+    backoff_s: float = 0.0
+    max_backoff_s: float = 60.0
+    on: tuple[Literal["exception", "timeout"], ...] = ("exception",)
+
+    @field_validator("max_attempts")
+    @classmethod
+    def _attempts(cls, v: int) -> int:
+        if v < 1 or v > 20:
+            raise ValueError("IRRetry.max_attempts must be between 1 and 20")
+        return v
+
+    @field_validator("backoff_s", "max_backoff_s")
+    @classmethod
+    def _non_negative(cls, v: float) -> float:
+        if v < 0 or v > 3600:
+            raise ValueError("IRRetry back-off values must be between 0 and 3600 seconds")
+        return float(v)
+
+    @field_validator("on", mode="before")
+    @classmethod
+    def _coerce_on(cls, v: Any) -> Any:
+        if v is None:
+            return ("exception",)
+        if isinstance(v, str):
+            return (v,)
+        if isinstance(v, list):
+            return tuple(v) or ("exception",)
+        return v
+
+
 class IRNode(BaseModel):
     """Specification for a single node in the graph.
 
@@ -189,6 +264,23 @@ class IRNode(BaseModel):
 
     placement: IRPlacement | None = None
     """Optional distributed placement hint (IR 1.2+). ``None`` → auto/local."""
+
+    on_error: IROnError | None = None
+    """Optional failure policy (IR 1.3+). ``None`` → fail the run."""
+
+    retry: IRRetry | None = None
+    """Optional retry policy (IR 1.3+). ``None`` → node class RetryPolicy."""
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_13_fields(self, handler: Any) -> Any:
+        """Drop ``on_error`` / ``retry`` when unset so pre-1.3 dumps (and the
+        logical graph hash derived from them) stay byte-identical."""
+        data = handler(self)
+        if isinstance(data, dict):
+            for key in ("on_error", "retry"):
+                if key in data and data[key] is None:
+                    data.pop(key)
+        return data
 
     @field_validator("config", mode="before")
     @classmethod
@@ -356,7 +448,26 @@ class GraphIR(BaseModel):
                     "A node may not have an edge to itself."
                 )
 
+        # IR 1.3: an edge out of a node's error port requires on_error.mode=route.
+        by_id = {n.id: n for n in self.nodes}
+        for edge in self.edges:
+            src = by_id.get(edge.src_id)
+            pol = getattr(src, "on_error", None)
+            if pol is not None and pol.mode != "route" and edge.src_port == pol.port:
+                raise ValueError(
+                    f"Edge from '{edge.src_id}.{edge.src_port}' uses the error port "
+                    f"but on_error.mode is '{pol.mode}' (must be 'route')."
+                )
+
         return self
+
+def routed_error_port(node: Any) -> str | None:
+    """Error port name when ``node.on_error.mode == "route"``, else None."""
+    pol = getattr(node, "on_error", None)
+    if pol is not None and getattr(pol, "mode", None) == "route":
+        return str(getattr(pol, "port", None) or ERROR_PORT_DEFAULT)
+    return None
+
 
 # Public names. A leading underscore stays private to this module.
 deep_unfreeze = _deep_unfreeze

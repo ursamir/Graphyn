@@ -2,7 +2,7 @@
 
 The first two tables are the Audio + Common production nodes; compact tables for the other packs follow (see `PluginPackage/NODES.md` — `model_builder` ships inside the `trainer` plugin). There are no built-in node implementations in `app/core/nodes/audio/` or `app/core/nodes/ml/` — those directories do not exist.
 
-Branch `test/example-06-plugins` keeps 14 plugins (Example 06 plus `deployment-packager` and `python-code`). Tables below still name nodes from packs removed on this branch. Proposed packs (RAG, Vision, TinyML, MLOps, Agents, WakeWord, Video) run their real implementations by default (`config.stub=False`). `stub=True` is an explicit placeholder that logs a warning. The editor catalog badges a node **stub** only when that field's schema default is true. Device flash and on-device metrics write a host-side dry-run receipt; they do not program a board or report device telemetry.
+Branch `test/example-06-plugins` keeps 14 plugins (Example 06 plus `deployment-packager` and `python-code`) plus the restored workflow-automation set (15 Common + 5 Agents plugins, listed in [PLUGIN_GUIDE.md](./PLUGIN_GUIDE.md)). Tables below still name nodes from packs removed on this branch (`agent_loop`, `tool_router`, `mcp_tool_call`, `memory_store`, `pii_redact`, MLOps, RAG, Vision, TinyML). Proposed packs (RAG, Vision, TinyML, MLOps, Agents, WakeWord, Video) run their real implementations by default (`config.stub=False`). `stub=True` is an explicit placeholder that logs a warning. The editor catalog badges a node **stub** only when that field's schema default is true. Device flash and on-device metrics write a host-side dry-run receipt; they do not program a board or report device telemetry.
 
 
 > **Platform design catalog (100+ node_types, alterations, TinyML/YOLO/RAG):** [`docs/PLUGIN_NODE_PLATFORM_CATALOG.md`](./PLUGIN_NODE_PLATFORM_CATALOG.md) (+ [`PLUGIN_NODE_PLATFORM_CATALOG.json`](./PLUGIN_NODE_PLATFORM_CATALOG.json)).
@@ -51,28 +51,29 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 | `dataset_balancer` | ML | numpy |
 | `dataset_versioner` | ML | hashlib, json (stdlib) |
 | `experiment_tracker` | ML | json (stdlib); optional: mlflow |
-| `deployment_packager` | ML | zipfile, json (stdlib) |
+| `deployment_packager` | ML | zipfile, tarfile, json (stdlib); librosa (optional, self-test) — 1.1: runnable bundle (preprocessing.json from the source run, real-audio run_inference.py, README, provenance.json, SHA256SUMS, selftest.json, `<package>.manifest.json` sidecar) |
 | `embedding_generator` | Features | optional: torch, transformers, openl3, speechbrain |
 | `multimodal_fusion` | Features | optional: torch, transformers |
 | `asr_transcribe` | Processing | numpy; optional: httpx |
 | `pii_redact` | Processing | numpy; optional: presidio |
-| `structured_llm` | Processing | optional: httpx |
+| `structured_llm` | Processing | optional: httpx — `deterministic=False`, `cacheable=False`; records external calls |
 | `eval_gate` | Quality | stdlib |
-| `http_webhook` | Output | optional: httpx |
+| `http_webhook` | Output | httpx (no urllib fallback); `hmac_env` only; optional `connection_id` (kind `webhook`); never follows redirects |
 | `doc_parse_chunk` | Input | stdlib; optional: unstructured |
 | `caption_export` | Output | stdlib |
-| `object_store` | Output | stdlib; optional: boto3 |
-| `http_request` | Output | optional: httpx |
-| `if_switch` | Logic | stdlib |
+| `object_store` | Output | stdlib; optional: boto3 — local root/keys/dest jailed under the workspace (default `workspace/artifacts/object_store`) |
+| `http_request` | Output | httpx — safe retries, `max_response_bytes`, `connection_id` (kind `http_auth`) or `auth_env` |
+| `if_switch` | Logic | stdlib — emits only the taken branch port |
 | `set_map` | Transform | stdlib |
-| `json_transform` | Transform | stdlib |
+| `json_transform` | Transform | stdlib — `jsonpath` selector (`path` is a deprecated alias) |
 | `schedule_trigger` | Input | stdlib |
+| `webhook_trigger` | Input | stdlib — fed by `POST /api/v1/hooks/{ws}/{pipeline}` (HMAC / bearer); outputs `body`, `headers` (allow-listed), `query` |
 | `python_code` | Transform | stdlib (trusted-operator exec; not a sandbox) |
 | `error_catch` | Logic | stdlib |
 | `merge` | Transform | stdlib |
-| `wait_delay` | Logic | stdlib |
-| `csv_table` | Output | csv (stdlib) |
-| `send_email` | Output | stdlib (`app.core.notify.smtp_notify`); `GRAPHYN_SMTP_*` env or SMTP `connection_id`; `dry_run` |
+| `wait_delay` | Logic | stdlib — sleeps in 0.25 s steps, stops when the run is cancelled |
+| `csv_table` | Output | csv (stdlib) — `path` jailed under the workspace |
+| `send_email` | Output | stdlib (`app.core.notify.smtp_notify`); `GRAPHYN_SMTP_*` env or SMTP `connection_id`; `dry_run`; `allowed_recipient_domains`, `allow_payload_recipients` (default false) |
 | `credential_probe` | Utility | stdlib (smoke plugin: declares a credential kind, resolves a connection) |
 
 `edge_optimizer` resolves `artifacts/...` the same way downloads do (`workspace/artifacts/...`). A picked `model.tflite` uses the sibling Keras `saved_model` or `model.keras` when one is present, so int8/float conversion still runs; otherwise the `.tflite` is copied through.
@@ -82,7 +83,7 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 | node_type | Purpose |
 |---|---|
 | `agent_loop` | **Extractive only** — scans `context` in windows for the goal's terms; calls no LLM and no tools (`mode="extractive"`). Use `llm_chat` for model calls. |
-| `llm_chat` | Chat via `provider` = `local` (default, extractive) / `stub` / `openai_compat` / `ollama` / `anthropic` / `gemini`; `connection_id` → workspace default → env |
+| `llm_chat` | (`deterministic=False`; records external calls) Chat via `provider` = `local` (default, extractive) / `stub` / `openai_compat` / `ollama` / `anthropic` / `gemini`; `connection_id` → workspace default → env |
 | `prompt_template` | `str.format` or sandboxed Jinja2 render |
 | `tool_router` | Map text / `ToolCallRequest` to a registered tool name |
 | `mcp_tool_call` | Call an in-process Graphyn MCP tool (allowlisted) |
@@ -130,11 +131,11 @@ WakeWord: `wakeword_data_gen`, `wakeword_feature_extract`, `wakeword_train`, `wa
 
 ### Agents
 
-- **`hitl_approve`** — approval is never read from the gated payload. On run the node writes `{decision_dir}/{run_id}__{gate_id}.request.json` (random `request_id`, `approver_roles`, `reason_required`, `timeout_s`, `decision_path`, `status`) and polls `{decision_dir}/{run_id}__{gate_id}.decision.json` every `poll_interval_s` (default 2.0) until `timeout_s` (default 3600; 0 = check once). Decision body: `{"request_id", "approved": true, "approver", "role", "reason"}`. It is honoured only if `request_id` matches (stale files are ignored), `approver` is non-empty, `role` is in `approver_roles` (when non-empty; default `[]` = any named approver), and `reason` is present when `reason_required` (default true). `approved` must be the JSON literal `true`. Timeout / invalid / denial → `rejected` port (payload + reason); the request file is updated with `status` + `outcome`. Defaults: `gate_id="hitl_approve"` (set to the graph node id), `decision_dir="workspace/artifacts/agents/hitl_approve/decisions"`. `unattended_approve=true` (default false) passes with no human and writes a `.unattended.json` receipt. Run/gate ids are sanitised to `[A-Za-z0-9_.-]`.
+- **`hitl_approve`** — approval is never read from the gated payload. On run the node writes `{decision_dir}/{run_id}__{gate_id}.request.json` (random `request_id`, `approver_roles`, `reason_required`, `timeout_s`, `decision_path`, `status`) and polls `{decision_dir}/{run_id}__{gate_id}.decision.json` every `poll_interval_s` (default 2.0) until `timeout_s` (default 3600; 0 = check once). Decision body: `{"request_id", "approved": true, "approver", "role", "reason"}`. It is honoured only if `request_id` matches (stale files are ignored), `approver` is non-empty, `role` is in `approver_roles` (when non-empty; default `[]` = any named approver), and `reason` is present when `reason_required` (default true). `approved` must be the JSON literal `true`. Timeout / invalid / denial → `rejected` port (payload + reason). Only the active port key is emitted (`{"approved": payload}` or `{"rejected": record}`), so the executor skips the other branch; `stub=true` returns `{}` (both branches skipped). The request file is updated with `status` + `outcome`. Defaults: `gate_id="hitl_approve"` (set to the graph node id), `decision_dir="workspace/artifacts/agents/hitl_approve/decisions"`. `unattended_approve=true` (default false) passes with no human and writes a `.unattended.json` receipt. Run/gate ids are sanitised to `[A-Za-z0-9_.-]`.
 - **`mcp_tool_call`** — `server` must be `graphyn`. `tool_allowlist` (default `[]`) is required: empty refuses every call; the tool must be listed. `allow_mutating` (default false) must also be true for state-changing / credential / execution tools (an explicit list plus prefixes such as `create_`, `update_`, `delete_`, `run_`, `execute_`, `install_`, `set_`, `send_`, `export_` …). `tool_name` pins the tool; a different name from the `tool_name` port or `input.tool` raises. MCP auth runs `app.mcp.auth.check_auth` on the arguments (`_meta.auth_token` against `GRAPHYN_API_TOKEN`; fail closed when auth is required). `timeout_s` default 60 (0 = no limit). Handler errors come back as `ToolCallResult(ok=False, error=…)`.
-- **`guardrail_filter`** — `policies` default `["pii", "secret"]` (empty also means pii+secret); also available: `profanity`, `jailbreak`; unknown policy names raise. `action` = `block` (default, raises) / `redact` (replace matches with `[redacted]`, keep structure) / `flag` (pass through + `violations`); an unknown action fails closed as `block`. Scans every string in nested dicts/lists, keys included.
+- **`guardrail_filter`** — `policies` default `["pii", "secret"]` (empty also means pii+secret); also available: `profanity`, `jailbreak`; unknown policy names raise. `action` = `block` (default, raises) / `redact` (replace matches with `[redacted]`, keep structure) / `flag` (pass through + `violations`); an unknown action fails closed as `block`. The `violations` port is emitted only when something matched (clean input → `{"output": …}` only), so a violation-handler branch is skipped on clean input. Scans every string in nested dicts/lists, keys included.
 - **`tool_router`** — `tools`: names or `{name, keywords[]}`. An explicit `tool` in the input must match a registered name (case-insensitive), or the request goes to `unmatched`. Otherwise the longest word-boundary keyword/name match wins; negated mentions ("don't search") are skipped; a tie between tools → `unmatched` (ambiguous). `strict` (default true); `strict=false` falls back to the first tool only for the keyword path.
-- **`output_schema_validate`** — now does real validation (`stub` default false). The input may be a dict, JSON string, ```` ```json ```` fenced text or a ChatMessage (`content` is parsed). Output: `output` = the parsed JSON value when valid, else `None`; `errors` = `list[str]` of `$.path: message`. `strict` (default true) raises on any error. Schema subset: `type` (incl. lists), `required`, `properties`, `additionalProperties`, `items`, `enum`, `const`, `min/maxLength`, `pattern`, `minimum/maximum`, `min/maxItems`, `anyOf/oneOf/allOf`; bool is never a number.
+- **`output_schema_validate`** — now does real validation (`stub` default false). The input may be a dict, JSON string, ```` ```json ```` fenced text or a ChatMessage (`content` is parsed). Output (branch-style): valid → only `output` (the parsed JSON value); invalid with `strict=false` → only `errors` (`list[str]` of `$.path: message`). `strict` (default true) raises on any error. Schema subset: `type` (incl. lists), `required`, `properties`, `additionalProperties`, `items`, `enum`, `const`, `min/maxLength`, `pattern`, `minimum/maximum`, `min/maxItems`, `anyOf/oneOf/allOf`; bool is never a number.
 - **`prompt_template`** — `engine` = `format` (default; `str.format` with named fields only, no positional or `_`-prefixed field access, missing variables raise), `jinja` (Jinja2 `SandboxedEnvironment` + `StrictUndefined`; without jinja2 installed only `{{ var }}` / `{{ a.b }}` works and `{% %}` raises), `fstring` (alias of `format`). An empty `template` passes the input through as text.
 - **`agent_loop`** — extractive only; no generative planning. `model`, `api_secret_name`, `tool_allowlist` are reserved and ignored. `max_steps` (default 8) caps the context windows scanned. Result metadata: `llm_called=false`, `tools_called=[]`.
 
@@ -154,11 +155,21 @@ WakeWord: `wakeword_data_gen`, `wakeword_feature_extract`, `wakeword_train`, `wa
 - **`_pcm` helper** — not in the Audio pack. A shared copy sits in `mcu_window`, `mcu_mfcc`, `mcu_spectrogram`, `mcu_feature_pipeline`, `mcu_dataset_ingest`, `micro_speech_pipeline` (TinyML), `wakeword_feature_extract`, `wakeword_infer` (WakeWord) and `av_align` (Video). It decodes AudioSample/dict, arrays/lists, WAV bytes or a file path to mono float PCM (mean downmix) and linearly resamples it to 16 kHz by default. Bare arrays are assumed to already be at the target rate; undecodable input raises `ValueError`. `mcu_window` and `mcu_dataset_ingest` resample to their `sample_rate` config (default 16000). `max_windows` (default 0 = unlimited) caps windows/frames per sample in `mcu_window`, `mcu_spectrogram` and `mcu_feature_pipeline`.
 - **`stream_ingest`** — `source` now also accepts `rtp` / `rtsp`: `stream_url` (`rtp://`, `rtsp://`, `srt://`, `udp://` only; must have a host) is decoded with `ffmpeg` (required on PATH) under a per-scheme `-protocol_whitelist`, for `duration_s` seconds (0 = until EOS). URL credentials are redacted from outputs and errors.
 - **`dataset_ingest`** — filesystem ingest now requires a non-empty `config.path` (it no longer falls back to CWD).
+- **`dataset_ingest` 1.2.0** — ZIP / TAR sources are extracted with caps (`max_archive_files`, default 100 000; `max_archive_mb`, default 20 480, counted on bytes actually written) and member filtering (symlinks, hard links, devices, absolute and `..` members are skipped).
+- **`audio_exporter` 1.1.0 (plugin 1.2.0)** — dataset versions are immutable: when `<output_dir>/<version_tag>` already holds files and neither `append` nor `overwrite` is set, the export goes to the next free version (`v1`→`v2`, `v1.0.0`→`v1.0.1`, logged). `overwrite=true` replaces the version and `append=true` adds to it, but both fail when runs / lineage / ship packages reference that version. `manifest.json` (sha256 per file, `content_hash`, `source.run_id`) is recomputed after every write (append too) and a `dataset.version_create` audit event is recorded.
 
 ### Common
 
 - **`python_code`** (defense-in-depth; still not a sandbox) — `import` is limited to `json` and `math`. Both resolve to curated wrappers (`json`: `loads`/`dumps`/`JSONDecodeError`; `math`: its public functions/constants), never the real modules. `re`, `datetime`, `itertools`, `functools`, `collections`, `decimal` and `statistics` are no longer importable. Relative, dotted, `*` and `_`-prefixed imports are rejected. The AST filter also rejects any `_`-prefixed attribute, `.format()` / `.format_map()` calls, and any access to exec/spawn names (`system`, `popen`, `exec*`, `spawn*`, `fork`, `kill` …), `modules` / `builtins` / `codecs` / `import_module`, frame/code introspection (`gi_frame`, `f_globals`, `tb_frame`, `co_code` …) and `mro`. `allow_network` (default false) is now reserved: it no longer unlocks `httpx` / `requests` / `urllib` / `aiohttp`, and setting it true raises when `GRAPHYN_HTTP_EGRESS_MODE=restricted`. `open()` still requires `allowed_paths`. No new time or memory limits were added.
 - **Secret-name resolution** — these nodes resolve config-supplied secret names through `app.core.trust.secrets.resolve_secret`: `http_request.auth_env`, `http_webhook.hmac_env`, `vector_store_write.pg_dsn_secret` / `vector_store_query` (store `dsn_secret`, fallback `PGVECTOR_DSN`), `rag_notion_connector.secret_name` (default `NOTION_API_TOKEN`), `rag_slack_connector.secret_name` (default `SLACK_BOT_TOKEN`), `speaker_separator.auth_token_env` (default `HUGGINGFACE_TOKEN`) and `asr_transcribe` provider keys. The Graphyn secret store is checked first. Process env is read only for secret-shaped names (`*_API_KEY`, `*_APIKEY`, `*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_DSN`, `*_URL`, `*_URI`) that do not start with `GRAPHYN_`, or for names in `GRAPHYN_SECRET_ENV_ALLOWLIST` (comma-separated). Otherwise it returns empty and the node fails closed.
+- **`http_request`** (v1.1) — retries only when the status is in `retry_on_status` (default `[429, 500, 502, 503, 504]`) or on a connection/timeout error, and only for idempotent methods (GET/HEAD/OPTIONS/PUT/DELETE) unless `idempotency_key` is set (sent as `Idempotency-Key`). Backoff: `retry_backoff_s * 2^attempt` with 50–100 % jitter, capped at `retry_backoff_max_s` (also caps `Retry-After`). Other 4xx/5xx fail at once. The body is streamed and the request aborted past `max_response_bytes` (default 5 MB; a larger `Content-Length` fails before reading). Redirects are never followed. Auth: `connection_id` (credential kind `http_auth`: `bearer` token, `basic` username/password, or `header` name/value; optional `allowed_hosts` CSV binds the secret to hosts) takes precedence over `auth_env` + `auth_header` + `auth_prefix`. A connection is used only when named — there is no workspace-default fallback for `http_auth`. `deterministic=False`, `cacheable=False`.
+- **`http_webhook`** (v1.1) — the urllib fallback is gone (urllib follows redirects past the egress check); httpx is required and `follow_redirects=False`. The inline `hmac_secret` field was removed (old graphs that set it fail config validation) — use `hmac_env`; an `hmac_env` that resolves empty now raises. `connection_id` (kind `webhook`) supplies the URL as a secret: errors, receipts and the audit only show `scheme://host/***`.
+- **`send_email`** — recipients come from config `to`. Payload `to` / `recipient` / `from` are used only when `allow_payload_recipients=true` (default false; a payload that supplies recipients otherwise raises). `allowed_recipient_domains` (default `[]` = any) must contain every recipient domain (subdomains match). Addresses with display names, commas, newlines or quotes are rejected.
+- **`json_transform`** — the single-selector field is now `jsonpath`; `path` is accepted as a deprecated alias (mapped on load, with a warning) so audit no longer treats it as a file input.
+- **`csv_table` / `object_store`** — file paths go through `app.core.paths.write_paths.jail_relative_path`: absolute paths, `~`, drive letters and any `..` segment are rejected, and the resolved path (after symlinks) must stay inside `project_dir()`. `object_store` also confines keys to its root, jails `dest`, accepts input files only from inside the workspace, and fixes the root default mismatch (now always `workspace/artifacts/object_store`). Written files are announced with `publish_files` (file_tree artifacts).
+- **`wait_delay`** — sleeps in 0.25 s increments and checks the owning run (`app.core.runs.run_control.get_active_run(self._run_id).is_cancelled`); a cancel raises so downstream nodes do not run.
+- **`schedule_trigger`** — `deterministic=False` (the tick carries a timestamp).
+- **`webhook_trigger`** — source node with optional input ports `body` / `headers` / `query` that only the hooks API fills (via `input_overrides`); it passes them to the same-named outputs. Config: `header_allowlist` (when non-empty, keep only these lower-case header names) and `sample_body` (emitted on manual runs). No secret lives in the node: the signing secret is an `inbound_webhook` credential referenced by the pipeline hook settings. `cacheable=False`. See API_REFERENCE → Inbound webhooks.
 - **`structured_llm`** (`provider=openai_compat`) — resolves key and endpoint via `app.core.ml.llm_client.resolve_llm_endpoint` (precedence: `connection_id` → workspace default → secret/env `OPENAI_API_KEY`; with a Groq `base_url`, `GROQ_API_KEY` is a fallback). A key is sent only to its bound base URL: the connection's `base_url`, else `OPENAI_BASE_URL` / `https://api.openai.com/v1`. A node `base_url` that differs is refused, except for env/secret keys whose host is in `GRAPHYN_LLM_BASE_URL_ALLOWLIST`. Example: Groq with env `GROQ_API_KEY` needs `GRAPHYN_LLM_BASE_URL_ALLOWLIST=api.groq.com`, or a connection whose `base_url` is Groq. A node `base_url` is also egress-checked before any credential is resolved. Note: if `OPENAI_API_KEY` is also set, it is resolved before `GROQ_API_KEY`.
 
 ## Capability Matrix
@@ -192,7 +203,7 @@ WakeWord: `wakeword_data_gen`, `wakeword_feature_extract`, `wakeword_train`, `wa
 | `dataset_balancer` | No | No | No | No | No | No |
 | `dataset_versioner` | No | No | No | No | Yes | Yes |
 | `experiment_tracker` | No | No | No | No | Yes | Yes |
-| `deployment_packager` | No | No | No | No | Yes | Yes |
+| `deployment_packager` | No | Yes | No | No | No (build time, self-test) | No |
 | `embedding_generator` | Optional | No | No | No | Yes | Yes |
 | `multimodal_fusion` | Optional | No | No | Yes | No | No |
 | `asr_transcribe` | No | Yes | No | No | Yes | Yes |
@@ -208,6 +219,7 @@ WakeWord: `wakeword_data_gen`, `wakeword_feature_extract`, `wakeword_train`, `wa
 | `set_map` | No | Yes | No | No | Yes | Yes |
 | `json_transform` | No | Yes | No | No | Yes | Yes |
 | `schedule_trigger` | No | Yes | No | No | Yes | No |
+| `webhook_trigger` | No | Yes | No | No | Yes | No |
 | `python_code` | No | Yes | No | No | Yes | No |
 | `error_catch` | No | Yes | No | No | Yes | No |
 | `merge` | No | Yes | No | No | Yes | Yes |

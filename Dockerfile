@@ -28,6 +28,12 @@ RUN pip install --upgrade pip \
     && pip install -r requirements.txt \
     && pip install -e . --no-deps
 
+# HuggingFace dataset import (Datasets → Import → HuggingFace; setup.py extra
+# "hf"). Separate layer so the core dependency layer above stays cached.
+# Set GRAPHYN_INSTALL_HF=0 to build a lean image (the console then hides HF import).
+ARG GRAPHYN_INSTALL_HF=1
+RUN if [ "$GRAPHYN_INSTALL_HF" = "1" ]; then pip install "datasets>=2.14.0" "huggingface_hub>=0.16.0"; fi
+
 # Build provenance for sealed run records (environment.git_commit / image).
 # The image has no .git, so pass the commit at build time:
 #   GRAPHYN_GIT_SHA=$(git rev-parse HEAD) docker compose build graphyn-api

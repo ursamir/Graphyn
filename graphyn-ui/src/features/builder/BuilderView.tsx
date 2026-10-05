@@ -14,9 +14,27 @@ import ReactFlow, {
   type Node,
   MarkerType,
   ConnectionLineType,
+  getRectOfNodes,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 import { MINIMAP_MARGIN, minimapLayout } from './canvasMinimap'
+import { logBarSummary, prettyCategory } from './editorChrome'
+import {
+  catalogLoadState,
+  catalogPrefKey,
+  catalogRetryDelay,
+  catalogShouldOpen,
+  helpNeedsMore,
+  inspectorModeFor,
+  isSignificantResize,
+  leftAnchoredViewport,
+  planFit,
+  stepSettingsState,
+  toolbarCompact,
+} from './editorLayout'
+import { learningRateLinks, learningRateNote } from './learningRate'
+import { useViewport, viewportSizeFor } from '../../lib/viewport'
+import { PipelineSwitcher } from './PipelineSwitcher'
 import {
   Play,
   CheckCircle2,
@@ -37,6 +55,7 @@ import {
   Sparkles,
   Undo2,
   Redo2,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { apiFetch, apiJson, ApiError, getApiToken, parseError } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
@@ -56,7 +75,7 @@ import {
   SegmentedTabs,
   StatusBadge,
 } from '../../components/ui'
-import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, schemaFieldHint, schemaFieldHintBrief, schemaFieldLabel, shortRunId, skipConsecutiveByText, startCase } from '../../lib/format'
+import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, schemaFieldHint, schemaFieldLabel, shortRunId, skipConsecutiveByText } from '../../lib/format'
 import {
   buildGraphFromCanvas,
   type NodePlacement,
@@ -68,6 +87,19 @@ import {
 import GraphynNode, { ConfigFieldEditor, categoryLook, normalizeExecStatus, type CredentialOption, type GraphynNodeData, type NodeExecStatus } from './GraphynNode'
 import DeletableEdge from './DeletableEdge'
 import TriggersDock from './TriggersDock'
+import RunInputsDialog from './RunInputsDialog'
+import { ErrorHandlingEditor, EdgeConditionEditor } from './WorkflowInspector'
+import {
+  SELECT_EDGE_EVENT,
+  errorPortOf,
+  needsRunDialog,
+  onErrorFromIr,
+  retryFromIr,
+  runInputsSpec,
+  type RunInputsSpec,
+} from './workflowIr'
+
+type RunExtras = { inputs?: Record<string, Record<string, unknown>>; parameters?: Record<string, unknown> }
 import AgentDrawer from './AgentDrawer'
 import {
   badgeFromServerStatus,
@@ -125,8 +157,11 @@ import { RunDriftBanner } from './RunDriftBanner'
 import { compactNodeLabel } from '../runs/runRecord'
 
 const nodeTypes = { graphyn: GraphynNode }
-/** Fit the whole graph, but never zoom out past readable text. */
-const FIT_VIEW_OPTIONS = { padding: 0.12, minZoom: 0.55, maxZoom: 1 }
+/**
+ * Fit the whole graph on load / pipeline switch so no node is cut off: zoom
+ * out as far as the canvas allows (same floor as manual zoom), never above 1.
+ */
+const FIT_VIEW_OPTIONS = { padding: 0.12, minZoom: 0.15, maxZoom: 1 }
 const edgeTypes = { default: DeletableEdge }
 
 const EDGE_STYLE = { stroke: '#555555', strokeWidth: 2.75 }
@@ -137,22 +172,29 @@ const defaultEdgeOptions = {
   markerEnd: EDGE_MARKER,
 }
 
-const CATALOG_OPEN_KEY = 'graphyn.builder.catalogOpen'
-const INSPECTOR_OPEN_KEY = 'graphyn.builder.inspectorOpen'
+// Catalog open state is stored per viewport size class (`catalogPrefKey`, editorLayout.ts).
 const MINIMAP_OPEN_KEY = 'graphyn.builder.minimapOpen'
-const LOG_COLLAPSED_KEY = 'graphyn.builder.logCollapsed'
+/**
+ * v2: only a *manual* expand/collapse is stored (v1 also stored the automatic
+ * expand on Run, so an empty log stayed open at ~40% of the height forever).
+ */
+const LOG_COLLAPSED_KEY = 'graphyn.builder.logCollapsed.v2'
 const CONNECT_TIP_DISMISSED_KEY = 'graphyn.builder.connectTipDismissed'
 /** Catalog → canvas HTML5 drag payload (node_type string). */
 const CATALOG_DND_MIME = 'application/graphyn-node'
 
-function readBoolPref(key: string, defaultValue: boolean): boolean {
+function readStoredBool(key: string): boolean | null {
   try {
     const v = localStorage.getItem(key)
-    if (v === null) return defaultValue
+    if (v === null) return null
     return v === '1' || v === 'true'
   } catch {
-    return defaultValue
+    return null
   }
+}
+
+function readBoolPref(key: string, defaultValue: boolean): boolean {
+  return readStoredBool(key) ?? defaultValue
 }
 
 function writeBoolPref(key: string, value: boolean) {
@@ -229,8 +271,9 @@ function layoutLeftToRight<T extends { id: string; position: { x: number; y: num
     arr.push(id)
     byRank.set(r, arr)
   }
-  const COL = 300
-  const ROW = 110
+  // Node cards are ~272 px wide and up to ~90 px tall (two-line labels).
+  const COL = 340
+  const ROW = 130
   return nodes.map((n) => {
     const r = rank.get(n.id) ?? 0
     const col = byRank.get(r) ?? []
@@ -242,6 +285,40 @@ function layoutLeftToRight<T extends { id: string; position: { x: number; y: num
 function slugifyName(raw: string): string {
   const s = raw.trim().replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
   return s || 'pipeline'
+}
+
+/**
+ * Inspector field help: full text, wrapped (never cut with "…"); text longer
+ * than ~3 lines is clamped behind a "more" toggle. The toggle is a span (not a
+ * <button>) so it never becomes the enclosing <label>'s control.
+ */
+function FieldHelp({ text }: { text: string }) {
+  const [open, setOpen] = React.useState(false)
+  const long = helpNeedsMore(text)
+  const toggle = (e: React.SyntheticEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setOpen((v) => !v)
+  }
+  return (
+    <span className="mt-0.5 block text-[11px] leading-snug text-ink-400">
+      <span className={`block whitespace-pre-line break-words ${long && !open ? 'line-clamp-3' : ''}`}>{text}</span>
+      {long ? (
+        <span
+          role="button"
+          tabIndex={0}
+          aria-expanded={open}
+          className="cursor-pointer font-medium text-accent-700 hover:underline"
+          onClick={toggle}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') toggle(e)
+          }}
+        >
+          {open ? 'less' : 'more'}
+        </span>
+      ) : null}
+    </span>
+  )
 }
 
 function BuilderInner() {
@@ -276,7 +353,13 @@ function BuilderInner() {
 
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphynNodeData>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
-  const { screenToFlowPosition, fitView } = useReactFlow()
+  const { screenToFlowPosition, fitView, getNodes, setViewport } = useReactFlow()
+  /** True while the viewport is the automatic fit (no user pan/zoom since) — panel / resize changes re-fit. */
+  const autoFitRef = React.useRef(false)
+  /** Canvas size at the last automatic fit (re-fit only on a significant change). */
+  const lastFitBoxRef = React.useRef({ w: 0, h: 0 })
+  /** Graph shown at the readable minimum zoom (not all of it) → show "Fit all". */
+  const [partialView, setPartialView] = React.useState(false)
   /** Latest node_progress per running node (canvas bar + log line); view-only. */
   const [nodeProgress, setNodeProgress] = React.useState<Record<string, NodeProgress>>({})
   /** Run id whose journal currently fills the execution log (hydrated, not streamed). */
@@ -292,14 +375,52 @@ function BuilderInner() {
   const [moreOpen, setMoreOpen] = React.useState(false)
   const [showRawLogs, setShowRawLogs] = React.useState(false)
   const [logHeight, setLogHeight] = React.useState(148)
-  const [catalogOpen, setCatalogOpen] = React.useState(() => readBoolPref(CATALOG_OPEN_KEY, true))
-  const [inspectorOpen, setInspectorOpen] = React.useState(() => readBoolPref(INSPECTOR_OPEN_KEY, true))
+  const { width: viewportWidth } = useViewport()
+  const sizeClass = viewportSizeFor(viewportWidth)
+  /** docked (≥1280, shrinks the canvas) · drawer (overlay) · sheet (<768, bottom). */
+  const inspectorMode = inspectorModeFor(viewportWidth)
+  // Canvas first: the catalog opens only when the canvas keeps ≥700px; a manual
+  // toggle is remembered per viewport size class (catalogPrefKey).
+  const [catalogOpen, setCatalogOpen] = React.useState(() => {
+    const w = typeof window === 'undefined' ? 0 : window.innerWidth
+    // Before measuring, estimate the Editor area as the viewport minus the app nav.
+    return catalogShouldOpen({ areaWidth: w - (w >= 1280 ? 240 : 56), stored: readStoredBool(catalogPrefKey(w)) })
+  })
+  const toggleCatalog = () =>
+    setCatalogOpen((v) => {
+      writeBoolPref(catalogPrefKey(window.innerWidth), !v)
+      return !v
+    })
+  /** Editor area (catalog + canvas + docked inspector) and toolbar column widths. */
+  const [areaWidth, setAreaWidth] = React.useState(0)
+  const [mainColWidth, setMainColWidth] = React.useState(0)
+  const widthObservers = React.useRef(new Map<string, ResizeObserver>())
+  const observeWidth = React.useCallback(
+    (key: string, set: (w: number) => void) => (el: HTMLDivElement | null) => {
+      widthObservers.current.get(key)?.disconnect()
+      widthObservers.current.delete(key)
+      if (!el || typeof ResizeObserver === 'undefined') return
+      const measure = () => set(Math.round(el.clientWidth))
+      measure()
+      const ro = new ResizeObserver(measure)
+      ro.observe(el)
+      widthObservers.current.set(key, ro)
+    },
+    [],
+  )
+  const areaRef = React.useMemo(() => observeWidth('area', setAreaWidth), [observeWidth])
+  const mainColRef = React.useMemo(() => observeWidth('main', setMainColWidth), [observeWidth])
+  const compactToolbar = toolbarCompact(mainColWidth)
+  /** Inspector shows only for a selection, Graph settings, or the Agent drawer. */
+  const [graphSettingsOpen, setGraphSettingsOpen] = React.useState(false)
   const [minimapOpen, setMinimapOpen] = React.useState(() => readBoolPref(MINIMAP_OPEN_KEY, true))
   /** Canvas box size → minimap size / visibility (hidden below the breakpoint). */
   const [canvasBox, setCanvasBox] = React.useState({ w: 0, h: 0 })
   const canvasRoRef = React.useRef<ResizeObserver | null>(null)
   // Callback ref: (re)attaches whenever the canvas box mounts/unmounts.
+  const canvasElRef = React.useRef<HTMLDivElement | null>(null)
   const canvasBoxRef = React.useCallback((el: HTMLDivElement | null) => {
+    canvasElRef.current = el
     canvasRoRef.current?.disconnect()
     canvasRoRef.current = null
     if (!el || typeof ResizeObserver === 'undefined') return
@@ -339,6 +460,7 @@ function BuilderInner() {
   const [pipelinePick, setPipelinePick] = React.useState('')
   const [pipelineEnv, setPipelineEnv] = React.useState<'draft' | 'staging' | 'prod'>('draft')
   const [triggersOpen, setTriggersOpen] = React.useState(false)
+  const [runDialog, setRunDialog] = React.useState<{ spec: RunInputsSpec; mode: 'stream' | 'async' } | null>(null)
   const [agentOpen, setAgentOpen] = React.useState(false)
   const [credentialsList, setCredentialsList] = React.useState<CredentialOption[]>([])
 
@@ -451,6 +573,17 @@ function BuilderInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject])
   const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | null>(null)
+  // Condition chips live in the edge-label layer (outside the edge hit area).
+  React.useEffect(() => {
+    const onSelect = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail
+      if (!id) return
+      setSelectedEdgeId(id)
+      setInspectorId(null)
+    }
+    window.addEventListener(SELECT_EDGE_EVENT, onSelect)
+    return () => window.removeEventListener(SELECT_EDGE_EVENT, onSelect)
+  }, [])
   const [actionError, setActionError] = React.useState<{ title: string; message: string; detail?: string } | null>(null)
   const moreRef = React.useRef<HTMLDivElement | null>(null)
   const abortRef = React.useRef<AbortController | null>(null)
@@ -474,22 +607,35 @@ function BuilderInner() {
     if (isRunning) setLogCollapsed(false)
   }, [isRunning])
 
-  React.useEffect(() => {
-    writeBoolPref(CATALOG_OPEN_KEY, catalogOpen)
-  }, [catalogOpen])
+  /** Manual expand/collapse — the only log state that is remembered. */
+  const setLogCollapsedByUser = (next: boolean) => {
+    setLogCollapsed(next)
+    writeBoolPref(LOG_COLLAPSED_KEY, next)
+  }
 
+  // A selection replaces Graph settings (deselecting then closes the inspector).
   React.useEffect(() => {
-    writeBoolPref(INSPECTOR_OPEN_KEY, inspectorOpen)
-  }, [inspectorOpen])
-
-  React.useEffect(() => {
-    writeBoolPref(LOG_COLLAPSED_KEY, logCollapsed)
-  }, [logCollapsed])
-
-  // Selecting a node/edge expands the inspector so config is reachable.
-  React.useEffect(() => {
-    if (inspectorId || selectedEdgeId) setInspectorOpen(true)
+    if (inspectorId || selectedEdgeId) setGraphSettingsOpen(false)
   }, [inspectorId, selectedEdgeId])
+  const inspectorVisible = Boolean(inspectorId || selectedEdgeId || graphSettingsOpen || agentOpen)
+  const closeInspector = React.useCallback(() => {
+    setInspectorId(null)
+    setSelectedEdgeId(null)
+    setGraphSettingsOpen(false)
+    setAgentOpen(false)
+  }, [])
+  // Escape closes the inspector (not while typing in a field).
+  React.useEffect(() => {
+    if (!inspectorVisible || moreOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      const t = e.target as HTMLElement | null
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return
+      closeInspector()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [inspectorVisible, moreOpen, closeInspector])
 
   React.useEffect(() => {
     if (!moreOpen) return
@@ -531,6 +677,30 @@ function BuilderInner() {
               n.id === node.id ? { ...n, data: { ...n.data, placement: next } } : n,
             ),
           )
+        },
+        onChangeErrorPolicy: ({ onError, retry }) => {
+          const current = nodesRef.current.find((n) => n.id === node.id)
+          const prevPort = errorPortOf(current?.data.onError)
+          const nextPort = errorPortOf(onError)
+          setNodes((nds) =>
+            nds.map((n) => (n.id === node.id ? { ...n, data: { ...n.data, onError, retry } } : n)),
+          )
+          // Leaving Route mode (or renaming the port) orphans wires from the old
+          // error port — the server rejects them, so drop them here.
+          if (prevPort && prevPort !== nextPort) {
+            const catalogHasPort = (current?.data.outputs ?? []).some((p) => p.name === prevPort)
+            if (!catalogHasPort) {
+              const dropped = edgesRef.current.filter(
+                (e) => e.source === node.id && canonicalPort(e.sourceHandle, 'output') === prevPort,
+              ).length
+              if (dropped > 0) {
+                setEdges((eds) =>
+                  eds.filter((e) => !(e.source === node.id && canonicalPort(e.sourceHandle, 'output') === prevPort)),
+                )
+                pushToast(`Removed ${dropped} error-branch connection${dropped === 1 ? '' : 's'}`, 'info')
+              }
+            }
+          }
         },
         onDelete: () => {
           setNodes((nds) => nds.filter((n) => n.id !== node.id))
@@ -1024,12 +1194,18 @@ function BuilderInner() {
   const pathStructureKey = nodes
     .map((n) => {
       const c = n.data.config ?? {}
-      return `${n.id}:${n.data.nodeType}:${n.data.label ?? ''}:${String(c.architecture ?? '')}:${String(c.epochs ?? '')}`
+      return `${n.id}:${n.data.nodeType}:${n.data.label ?? ''}:${String(c.architecture ?? '')}:${String(c.epochs ?? '')}:${String(c.learning_rate ?? '')}`
     })
     .join('|') + '#' + edges.map((e) => `${e.source}>${e.target}`).join('|')
   const pathView = React.useMemo(
     () => canvasPathView(nodesRef.current, edgesRef.current),
-    // pathStructureKey captures ids / labels / arch / epochs / edges
+    // pathStructureKey captures ids / labels / arch / epochs / lr / edges
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pathStructureKey],
+  )
+  /** Model builder ↔ Trainer learning-rate pairing (a set Trainer value wins — learningRate.ts). */
+  const lrLinks = React.useMemo(
+    () => learningRateLinks(nodesRef.current, edgesRef.current),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [pathStructureKey],
   )
@@ -1039,12 +1215,16 @@ function BuilderInner() {
   }, [isRunning])
   const displayNodes = React.useMemo(() => {
     const hasProgress = Object.keys(nodeProgress).length > 0
-    if (issuesByNode.size === 0 && pathView.pathOf.size === 0 && !hasProgress) return nodes
+    if (issuesByNode.size === 0 && pathView.pathOf.size === 0 && pathView.titleOf.size === 0 && !hasProgress && lrLinks.size === 0) return nodes
     return nodes.map((n) => {
       const count = issuesByNode.get(n.id)?.size ?? 0
       const path = pathView.pathOf.get(n.id) ?? null
       const progress = nodeProgress[n.id] ?? null
-      if (!count && !path && !progress) return n
+      // A Model builder whose Trainer overrides the LR summarises the LR training uses.
+      const lr = lrLinks.get(n.id)
+      const effectiveLr = lr?.role === 'builder' && lr.source === 'trainer' ? lr.effective : null
+      const titled = pathView.titleOf.get(n.id) ?? null
+      if (!count && !path && !progress && effectiveLr == null && !titled) return n
       return {
         ...n,
         data: {
@@ -1052,11 +1232,14 @@ function BuilderInner() {
           ...(count ? { configIssues: count } : {}),
           pathBadge: path,
           displayLabel: pathView.labelOf.get(n.id),
+          displayTitle: titled?.title,
+          displaySubtitle: titled?.subtitle,
           progress,
+          effectiveLr,
         },
       }
     })
-  }, [nodes, issuesByNode, pathView, nodeProgress])
+  }, [nodes, issuesByNode, pathView, nodeProgress, lrLinks])
 
   /** True (and shows a banner listing node › field › rule) when config is invalid. */
   const blockOnInvalidConfig = (verb: 'run' | 'save') => {
@@ -1131,7 +1314,6 @@ function BuilderInner() {
     setNodes((nds) => [...nds, node])
     setInspectorId(id)
     setSelectedEdgeId(null)
-    if (!inspectorOpen) setInspectorOpen(true)
   }
 
   const onCatalogDragStart = (event: React.DragEvent, entry: NodeCatalogEntry) => {
@@ -1190,7 +1372,11 @@ function BuilderInner() {
       for (const name of namedIn) {
         if (!ports.inputs.some((p) => p.name === name)) ports.inputs.push({ name })
       }
+      const onError = onErrorFromIr(n.on_error)
+      const routedPort = errorPortOf(onError)
       for (const name of namedOut) {
+        // The routed error port is drawn from on_error, not as a catalog output.
+        if (name === routedPort) continue
         if (!ports.outputs.some((p) => p.name === name)) ports.outputs.push({ name })
       }
       return attachHandlers({
@@ -1208,6 +1394,8 @@ function BuilderInner() {
           config: { ...defaultsFromSchema(entry), ...(n.config ?? {}) },
           schemaProps: entry?.config_schema?.properties ?? {},
           placement: (n.placement as NodePlacement | null | undefined) ?? null,
+          onError,
+          retry: retryFromIr(n.retry),
           // Opaque IR fields with no Builder editor yet — preserve verbatim.
           capabilityMetadata: n.capability_metadata ?? null,
           eventTrigger: n.event_trigger ?? null,
@@ -1245,12 +1433,99 @@ function BuilderInner() {
     setLoadGen((g) => g + 1)
   }
 
-  // Fit the freshly loaded graph (ReactFlow's `fitView` prop only fits on mount).
+  const catalogOpenRef = React.useRef(catalogOpen)
+  catalogOpenRef.current = catalogOpen
+  /**
+   * Fit with a readable minimum zoom (editorLayout.planFit): whole graph when it
+   * fits at ≥0.6; else collapse the catalog first (the resulting resize re-fits);
+   * else show the leftmost nodes at 0.6 and offer "Fit all".
+   */
+  const applyFit = React.useCallback(
+    (allowCollapse: boolean) => {
+      const rfNodes = getNodes()
+      const el = canvasElRef.current
+      if (rfNodes.length === 0) return
+      const w = el?.clientWidth ?? 0
+      const h = el?.clientHeight ?? 0
+      if (!w || !h) {
+        fitView(FIT_VIEW_OPTIONS)
+        return
+      }
+      const bounds = getRectOfNodes(rfNodes)
+      const plan = planFit({
+        bounds,
+        canvasW: w,
+        canvasH: h,
+        catalogOpen: allowCollapse && catalogOpenRef.current,
+        padding: FIT_VIEW_OPTIONS.padding,
+      })
+      autoFitRef.current = true
+      if (plan.collapseCatalog) {
+        // Not stored as a preference; the canvas resize re-runs this fit.
+        setCatalogOpen(false)
+        lastFitBoxRef.current = { w: 0, h: 0 }
+        return
+      }
+      lastFitBoxRef.current = { w, h }
+      if (plan.mode === 'fit') {
+        fitView(FIT_VIEW_OPTIONS)
+        setPartialView(false)
+      } else {
+        setViewport(leftAnchoredViewport(bounds, h, plan.zoom))
+        setPartialView(true)
+      }
+    },
+    [fitView, getNodes, setViewport],
+  )
+  const fitAll = () => {
+    autoFitRef.current = false
+    setPartialView(false)
+    fitView({ ...FIT_VIEW_OPTIONS, duration: 200 })
+  }
+
+  // Fit the freshly loaded graph.
+  // Only on load / pipeline switch (loadGen) — never on ordinary edits. Waits
+  // until React Flow has measured every loaded node, so the bounds are real
+  // (a fit against unmeasured nodes is what used to cut nodes off).
   React.useEffect(() => {
     if (loadGen === 0) return
-    const t = window.setTimeout(() => fitView(FIT_VIEW_OPTIONS), 60)
+    let frames = 0
+    let raf = 0
+    const tryFit = () => {
+      const want = nodesRef.current
+      const have = getNodes()
+      const wantIds = new Set(want.map((n) => n.id))
+      const measured =
+        want.length > 0 &&
+        have.length === want.length &&
+        have.every((n) => wantIds.has(n.id) && Boolean(n.width) && Boolean(n.height))
+      if (measured || frames++ > 60) {
+        if (want.length > 0) applyFit(true)
+        return
+      }
+      raf = window.requestAnimationFrame(tryFit)
+    }
+    raf = window.requestAnimationFrame(tryFit)
+    return () => window.cancelAnimationFrame(raf)
+  }, [loadGen, applyFit, getNodes])
+
+  // Canvas first on resize / size-class change: the catalog follows this size
+  // class's stored choice, else opens only when the canvas keeps ≥700px.
+  React.useEffect(() => {
+    if (areaWidth <= 0) return
+    const want = catalogShouldOpen({ areaWidth, stored: readStoredBool(catalogPrefKey(window.innerWidth)) })
+    setCatalogOpen((prev) => (prev === want ? prev : want))
+  }, [areaWidth, sizeClass])
+
+  // Panels opening/closing (catalog, docked inspector) or a window resize change
+  // the canvas: re-fit while the view is still the automatic fit — never on
+  // ordinary edits, never after the user panned/zoomed.
+  React.useEffect(() => {
+    if (!autoFitRef.current || nodesRef.current.length === 0 || canvasBox.w === 0) return
+    if (!isSignificantResize(lastFitBoxRef.current, canvasBox)) return
+    const t = window.setTimeout(() => applyFit(false), 120)
     return () => window.clearTimeout(t)
-  }, [loadGen, fitView])
+  }, [canvasBox, applyFit])
 
   React.useEffect(() => {
     if (!pendingGraph) return
@@ -1295,6 +1570,62 @@ function BuilderInner() {
       return changed ? next : nds
     })
   }, [catalog, setNodes])
+
+  // ── Catalog load state (inspector "step settings") ─────────────────────────
+  // A failed / partial `/nodes` load used to leave every node grey with
+  // "No config fields". Track it, auto-retry with backoff (2s, 5s, 10s, 30s…)
+  // and on window focus; never while signed out (that opens Settings).
+  const [catalogRefreshing, setCatalogRefreshing] = React.useState(false)
+  const [catalogChecked, setCatalogChecked] = React.useState(() => useAppStore.getState().catalog.length > 0)
+  const [catalogAttempt, setCatalogAttempt] = React.useState(0)
+  const retryCatalog = React.useCallback(async () => {
+    const fn = useAppStore.getState().refreshCatalog
+    if (!fn) return
+    setCatalogRefreshing(true)
+    try {
+      await fn()
+    } finally {
+      setCatalogRefreshing(false)
+      setCatalogChecked(true)
+    }
+  }, [])
+  const catalogTypes = React.useMemo(() => new Set(catalog.map((c) => c.node_type)), [catalog])
+  const catalogState = catalogLoadState({
+    count: catalog.length,
+    error: bootError,
+    refreshing: catalogRefreshing,
+    checked: catalogChecked || Boolean(bootError),
+  })
+  const missingCatalogTypes =
+    catalog.length > 0 ? new Set(nodes.map((n) => n.data.nodeType).filter((t) => !catalogTypes.has(t))).size : 0
+  const signedOut = bootStatus === 401
+  // App loads the catalog at boot; an empty, error-free catalog is only "empty" once a load finished.
+  React.useEffect(() => {
+    if (refreshCatalog && !catalogChecked && catalog.length === 0 && !bootError) void retryCatalog()
+  }, [refreshCatalog, catalogChecked, catalog.length, bootError, retryCatalog])
+  const catalogFailing =
+    !signedOut &&
+    (catalogState === 'failed' || (catalogState === 'ready' && missingCatalogTypes > 0 && catalogAttempt < 3))
+  React.useEffect(() => {
+    if (!catalogFailing) {
+      if (catalogState === 'ready' && missingCatalogTypes === 0 && catalogAttempt > 0) setCatalogAttempt(0)
+      return
+    }
+    if (catalogRefreshing) return
+    const t = window.setTimeout(() => {
+      setCatalogAttempt((a) => a + 1)
+      void retryCatalog()
+    }, catalogRetryDelay(catalogAttempt))
+    return () => window.clearTimeout(t)
+  }, [catalogFailing, catalogState, missingCatalogTypes, catalogAttempt, catalogRefreshing, retryCatalog])
+  React.useEffect(() => {
+    if (!catalogFailing) return
+    const onFocus = () => {
+      if (!useAppStore.getState().catalog.length || missingCatalogTypes > 0) void retryCatalog()
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [catalogFailing, missingCatalogTypes, retryCatalog])
 
   React.useEffect(() => {
     const handler = (e: Event) => {
@@ -1452,14 +1783,33 @@ function BuilderInner() {
    * every API version) so the audit record gets `trigger: "ui"` and, when the
    * canvas was opened from a saved pipeline, the declared pipeline + env.
    */
-  const runRequestBody = (graph: GraphIR) =>
+  const runRequestBody = (graph: GraphIR, extras?: RunExtras) =>
     JSON.stringify({
       graph,
       trigger: 'ui',
       ...(pipelinePick ? { pipeline: pipelinePick, pipeline_env: pipelineEnv } : {}),
+      // G3: webhook_trigger bodies + IR parameter overrides (only when given,
+      // so older APIs that do not know these keys never see them).
+      ...(extras?.inputs ? { inputs: extras.inputs } : {}),
+      ...(extras?.parameters ? { parameters: extras.parameters } : {}),
     })
 
-  const handleRun = async () => {
+  /**
+   * Run entry point: graphs with a webhook_trigger node or declared IR
+   * parameters open the Run-with-inputs dialog; everything else stays one click.
+   */
+  const requestRun = (mode: 'stream' | 'async') => {
+    if (blockOnInvalidConfig('run')) return
+    const spec = runInputsSpec(currentGraph())
+    if (needsRunDialog(spec)) {
+      setRunDialog({ spec, mode })
+      return
+    }
+    if (mode === 'async') void handleRunAsync()
+    else void handleRun()
+  }
+
+  const handleRun = async (extras?: RunExtras) => {
     if (blockOnInvalidConfig('run')) return
     // Light pre-run path check (empty DatasetIngest / input paths)
     const missingPaths = findMissingInputPaths(nodesRef.current)
@@ -1498,7 +1848,7 @@ function BuilderInner() {
       const graph = graphForRun()
       const res = await apiFetch('/pipelines/run', {
         method: 'POST',
-        body: runRequestBody(graph),
+        body: runRequestBody(graph, extras),
         signal: controller.signal,
         timeoutMs: 30 * 60 * 1000,
         headers: { 'Content-Type': 'application/json' },
@@ -1772,14 +2122,14 @@ function BuilderInner() {
     }
   }
 
-  const handleRunAsync = async () => {
+  const handleRunAsync = async (extras?: RunExtras) => {
     if (blockOnInvalidConfig('run')) return
     setActionError(null)
     try {
       const graph = graphForRun()
       const res = await apiJson<{ run_id: string }>('/pipelines/run-async', {
         method: 'POST',
-        body: runRequestBody(graph),
+        body: runRequestBody(graph, extras),
       })
       setLastRunId(res.run_id)
       pushToast(`Async run started: ${res.run_id}`, 'success')
@@ -2068,7 +2418,7 @@ function BuilderInner() {
       const max = Math.round(window.innerHeight * 0.5)
       const next = Math.min(max, Math.max(80, startH + (startY - ev.clientY)))
       setLogHeight(next)
-      setLogCollapsed(false)
+      setLogCollapsedByUser(false)
     }
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
@@ -2219,13 +2569,13 @@ function BuilderInner() {
         disabled={nodes.length === 0 || isRunning}
         className="btn-quiet w-full justify-start"
         onClick={() => {
-          void handleRunAsync()
+          requestRun('async')
           setMoreOpen(false)
         }}
       >
         <Play className="h-3.5 w-3.5" /> Run in background
       </button>
-      {/* Seed lives only in the Graph settings panel (deselect any node/edge to see it) — it used
+      {/* Seed lives only in the Graph settings panel (toolbar sliders button) — it used
           to also be editable here, which meant the same value could be changed from two places
           with no indication they were the same field. */}
       <ConfirmButton
@@ -2265,7 +2615,7 @@ function BuilderInner() {
       <div className="border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-950 md:hidden">
         Editor works best on a wide screen — collapse the catalog or rotate to landscape if the canvas feels cramped.
       </div>
-      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      <div ref={areaRef} className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
       <aside
         className={
           catalogOpen
@@ -2277,13 +2627,13 @@ function BuilderInner() {
           {catalogOpen ? (
             <div className="px-1">
               <div
-                className="text-[10px] font-semibold uppercase tracking-wide text-ink-400"
+                className="text-[12px] font-semibold text-ink-700"
                 title={nodes.length === 0 ? 'Click or drag a node onto the canvas' : undefined}
               >
-                Catalog
+                Nodes
               </div>
               {nodes.length === 0 ? (
-                <div className="text-[9px] font-normal normal-case tracking-normal text-ink-400">
+                <div className="text-[10px] text-ink-400">
                   Click or drag onto canvas
                 </div>
               ) : null}
@@ -2294,7 +2644,7 @@ function BuilderInner() {
             className="btn-icon ml-auto"
             aria-label={catalogOpen ? 'Collapse node catalog' : 'Expand node catalog'}
             title={catalogOpen ? 'Collapse catalog' : 'Expand catalog'}
-            onClick={() => setCatalogOpen((v) => !v)}
+            onClick={toggleCatalog}
           >
             {catalogOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
           </button>
@@ -2319,7 +2669,7 @@ function BuilderInner() {
             <option value="all">All nodes ({catalog.length})</option>
             {categories.map((cat) => (
               <option key={cat} value={cat}>
-                {startCase(cat)} ({catalog.filter((n) => (n.category || 'Other') === cat).length})
+                {prettyCategory(cat)} ({catalog.filter((n) => (n.category || 'Other') === cat).length})
               </option>
             ))}
           </select>
@@ -2390,7 +2740,7 @@ function BuilderInner() {
               ).map(([cat, items]) => (
                 <div key={cat}>
                   <div className="sticky top-0 z-[1] bg-white/95 px-2 py-1 text-[11px] font-medium text-ink-400 backdrop-blur">
-                    {startCase(cat)} · {items.length}
+                    {prettyCategory(cat)} · {items.length}
                   </div>
                   <div className="space-y-0.5">
                     {items.map((n) => (
@@ -2404,7 +2754,7 @@ function BuilderInner() {
                         className="flex w-full cursor-grab items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition hover:bg-ink-50 active:cursor-grabbing"
                       >
                         {(() => {
-                          const look = categoryLook(n.category)
+                          const look = categoryLook(n.category, n.node_type)
                           const Icon = look.Icon
                           return (
                             <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white ${look.bg}`}>
@@ -2441,165 +2791,135 @@ function BuilderInner() {
         </>
         ) : (
           <div className="flex flex-1 items-start justify-center pt-2">
-            <span className="write-vertical-right rotate-180 text-[10px] font-semibold uppercase tracking-wide text-ink-400 [writing-mode:vertical-rl]">
+            <button
+              type="button"
+              className="rotate-180 text-[11px] font-medium text-ink-400 [writing-mode:vertical-rl] hover:text-ink-700"
+              onClick={toggleCatalog}
+              title="Expand node catalog"
+            >
               Nodes
-            </span>
+            </button>
           </div>
         )}
       </aside>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="relative z-30 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ink-200/50 bg-white/80 px-3 py-1.5 backdrop-blur-md">
-          {/* Workspace context — Home lives in the left nav; don't yank the Editor away mid-edit. */}
-          <span
-            className="inline-flex items-center gap-1 rounded-full border border-accent-200 bg-accent-50 px-2.5 py-0.5 text-[11px] font-semibold text-accent-950"
-            title={activeProject ? `Workspace ${activeProject}` : 'No workspace'}
-          >
-            {activeProject || 'Editor'}
-          </span>
-          {activeProject ? (
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              {projectPipelineList.length === 0 ? (
-                <span className="text-[10px] text-ink-500" title="Save the graph to create a project pipeline">
-                  No saved pipeline — Save to create
-                </span>
-              ) : (
-                <>
-                  <label className="flex min-w-0 max-w-[min(22rem,42vw)] items-center gap-1.5 rounded-lg border border-ink-200/80 bg-ink-50/70 px-2 py-0.5">
-                    <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-ink-400">Open</span>
-                    <select
-                      className="min-w-0 flex-1 truncate rounded border-0 bg-transparent py-0.5 text-[11px] font-medium text-ink-800 outline-none"
-                      value={pipelinePick}
-                      onChange={(e) => {
-                        const name = e.target.value
-                        setPipelinePick(name)
-                        if (name) void openPipelineEnv(name, pipelineEnv)
-                      }}
-                      aria-label="Open saved workspace pipeline"
-                      title={
-                        pipelinePick
-                          ? `Open saved pipeline: ${pipelinePick}`
-                          : 'Open a saved workspace pipeline onto the canvas'
-                      }
-                    >
-                      {!pipelinePick ? (
-                        <option value="">— not a saved pipeline —</option>
-                      ) : null}
-                      {projectPipelineList.map((p) => (
-                        <option key={p.name} value={p.name}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {(() => {
-                    const pipe = projectPipelineList.find((p) => p.name === pipelinePick)
-                    const hasStaging = Boolean(pipe?.environments?.staging)
-                    const hasProd = Boolean(pipe?.environments?.prod)
-                    const pending = pipe?.environments?.pending_prod?.version
-                    // Only offer switches for versions that exist — never fake staging/prod toggles.
-                    const switchable: Array<'draft' | 'staging' | 'prod'> = ['draft']
-                    if (hasStaging) switchable.push('staging')
-                    if (hasProd) switchable.push('prod')
-                    const multi = switchable.length > 1
-                    return (
-                      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                        <span
-                          className="shrink-0 text-[10px] font-medium text-ink-400"
-                          title="Saved versions of this pipeline (not model stages — those live on Models)"
-                        >
-                          Pipeline version
-                        </span>
-                        {multi ? (
-                          <SegmentedTabs
-                            aria-label="Pipeline version: open the draft, staging, or prod copy of this pipeline"
-                            className="shrink-0 text-[10px] font-semibold uppercase tracking-wide"
-                            value={pipelineEnv}
-                            options={switchable.map((env) => ({ id: env, label: env }))}
-                            onChange={(env) => {
-                              if (!pipelinePick) return
-                              if (env === pipelineEnv && !dirty) return
-                              void openPipelineEnv(pipelinePick, env)
-                            }}
-                          />
-                        ) : (
-                          <span
-                            className="rounded-full border border-ink-200/80 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-600"
-                            title="Pipeline version: working copy — publish to create a staging version you can switch to"
-                          >
-                            Draft
-                          </span>
-                        )}
-                        {pipelinePick && !hasStaging ? (
-                          <button
-                            type="button"
-                            className="text-[10px] font-medium text-accent-800 hover:underline"
-                            title="Snapshot the saved pipeline and make it the staging pipeline version"
-                            onClick={() => void publishProjectPipeline(pipelinePick, 'staging')}
-                          >
-                            Publish pipeline version → staging
-                          </button>
-                        ) : null}
-                        {pipelinePick && hasStaging && !hasProd && !pending ? (
-                          <button
-                            type="button"
-                            className="text-[10px] font-medium text-accent-800 hover:underline"
-                            onClick={() =>
-                              void promoteProjectPipeline(pipelinePick, {
-                                to_env: 'prod',
-                                from_env: 'staging',
-                                approve: false,
-                              })
-                            }
-                            title="Ask for this staging pipeline version to become the production version"
-                          >
-                            Request prod version
-                          </button>
-                        ) : null}
-                        {pending ? (
-                          <button
-                            type="button"
-                            className="text-[10px] font-semibold text-emerald-800 hover:underline"
-                            onClick={() =>
-                              void promoteProjectPipeline(pipelinePick, {
-                                to_env: 'prod',
-                                version: pending,
-                                approve: true,
-                              })
-                            }
-                            title="Approve the pending production pipeline version"
-                          >
-                            Approve prod version
-                          </button>
-                        ) : null}
-                      </div>
-                    )
-                  })()}
-                </>
-              )}
-            </div>
+      <div ref={mainColRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {(() => {
+          // Toolbar: one row — name (▾ switch pipeline) · version · chips · Run · Save · undo/redo · ⋯.
+          // The workspace is already in the sidebar; publish/promote live under ⋯.
+          const pipe = projectPipelineList.find((p) => p.name === pipelinePick)
+          const hasStaging = Boolean(pipe?.environments?.staging)
+          const hasProd = Boolean(pipe?.environments?.prod)
+          const pendingProd = pipe?.environments?.pending_prod?.version
+          // Only offer switches for versions that exist — never fake staging/prod toggles.
+          const switchable: Array<'draft' | 'staging' | 'prod'> = ['draft']
+          if (hasStaging) switchable.push('staging')
+          if (hasProd) switchable.push('prod')
+          const versionActions =
+            pipelinePick && (!hasStaging || (hasStaging && !hasProd && !pendingProd) || pendingProd) ? (
+              <div className="mb-2 flex flex-col items-stretch gap-0.5 border-b border-ink-100 pb-2">
+                <div className="px-2 pb-0.5 text-[11px] font-medium text-ink-400" title="Saved versions of this pipeline (not model stages — those live on Models)">
+                  Pipeline version
+                </div>
+                {!hasStaging ? (
+                  <button
+                    type="button"
+                    className="btn-quiet w-full justify-start"
+                    title="Snapshot the saved pipeline and make it the staging pipeline version"
+                    onClick={() => {
+                      setMoreOpen(false)
+                      void publishProjectPipeline(pipelinePick, 'staging')
+                    }}
+                  >
+                    Publish to staging
+                  </button>
+                ) : null}
+                {hasStaging && !hasProd && !pendingProd ? (
+                  <button
+                    type="button"
+                    className="btn-quiet w-full justify-start"
+                    title="Ask for this staging pipeline version to become the production version"
+                    onClick={() => {
+                      setMoreOpen(false)
+                      void promoteProjectPipeline(pipelinePick, { to_env: 'prod', from_env: 'staging', approve: false })
+                    }}
+                  >
+                    Request prod version
+                  </button>
+                ) : null}
+                {pendingProd ? (
+                  <button
+                    type="button"
+                    className="btn-quiet w-full justify-start text-emerald-800"
+                    title="Approve the pending production pipeline version"
+                    onClick={() => {
+                      setMoreOpen(false)
+                      void promoteProjectPipeline(pipelinePick, { to_env: 'prod', version: pendingProd, approve: true })
+                    }}
+                  >
+                    Approve prod version ({pendingProd})
+                  </button>
+                ) : null}
+              </div>
+            ) : null
+          return (
+        <div className="relative z-30 flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-ink-200/50 bg-white/85 px-3 py-1.5 backdrop-blur-md">
+          {/* Document identity — Save / Run use this slug (synced with templateName); ▾ opens another saved pipeline. */}
+          <PipelineSwitcher
+            name={graphName}
+            onNameChange={(v) => {
+              setGraphName(v)
+              setTemplateName(v)
+            }}
+            onNameCommit={() => commitDocumentName(graphName)}
+            pipelines={projectPipelineList.map((p) => p.name)}
+            current={pipelinePick}
+            onOpen={(name) => {
+              const target = projectPipelineList.find((p) => p.name === name)
+              // Keep the current version only when the other pipeline has it.
+              const env =
+                pipelineEnv === 'draft' || target?.environments?.[pipelineEnv] ? pipelineEnv : 'draft'
+              // openPipelineEnv sets the pick only once the load succeeds (or isn't cancelled).
+              void openPipelineEnv(name, env)
+            }}
+          />
+          {compactToolbar ? null : pipelinePick ? (
+            switchable.length > 1 ? (
+              <SegmentedTabs
+                aria-label="Pipeline version: open the draft, staging, or prod copy of this pipeline"
+                className="shrink-0 text-[11px] font-medium capitalize"
+                value={pipelineEnv}
+                options={switchable.map((env) => ({ id: env, label: env }))}
+                onChange={(env) => {
+                  if (env === pipelineEnv && !dirty) return
+                  void openPipelineEnv(pipelinePick, env)
+                }}
+              />
+            ) : (
+              <span
+                className="rounded-md bg-ink-100/80 px-1.5 py-0.5 text-[11px] font-medium text-ink-500"
+                title="Pipeline version: working copy — Publish to staging (under ⋯) to create a version you can switch to"
+              >
+                Draft
+              </span>
+            )
+          ) : (
+            <span className="text-[11px] text-ink-400" title="Save to create this pipeline in the workspace">
+              Not saved
+            </span>
+          )}
+          {pendingProd ? (
+            <span
+              className="rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-800 ring-1 ring-emerald-200"
+              title={`Prod version ${pendingProd} awaits approval — approve under ⋯`}
+            >
+              Prod pending
+            </span>
           ) : null}
-          {/* Document identity — Save / Run use this slug (synced with templateName). */}
-          <div className="flex items-center gap-1.5 rounded-lg border border-ink-200/80 bg-ink-50/60 pl-2 focus-within:border-accent-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-accent-200/70">
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">Name</span>
-            <input
-              value={graphName}
-              onChange={(e) => {
-                const v = e.target.value.replace(/[^A-Za-z0-9_-]/g, '-')
-                setGraphName(v)
-                setTemplateName(v)
-              }}
-              onBlur={() => commitDocumentName(graphName)}
-              placeholder="graph-name"
-              className="w-36 rounded-lg bg-transparent py-1.5 pr-2.5 text-sm font-medium text-ink-900 outline-none"
-              title="Document slug — Save and Run use this name"
-              aria-label="Graph name"
-            />
-          </div>
           {pendingProposalCount > 0 && (
             <button
               type="button"
-              className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 hover:bg-amber-100"
+              className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-900 hover:bg-amber-100"
               onClick={() => openProposals()}
               title="Pending graph proposals"
             >
@@ -2608,20 +2928,17 @@ function BuilderInner() {
           )}
           {builderDataset?.project && (
             <div
-              className="inline-flex items-center gap-1.5 rounded-full border border-accent-200 bg-accent-50 px-2.5 py-0.5 text-[11px] font-semibold text-accent-950"
+              className="inline-flex max-w-[16rem] items-center gap-0.5 rounded-full border border-ink-200 bg-ink-50 pl-2 text-[11px] text-ink-700"
               title={
                 builderDataset.version
-                  ? `${builderDataset.project} / ${builderDataset.version}`
-                  : builderDataset.project
+                  ? `Linked dataset ${builderDataset.project} / ${builderDataset.version}`
+                  : `Linked dataset ${builderDataset.project}`
               }
             >
-              <span>
-                Dataset: {builderDataset.project}
-                {builderDataset.version ? ` / ${builderDataset.version}` : ''}
-              </span>
               <button
                 type="button"
-                className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold text-accent-800 hover:bg-accent-100"
+                className="min-w-0 truncate py-0.5 hover:underline"
+                title="Open in Datasets"
                 onClick={() =>
                   openData({
                     mode: 'outputs',
@@ -2630,12 +2947,14 @@ function BuilderInner() {
                   })
                 }
               >
-                Open Datasets
+                Dataset: {builderDataset.project}
+                {builderDataset.version ? ` / ${builderDataset.version}` : ''}
               </button>
               <button
                 type="button"
-                className="rounded-full p-0.5 text-accent-700 hover:bg-accent-100"
+                className="rounded-full p-1 text-ink-400 hover:bg-ink-100 hover:text-ink-700"
                 aria-label="Clear dataset link"
+                title="Clear dataset link"
                 onClick={() => setBuilderDataset(null)}
               >
                 <X className="h-3 w-3" />
@@ -2643,11 +2962,35 @@ function BuilderInner() {
             </div>
           )}
           <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          {configIssues.length > 0 ? (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-900 ring-1 ring-rose-200 hover:bg-rose-100"
+              title={formatConfigIssues(configIssues)}
+              onClick={() => {
+                setInspectorId(configIssues[0].nodeId)
+                setSelectedEdgeId(null)
+              }}
+            >
+              <AlertTriangle className="h-3 w-3" />
+              {configIssues.length} invalid field{configIssues.length === 1 ? '' : 's'}
+            </button>
+          ) : null}
+          {runHadErrors && !isRunning && (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2.5 py-0.5 text-[11px] font-semibold text-rose-900 hover:bg-rose-200"
+              onClick={focusLogErrors}
+            >
+              <AlertTriangle className="h-3 w-3" />
+              Errors
+            </button>
+          )}
           {!isRunning ? (
             <button
               type="button"
               disabled={nodes.length === 0}
-              onClick={() => void handleRun()}
+              onClick={() => requestRun('stream')}
               className="btn-primary"
             >
               <Play className="h-3.5 w-3.5" /> Run
@@ -2676,6 +3019,7 @@ function BuilderInner() {
               <span className="ml-0.5 h-2 w-2 rounded-full bg-amber-500" aria-hidden="true" title="Unsaved changes" />
             ) : null}
           </button>
+          {compactToolbar ? null : (
           <div className="flex items-center gap-0.5">
             <button
               type="button"
@@ -2698,30 +3042,39 @@ function BuilderInner() {
               <Redo2 className="h-3.5 w-3.5" />
             </button>
           </div>
-          {configIssues.length > 0 ? (
+          )}
+          {activeProject ? (
+            // Visible entry for schedules / webhooks (also in ⋯); label hides on narrow toolbars.
             <button
               type="button"
-              className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-900 ring-1 ring-rose-200 hover:bg-rose-100"
-              title={formatConfigIssues(configIssues)}
+              className={`${compactToolbar ? 'btn-icon' : 'btn-quiet'} ${triggersOpen ? 'bg-ink-100 text-ink-900' : ''}`}
+              aria-pressed={triggersOpen}
+              aria-label="Triggers"
+              title="Triggers — schedules and webhooks that start this pipeline"
               onClick={() => {
-                setInspectorId(configIssues[0].nodeId)
-                setSelectedEdgeId(null)
+                setTriggersOpen((v) => !v)
+                setAgentOpen(false)
               }}
             >
-              <AlertTriangle className="h-3 w-3" />
-              {configIssues.length} invalid field{configIssues.length === 1 ? '' : 's'}
+              <Clock className="h-3.5 w-3.5" />
+              {compactToolbar ? null : <span>Triggers</span>}
             </button>
           ) : null}
-          {runHadErrors && !isRunning && (
-            <button
-              type="button"
-              className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2.5 py-0.5 text-[11px] font-semibold text-rose-900 hover:bg-rose-200"
-              onClick={focusLogErrors}
-            >
-              <AlertTriangle className="h-3 w-3" />
-              Errors
-            </button>
-          )}
+          <button
+            type="button"
+            className={`btn-icon ${graphSettingsOpen ? 'bg-ink-100 text-ink-900' : ''}`}
+            aria-pressed={graphSettingsOpen}
+            aria-label="Graph settings"
+            title="Graph settings (seed, steps, linked run)"
+            onClick={() => {
+              setInspectorId(null)
+              setSelectedEdgeId(null)
+              setAgentOpen(false)
+              setGraphSettingsOpen((v) => !v)
+            }}
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+          </button>
           <div className="relative" ref={moreRef}>
             <button
               type="button"
@@ -2730,6 +3083,7 @@ function BuilderInner() {
               aria-expanded={moreOpen}
               aria-haspopup="menu"
               aria-label="More builder actions"
+              title="More: validate, versions, triggers, agent, import/export…"
             >
               <MoreHorizontal className="h-3.5 w-3.5" />
             </button>
@@ -2739,6 +3093,43 @@ function BuilderInner() {
                 onMouseDown={(e) => e.stopPropagation()}
                 onPointerDown={(e) => e.stopPropagation()}
               >
+                {compactToolbar ? (
+                  <div className="mb-2 flex flex-col items-stretch gap-0.5 border-b border-ink-100 pb-2">
+                    {pipelinePick && switchable.length > 1 ? (
+                      <>
+                        <div className="px-2 pb-0.5 text-[11px] font-medium text-ink-400">Open version</div>
+                        {switchable.map((env) => (
+                          <button
+                            key={env}
+                            type="button"
+                            className={`btn-quiet w-full justify-start capitalize ${env === pipelineEnv ? 'bg-ink-100' : ''}`}
+                            aria-pressed={env === pipelineEnv}
+                            onClick={() => {
+                              setMoreOpen(false)
+                              if (env === pipelineEnv && !dirty) return
+                              void openPipelineEnv(pipelinePick, env)
+                            }}
+                          >
+                            {env}
+                          </button>
+                        ))}
+                      </>
+                    ) : (
+                      <div className="px-2 pb-0.5 text-[11px] text-ink-400">
+                        {pipelinePick ? 'Version: draft' : 'Not saved yet'}
+                      </div>
+                    )}
+                    <div className="flex gap-1 px-1 pt-1">
+                      <button type="button" className="btn-quiet flex-1" disabled={!historyFlags.canUndo} onClick={undo} title="Undo (Ctrl/Cmd+Z)">
+                        <Undo2 className="h-3.5 w-3.5" /> Undo
+                      </button>
+                      <button type="button" className="btn-quiet flex-1" disabled={!historyFlags.canRedo} onClick={redo} title="Redo (Shift+Ctrl/Cmd+Z or Ctrl+Y)">
+                        <Redo2 className="h-3.5 w-3.5" /> Redo
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                {versionActions}
                 <div className="mb-2 flex flex-col items-stretch gap-0.5 border-b border-ink-100 pb-2">
                   <button
                     type="button"
@@ -2777,11 +3168,7 @@ function BuilderInner() {
                     type="button"
                     className={`btn-quiet w-full justify-start ${agentOpen ? 'bg-accent-50' : ''}`}
                     onClick={() => {
-                      setAgentOpen((v) => {
-                        const next = !v
-                        if (next) setInspectorOpen(true)
-                        return next
-                      })
+                      setAgentOpen((v) => !v)
                       setTriggersOpen(false)
                       setMoreOpen(false)
                     }}
@@ -2832,6 +3219,8 @@ function BuilderInner() {
           </div>
           </div>
         </div>
+          )
+        })()}
 
         {driftRun && driftApplies && (snapshotMode || driftDismissedFor !== driftRun.runId) ? (
           <RunDriftBanner
@@ -2879,7 +3268,7 @@ function BuilderInner() {
                   message={actionError.message}
                   detail={actionError.detail}
                   onDismiss={() => setActionError(null)}
-                  onRetry={showRetry ? () => void handleRun() : undefined}
+                  onRetry={showRetry ? () => requestRun('stream') : undefined}
                   actions={
                     showViewOutputs ? (
                       <button
@@ -2965,18 +3354,32 @@ function BuilderInner() {
               setInspectorId(null)
               setSelectedEdgeId(null)
             }}
+            onMoveStart={(event) => {
+              // A user pan/zoom (event set) ends the automatic fit; programmatic moves have none.
+              if (event) autoFitRef.current = false
+            }}
             deleteKeyCode={['Backspace', 'Delete']}
             edgesFocusable
             elementsSelectable
             snapToGrid
             snapGrid={[20, 20]}
             panOnScroll
-            fitView
-            fitViewOptions={FIT_VIEW_OPTIONS}
             minZoom={0.15}
           >
             <Background gap={22} size={1} color="#c5d0da" />
-            <Controls />
+            <Controls fitViewOptions={FIT_VIEW_OPTIONS} />
+            {partialView && nodes.length > 0 ? (
+              <Panel position="top-left">
+                <button
+                  type="button"
+                  className="rounded-md border border-ink-200 bg-white/95 px-2 py-0.5 text-[11px] font-medium text-ink-600 shadow-sm hover:text-ink-900"
+                  title="Zoomed to a readable size — the graph continues to the right. Fit the whole graph (small)."
+                  onClick={fitAll}
+                >
+                  Fit all
+                </button>
+              </Panel>
+            ) : null}
             {/* Minimap: anchored bottom-right (zoom Controls are bottom-left, the
                 Triggers dock bottom-left, tips/badges top), sized from the canvas,
                 hidden below the width/height breakpoint; collapsible (persisted). */}
@@ -3032,6 +3435,20 @@ function BuilderInner() {
               </div>
             </div>
           )}
+          {runDialog ? (
+            <RunInputsDialog
+              spec={runDialog.spec}
+              mode={runDialog.mode}
+              draftKey={graphName || 'pipeline'}
+              onCancel={() => setRunDialog(null)}
+              onRun={(extras) => {
+                const mode = runDialog.mode
+                setRunDialog(null)
+                if (mode === 'async') void handleRunAsync(extras)
+                else void handleRun(extras)
+              }}
+            />
+          ) : null}
           {activeProject ? (
             <TriggersDock
               open={triggersOpen}
@@ -3039,27 +3456,38 @@ function BuilderInner() {
               project={activeProject}
               pipelines={projectPipelineList.map((p) => p.name)}
               defaultPipeline={pipelinePick || graphName}
+              canvasPipeline={pipelinePick || graphName}
+              canvasHasWebhookTrigger={nodes.some((n) => n.data.nodeType === 'webhook_trigger')}
             />
           ) : null}
           </div>
           </div>
+          {inspectorVisible ? (
           <aside
+            aria-label="Inspector"
             className={
-              inspectorOpen
+              inspectorMode === 'docked'
                 ? 'relative z-20 flex w-[clamp(15rem,28vw,21.25rem)] shrink-0 min-h-0 flex-col overflow-hidden border-l border-ink-200/70 bg-white/95 shadow-soft backdrop-blur'
-                : 'relative z-20 flex w-10 shrink-0 min-h-0 flex-col overflow-hidden border-l border-ink-200/70 bg-white/95 shadow-soft backdrop-blur'
+                : inspectorMode === 'drawer'
+                  ? 'absolute inset-y-0 right-0 z-30 flex w-[min(22rem,92%)] min-h-0 flex-col overflow-hidden border-l border-ink-200 bg-white shadow-2xl'
+                  : 'absolute inset-x-0 bottom-0 z-30 flex max-h-[70%] min-h-[45%] flex-col overflow-hidden rounded-t-xl border-t border-ink-200 bg-white shadow-2xl'
             }
           >
-            {inspectorOpen ? (
-            <>
             <AgentDrawer open={agentOpen} onClose={() => setAgentOpen(false)} />
             {!agentOpen && (() => {
               const node = inspectorId ? nodes.find((n) => n.id === inspectorId) : null
               const edge = selectedEdgeId ? edges.find((e) => e.id === selectedEdgeId) : null
               const mode: 'node' | 'edge' | 'graph' = node ? 'node' : edge ? 'edge' : 'graph'
+              // "Trainer · Path C (MobileNet · lr 0.001)" — path-aware label + branch description.
+              const nodePath = node ? pathView.pathOf.get(node.id) : undefined
+              const nodeTitle = node
+                ? `${pathView.labelOf.get(node.id) || node.data.label || node.data.nodeType}${
+                    nodePath?.description ? ` (${nodePath.description})` : ''
+                  }`
+                : ''
               const title =
                 mode === 'node'
-                  ? node!.data.label || node!.data.nodeType
+                  ? nodeTitle
                   : mode === 'edge'
                     ? 'Connection'
                     : 'Graph settings'
@@ -3071,43 +3499,30 @@ function BuilderInner() {
                     : graphName || 'pipeline'
               return (
                 <>
-                  <div className="flex items-start gap-1 border-b border-ink-100 px-1.5 py-1.5">
-                    <button
-                      type="button"
-                      className="btn-icon mt-0.5 shrink-0"
-                      aria-label="Collapse inspector"
-                      title="Collapse inspector"
-                      onClick={() => setInspectorOpen(false)}
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                    </button>
-                    <div className="min-w-0 flex-1 px-0.5">
-                      <div className="text-type-meta font-semibold uppercase tracking-wide text-ink-400">
-                        {mode === 'node' ? 'Node' : mode === 'edge' ? 'Edge' : 'Graph'}
-                      </div>
-                      <div className="truncate text-sm font-semibold text-ink-950">{title}</div>
-                      <div className="truncate text-[11px] text-ink-400" title={subtitle}>
+                  <div className="flex items-start gap-1 border-b border-ink-100 py-1.5 pl-3 pr-1.5">
+                    {inspectorMode === 'sheet' ? (
+                      <span className="absolute left-1/2 top-1 h-1 w-10 -translate-x-1/2 rounded-full bg-ink-200" aria-hidden="true" />
+                    ) : null}
+                    <div className="min-w-0 flex-1 pt-0.5">
+                      <div className="break-words text-sm font-semibold leading-snug text-ink-950">{title}</div>
+                      <div className="truncate font-mono text-[10.5px] text-ink-400" title={subtitle}>
                         {subtitle}
                       </div>
                     </div>
-                    {(inspectorId || selectedEdgeId) && (
-                      <button
-                        type="button"
-                        className="btn-icon mt-0.5 shrink-0"
-                        aria-label="Clear selection"
-                        onClick={() => {
-                          setInspectorId(null)
-                          setSelectedEdgeId(null)
-                        }}
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      className="btn-icon mt-0.5 shrink-0"
+                      aria-label="Close inspector"
+                      title="Close (Esc)"
+                      onClick={closeInspector}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
                   </div>
 
                   {lastRunId || isRunning ? (
                     <div className="flex flex-wrap items-center gap-2 border-b border-ink-100 bg-ink-50/70 px-3 py-1.5 text-[11px] text-ink-600">
-                      <span className="font-semibold uppercase tracking-wide text-ink-400">Execution</span>
+                      <span className="font-medium text-ink-500">{isRunning ? 'Current run' : 'Last run'}</span>
                       {execBadge === 'loading' ? (
                         <span className="text-ink-400" aria-live="polite">
                           checking…
@@ -3144,8 +3559,12 @@ function BuilderInner() {
                             this panel used to duplicate that exact field right below its own
                             subtitle line, which already shows the same name. Don't re-add an
                             editable "Graph name" input here; edit it in the toolbar instead. */}
-                        <label className="block text-[12px] text-ink-700">
+                        <label
+                          className="block text-[12px] text-ink-700"
+                          title="Random seed recorded with every run, so a run can be reproduced exactly. Per-step retry and failure handling live in each step's Error handling section."
+                        >
                           <span className="font-medium">Seed</span>
+                          <span className="mt-0.5 block text-[10px] leading-snug text-ink-400">Makes runs reproducible.</span>
                           <input
                             type="number"
                             value={seed}
@@ -3153,22 +3572,23 @@ function BuilderInner() {
                             className="field-control mt-1 font-mono"
                           />
                         </label>
-                        <div className="rounded-lg border border-ink-100 bg-ink-50 px-2.5 py-2 text-[11px] text-ink-500">
-                          {nodes.length} nodes · {edges.length} connections
+                        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-t border-ink-100 pt-2 text-[12px]">
+                          <dt className="text-ink-400">Steps</dt>
+                          <dd className="text-right tabular-nums text-ink-800">{nodes.length}</dd>
+                          <dt className="text-ink-400">Connections</dt>
+                          <dd className="text-right tabular-nums text-ink-800">{edges.length}</dd>
                           {lastRunId ? (
-                            <div className="mt-1">
-                              Linked run{' '}
-                              <button type="button" className="font-mono text-accent-700 hover:underline" onClick={() => openRun(lastRunId)}>
-                                {shortRunId(lastRunId)}
-                              </button>
-                            </div>
-                          ) : (
-                            <div className="mt-1">Select a node or connection to inspect details.</div>
-                          )}
-                        </div>
-                        <p className="rounded-lg border border-dashed border-ink-200 bg-ink-50/50 px-2.5 py-2 text-[11px] leading-snug text-ink-500">
-                          Per-node retry/timeout live in node Config when the plugin exposes them.
-                        </p>
+                            <>
+                              <dt className="text-ink-400">Linked run</dt>
+                              <dd className="text-right">
+                                <button type="button" className="font-mono text-accent-700 hover:underline" onClick={() => openRun(lastRunId)}>
+                                  {shortRunId(lastRunId)}
+                                </button>
+                              </dd>
+                            </>
+                          ) : null}
+                        </dl>
+                        <p className="text-[11px] leading-snug text-ink-400">Select a step or connection on the canvas to edit it.</p>
                       </>
                     )}
 
@@ -3177,7 +3597,9 @@ function BuilderInner() {
                         <div className="space-y-1.5 text-[12px] text-ink-700">
                           <div className="grid grid-cols-[4.5rem_1fr] gap-1">
                             <span className="text-ink-400">From</span>
-                            <span className="font-mono text-[11px]">{edge.source}</span>
+                            <span className="min-w-0 break-words" title={edge.source}>
+                              {labelOfRef.current.get(edge.source) || nodes.find((n) => n.id === edge.source)?.data.label || edge.source}
+                            </span>
                           </div>
                           <div className="grid grid-cols-[4.5rem_1fr] gap-1">
                             <span className="text-ink-400">Port</span>
@@ -3185,13 +3607,27 @@ function BuilderInner() {
                           </div>
                           <div className="grid grid-cols-[4.5rem_1fr] gap-1">
                             <span className="text-ink-400">To</span>
-                            <span className="font-mono text-[11px]">{edge.target}</span>
+                            <span className="min-w-0 break-words" title={edge.target}>
+                              {labelOfRef.current.get(edge.target) || nodes.find((n) => n.id === edge.target)?.data.label || edge.target}
+                            </span>
                           </div>
                           <div className="grid grid-cols-[4.5rem_1fr] gap-1">
                             <span className="text-ink-400">Port</span>
                             <span className="font-mono text-[11px]">{canonicalPort(edge.targetHandle, 'input')}</span>
                           </div>
                         </div>
+                        <EdgeConditionEditor
+                          key={edge.id}
+                          condition={(edge.data as { condition?: string | null } | undefined)?.condition ?? null}
+                          sourcePort={canonicalPort(edge.sourceHandle, 'output')}
+                          onChange={(next) =>
+                            setEdges((eds) =>
+                              eds.map((e) =>
+                                e.id === edge.id ? { ...e, data: { ...(e.data ?? {}), condition: next } } : e,
+                              ),
+                            )
+                          }
+                        />
                         <button
                           type="button"
                           className="btn-danger mt-2"
@@ -3214,7 +3650,7 @@ function BuilderInner() {
                           if (st === 'idle' || st === 'failed') return null
                           return (
                             <div className="mb-1 flex items-center gap-1.5 text-[11px]">
-                              <span className="font-semibold uppercase tracking-wide text-ink-400">Node</span>
+                              <span className="font-medium text-ink-500">Status</span>
                               <StatusBadge status={st === 'skipped' ? 'skipped · not run' : st} />
                             </div>
                           )
@@ -3235,7 +3671,7 @@ function BuilderInner() {
                                 </button>
                               ) : null}
                               {!isRunning ? (
-                                <button type="button" className="btn-primary" onClick={() => void handleRun()}>
+                                <button type="button" className="btn-primary" onClick={() => requestRun('stream')}>
                                   Retry run
                                 </button>
                               ) : null}
@@ -3245,8 +3681,8 @@ function BuilderInner() {
                         {backendMode === 'distributed' ? (
                         <div className="mb-3 rounded-lg border border-ink-200 bg-ink-50/70 p-2.5 space-y-2">
                           <div className="flex items-center justify-between gap-2">
-                            <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                              Placement (Distributed)
+                            <div className="text-[12px] font-semibold text-ink-700">
+                              Placement
                             </div>
                             <button
                               type="button"
@@ -3257,7 +3693,7 @@ function BuilderInner() {
                             </button>
                           </div>
                           <p className="text-[10px] leading-snug text-ink-400">
-                            Distributed Mode B honors mode / tags / GPU / pool / worker.
+                            Where this step runs in distributed mode.
                           </p>
                           {(() => {
                             const p = node.data.placement ?? { mode: 'auto' as const }
@@ -3345,15 +3781,69 @@ function BuilderInner() {
 
                         {/wait/i.test(node.data.nodeType) ? (
                           <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50/80 px-2.5 py-2 text-[11px] leading-snug text-amber-950">
-                            Delay/wait node — for human-in-the-loop approval use a pause pattern / Ops;
-                            dedicated HITL node TBD.
+                            Delay/wait step — for a human decision use an Approval gate step
+                            (<span className="font-mono">hitl_approve</span>); pending gates show on the run’s Overview.
                           </div>
                         ) : null}
 
                         {(() => {
                           const props = (node.data.schemaProps ?? {}) as Record<string, Record<string, unknown>>
                           const allEntries = Object.entries(props) as [string, Record<string, unknown>][]
-                          if (allEntries.length === 0) return <div className="text-sm text-ink-400">No config fields</div>
+                          const settingsState = stepSettingsState({
+                            catalog: catalogState,
+                            hasEntry: catalogTypes.has(node.data.nodeType),
+                            fieldCount: allEntries.length,
+                          })
+                          if (settingsState === 'loading') {
+                            return (
+                              <div className="text-[12px] text-ink-400" aria-live="polite">
+                                Loading step settings…
+                              </div>
+                            )
+                          }
+                          if (settingsState === 'failed' || settingsState === 'missing') {
+                            const failed = settingsState === 'failed'
+                            return (
+                              <div className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-[12px] text-rose-900" role="alert">
+                                <div className="font-semibold">
+                                  {failed
+                                    ? signedOut
+                                      ? 'Sign in to load step settings'
+                                      : "Couldn't load step settings"
+                                    : 'This step type is not in the catalog'}
+                                </div>
+                                <p className="mt-0.5 break-words text-[11px] leading-snug text-rose-800">
+                                  {failed
+                                    ? signedOut
+                                      ? 'The API needs a token — open Settings to paste it.'
+                                      : `${bootError || 'The node catalog failed to load.'} Retrying automatically.`
+                                    : `“${node.data.nodeType}” isn't installed (or the API is still loading plugins).`}
+                                </p>
+                                <div className="mt-1.5 flex flex-wrap gap-2">
+                                  {signedOut && failed ? (
+                                    <button type="button" className="btn-secondary" onClick={() => setSettingsOpen(true)}>
+                                      Open Settings
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="btn-secondary"
+                                      disabled={catalogRefreshing}
+                                      onClick={() => void retryCatalog()}
+                                    >
+                                      {catalogRefreshing ? 'Retrying…' : 'Retry'}
+                                    </button>
+                                  )}
+                                  {!failed ? (
+                                    <button type="button" className="btn-quiet" onClick={() => goView('plugins')}>
+                                      Plugins
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            )
+                          }
+                          if (settingsState === 'empty') return <div className="text-sm text-ink-400">No config fields</div>
                           const cfg = node.data.config ?? {}
                           // ui.visible_if / depends_on: hide fields that don't apply to the current settings.
                           const entries = allEntries.filter(([, def]) => isFieldVisible(def, cfg, props))
@@ -3363,6 +3853,8 @@ function BuilderInner() {
                             // Surface EarlyStopping patience with Epochs (Basic) even if the
                             // plugin schema still marks it Advanced.
                             if (key === 'patience') return 'Basic'
+                            // Trainer LR next to its Model builder's: show which one wins.
+                            if (key === 'learning_rate' && lrLinks.has(node.id)) return 'Basic'
                             const g = String(def.group ?? '').trim()
                             if (!g) return 'Basic'
                             const low = g.toLowerCase()
@@ -3375,14 +3867,15 @@ function BuilderInner() {
                           const advancedInvalid = advanced.filter(([k]) => nodeIssues?.has(k)).length
                           const renderField = ([key, def]: [string, Record<string, unknown>]) => {
                             const fieldIssues = nodeIssues?.get(key) ?? []
-                            const hintBrief = schemaFieldHintBrief(def)
                             const hintFull = schemaFieldHint(def)
+                            const lrNote = key === 'learning_rate' ? learningRateNote(lrLinks.get(node.id)) : null
                             return (
-                            <label key={key} className="block text-[12px] text-ink-700" title={hintFull || schemaFieldHint(def)}>
+                            <label key={key} className="block text-[12px] text-ink-700">
                               <span className="font-medium">{schemaFieldLabel(key, def)}</span>
-                              {hintBrief ? (
-                                <span className="mt-0.5 block text-[10px] leading-snug text-ink-400" title={hintFull}>
-                                  {hintBrief}
+                              {hintFull ? <FieldHelp text={hintFull} /> : null}
+                              {lrNote ? (
+                                <span className="mt-0.5 block rounded bg-sky-50 px-1.5 py-0.5 text-[11px] leading-snug text-sky-900 ring-1 ring-sky-100">
+                                  {lrNote}
                                 </span>
                               ) : null}
                               <ConfigFieldEditor
@@ -3462,14 +3955,14 @@ function BuilderInner() {
                                 <div className="mt-2 rounded-lg border border-ink-200 bg-ink-50/60">
                                   <button
                                     type="button"
-                                    className="flex w-full items-center justify-between px-2.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-ink-500 hover:text-ink-800"
+                                    className="flex w-full items-center justify-between px-2.5 py-1.5 text-left text-[12px] font-medium text-ink-600 hover:text-ink-900"
                                     onClick={() => setAdvancedOpen((v) => !v)}
                                     aria-expanded={advancedOpen}
                                   >
                                     <span>
                                       Advanced ({advanced.length})
                                       {advancedInvalid > 0 ? (
-                                        <span className="ml-1 normal-case text-rose-700">· {advancedInvalid} invalid</span>
+                                        <span className="ml-1 text-rose-700">· {advancedInvalid} invalid</span>
                                       ) : null}
                                     </span>
                                     {advancedOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
@@ -3489,30 +3982,22 @@ function BuilderInner() {
                             </div>
                           )
                         })()}
+                        <div className="mt-3">
+                          <ErrorHandlingEditor
+                            key={`err-${node.id}-${historyGen}`}
+                            onError={node.data.onError}
+                            retry={node.data.retry}
+                            onChange={(next) => node.data.onChangeErrorPolicy?.(next)}
+                          />
+                        </div>
                       </>
                     )}
                   </div>
                 </>
               )
             })()}
-            </>
-            ) : (
-              <div className="flex flex-1 flex-col items-center pt-1.5">
-                <button
-                  type="button"
-                  className="btn-icon"
-                  aria-label="Expand inspector"
-                  title="Expand inspector"
-                  onClick={() => setInspectorOpen(true)}
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </button>
-                <span className="mt-2 write-vertical-right rotate-180 text-[10px] font-semibold uppercase tracking-wide text-ink-400 [writing-mode:vertical-rl]">
-                  Inspector
-                </span>
-              </div>
-            )}
           </aside>
+          ) : null}
         </div>
 
         <div data-toast-avoid className="relative z-20 border-t border-ink-800 bg-[#12181f] text-ink-100">
@@ -3521,8 +4006,22 @@ function BuilderInner() {
             onPointerDown={onLogResize}
             title="Drag to resize log"
           />
-          <div className="flex items-center gap-2 px-3 py-1">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Execution log</div>
+          <div className="flex min-w-0 items-center gap-2 px-3 py-1">
+            {/* Collapsed = a thin bar with the latest line; auto-expands when a run starts. */}
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[11px]"
+              onClick={() => setLogCollapsedByUser(!logCollapsed)}
+              aria-expanded={!logCollapsed}
+              title={logCollapsed ? 'Show the execution log' : 'Hide the execution log'}
+            >
+              <span className="shrink-0 font-medium text-ink-300">Execution log</span>
+              {logCollapsed ? (
+                <span className={`min-w-0 truncate ${isRunning ? 'text-accent-300' : 'text-ink-500'}`}>
+                  · {logBarSummary({ isRunning, logs: prettyLogs, runStatus: execBadge })}
+                </span>
+              ) : null}
+            </button>
             {errorCount > 0 && (
               <button
                 type="button"
@@ -3532,7 +4031,7 @@ function BuilderInner() {
                 {errorCount} {errorCount === 1 ? 'error' : 'errors'}
               </button>
             )}
-            <div className="ml-auto flex items-center gap-2">
+            <div className="ml-auto flex shrink-0 items-center gap-2">
               {execBadge === 'failed' && !isRunning && lastRunId ? (
                 <button
                   type="button"
@@ -3550,18 +4049,20 @@ function BuilderInner() {
                   <ExternalLink className="h-3 w-3" /> View outputs
                 </button>
               ) : null}
-              <button
-                type="button"
-                className="text-[11px] font-medium text-ink-400 hover:text-ink-100"
-                onClick={() => setShowRawLogs((v) => !v)}
-              >
-                {showRawLogs ? 'Pretty' : 'Raw'}
-              </button>
+              {!logCollapsed ? (
+                <button
+                  type="button"
+                  className="text-[11px] font-medium text-ink-400 hover:text-ink-100"
+                  onClick={() => setShowRawLogs((v) => !v)}
+                >
+                  {showRawLogs ? 'Pretty' : 'Raw'}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="text-ink-400 hover:text-ink-100"
                 aria-label={logCollapsed ? 'Expand log' : 'Collapse log'}
-                onClick={() => setLogCollapsed((v) => !v)}
+                onClick={() => setLogCollapsedByUser(!logCollapsed)}
               >
                 {logCollapsed ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
               </button>

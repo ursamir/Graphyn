@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { resolveFullRunId, runDisplayName } from './runDisplay'
+import {
+  isRunStatusException,
+  resolveFullRunId,
+  runDisplayName,
+  runStatusLabel,
+  runStatusTone,
+  shortId,
+} from './runDisplay'
 
 describe('runDisplayName', () => {
   it('prefers display_name', () => {
@@ -26,5 +33,54 @@ describe('resolveFullRunId', () => {
     expect(resolveFullRunId('96505918', { run_id: 'deadbeef00' })).toBe('96505918')
     expect(resolveFullRunId('96505918', null)).toBe('96505918')
     expect(resolveFullRunId('96505918', {})).toBe('96505918')
+  })
+})
+
+describe('runStatusLabel / runStatusTone', () => {
+  it.each([
+    ['succeeded', 'Done', 'done'],
+    ['completed', 'Done', 'done'],
+    ['SUCCESS', 'Done', 'done'],
+    ['failed', 'Failed', 'failed'],
+    ['error', 'Failed', 'failed'],
+    ['running', 'Running', 'running'],
+    ['in_progress', 'Running', 'running'],
+    ['queued', 'Queued', 'queued'],
+    ['pending', 'Queued', 'queued'],
+    ['cancelled', 'Cancelled', 'cancelled'],
+    ['canceled', 'Cancelled', 'cancelled'],
+    ['paused', 'Paused', 'paused'],
+    ['archived', 'Archived', 'archived'],
+    ['awaiting_approval', 'Awaiting approval', 'needs-action'],
+  ])('%s → %s', (raw, label, tone) => {
+    expect(runStatusLabel(raw)).toBe(label)
+    expect(runStatusTone(raw)).toBe(tone)
+  })
+
+  it('sentence-cases unknown statuses and handles empty', () => {
+    expect(runStatusLabel('skipped')).toBe('Skipped')
+    expect(runStatusLabel('not_run')).toBe('Not run')
+    expect(runStatusLabel('')).toBe('Unknown')
+    expect(runStatusLabel(null)).toBe('Unknown')
+    expect(runStatusTone('skipped')).toBe('unknown')
+  })
+
+  it('only exceptions get a coloured badge', () => {
+    for (const s of ['failed', 'running', 'queued', 'cancelled', 'paused', 'needs_action']) {
+      expect(isRunStatusException(s)).toBe(true)
+    }
+    for (const s of ['succeeded', 'completed', 'archived', '', 'skipped']) {
+      expect(isRunStatusException(s)).toBe(false)
+    }
+  })
+})
+
+describe('shortId', () => {
+  it('keeps 8 chars by default', () => {
+    expect(shortId('96505918a1b2c3d4')).toBe('96505918')
+    expect(shortId('abc')).toBe('abc')
+    expect(shortId('96505918a1b2c3d4', 12)).toBe('96505918a1b2')
+    expect(shortId('')).toBe('—')
+    expect(shortId(null)).toBe('—')
   })
 })

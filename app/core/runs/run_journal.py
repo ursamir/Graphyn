@@ -324,6 +324,8 @@ class RunManager:
             action = {"succeeded": "run.finish", "failed": "run.fail", "cancelled": "run.cancel"}.get(status, "run.finish")
             record_audit(
                 actor=str(meta.get("actor") or "system"),
+                actor_verified=bool(meta.get("actor_verified")),
+                claimed_actor=meta.get("claimed_actor") or None,
                 action=action,
                 resource_type="run",
                 resource_id=self.run_id,

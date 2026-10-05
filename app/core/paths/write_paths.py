@@ -3,8 +3,10 @@
 Bounded Context:  Execution Runtime / Workspace
 Responsibility:   Create filesystem write destinations for every node, in one
                   place, instead of each plugin mkdir'ing its own output_path.
-Owns:             WRITE_CONFIG_KEYS, ensure_write_destination, ensure_node_write_dirs.
-Public Surface:   ensure_node_write_dirs, ensure_write_destination, WRITE_CONFIG_KEYS.
+Owns:             WRITE_CONFIG_KEYS, ensure_write_destination, ensure_node_write_dirs,
+                  jail_relative_path (plugin file-path jail).
+Public Surface:   ensure_node_write_dirs, ensure_write_destination, WRITE_CONFIG_KEYS,
+                  jail_relative_path.
 Must NOT:         Create ingest/read directories (path, model_path). Must not
                   mkdir outside the project directory jail.
 Dependencies:     pathlib; app.core.config.project_dir.
@@ -94,6 +96,27 @@ def _resolve_under_project(raw: str) -> Path | None:
         except (ValueError, OSError):
             continue
     return None
+
+
+def jail_relative_path(raw: str, *, what: str = "path") -> Path:
+    """Resolve a plugin-supplied *relative* path inside the project directory.
+
+    Rejects absolute paths (POSIX or drive-letter), any ``..`` segment, and
+    anything that resolves (after symlinks) outside ``project_dir()``. Used by
+    workflow plugins (csv_table, object_store) that read/write user-named
+    files. Raises ``ValueError``; never creates directories.
+    """
+    text = (raw or "").replace("\\", "/").strip()
+    if not text:
+        raise ValueError(f"{what} is required")
+    if text.startswith("/") or (len(text) > 1 and text[1] == ":") or text.startswith("~"):
+        raise ValueError(f"{what} must be relative to the workspace (got an absolute path)")
+    if any(part == ".." for part in text.split("/")):
+        raise ValueError(f"{what} must not contain '..'")
+    resolved = _resolve_under_project(text)
+    if resolved is None:
+        raise ValueError(f"{what} resolves outside the workspace")
+    return resolved
 
 
 def ensure_write_destination(raw: str) -> Path | None:

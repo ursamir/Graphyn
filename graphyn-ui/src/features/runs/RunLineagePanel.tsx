@@ -1,28 +1,55 @@
 /**
- * Run audit trail — chronological story of what happened in this run:
- * each step’s status/duration, what it wrote, and what fed it / what it fed.
- * File downloads live in Run outputs.
+ * Run Overview body (below the results banner), top to bottom:
+ *   summary line → path comparison table (multi-path) or compact metrics row →
+ *   "What happened" (ML multi-path runs: steps grouped Shared / Path X, numbered
+ *   within each group; workflow runs (`pathGrouping={false}`): one ordered list
+ *   with branch context, skip reasons and handled errors; click a step to focus
+ *   it) → Hot spots (fold) → Run record (collapsed slot) →
+ *   registry ids (fold). File downloads live in Run outputs.
  */
 import React from 'react'
-import { ArrowRight, RefreshCw } from 'lucide-react'
+import clsx from 'clsx'
+import { ChevronDown, ChevronRight, RefreshCw, Trophy, X } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { CopyableMono, EmptyState, ErrorBanner, LoadingBlock } from '../../components/ui'
 import { ReproPackButton } from '../../components/ReproPackButton'
 import { displayNodeLabel, focusMatchesNode, humanizeTemplateName, shortRunId } from '../../lib/format'
 import { fetchRunGraph } from '../../lib/runGraph'
-import {
-  computePipelineShape,
-  isMultiTrackShape,
-  laneLabel,
-  type PipelineShape,
-} from './runNodes'
-import { formatMetricValue, isRatioMetric, metricLabel, pickPrimaryMetric } from '../../lib/metrics'
-import { pathDisplayName, scalarMetrics, type PathResult } from './runResults'
-import { EvaluatorResult, PathMetricChip } from './RunResults'
+import { computePipelineShape, isMultiTrackShape } from './runNodes'
+import { formatMetricValue, metricLabel, pickPrimaryMetric } from '../../lib/metrics'
+import { scalarMetrics, type PathResult } from './runResults'
+import { BlobImage, EvaluatorResult } from './RunResults'
 import type { EvaluatorOutputs } from './useRunResults'
 import { failureView, linkableRunId, type FailureView } from './runRecord'
 import { FailureDetails } from './FailureDetails'
 import { humanizeErrorText } from '../../lib/errorText'
+import {
+  formatStepDuration,
+  friendlyArtifactName,
+  groupStepsByLane,
+  pathTableColumns,
+  pathTablePrimaryName,
+  pathTableRows,
+  pathTiming,
+} from './runOverview'
+import { CompactMetricsRow, PathComparisonTable } from './RunOverviewParts'
+import {
+  defaultOpenGroups,
+  imageOutputsForNode,
+  pathGroupSummary,
+  stepConfigEntries,
+  trackedFilesLabel,
+  type ConfigEntry,
+} from './stepDetails'
+import { resilienceText, type StepResilience } from './runWorkflow'
+import {
+  handledErrorNodes,
+  handledErrorText,
+  handledErrorsLabel,
+  skipReasonText,
+  splitRunErrors,
+  type StepName,
+} from './runFlow'
 
 function shortStatusLabel(status?: string | null): string {
   const s = String(status || '').toLowerCase()
@@ -33,6 +60,7 @@ function shortStatusLabel(status?: string | null): string {
   if (s === 'queued') return 'Queued'
   if (s === 'paused') return 'Paused'
   if (s === 'skipped') return 'Skipped'
+  if (s === 'awaiting_approval') return 'Awaiting approval'
   return status ? String(status) : 'Unknown'
 }
 
@@ -91,6 +119,8 @@ type StepStory = {
   cacheHit: boolean
   error: string | null
   wrote: string
+  /** Real file names when `wrote` shows friendly names ('' otherwise). */
+  wroteRaw: string
   fileCount: number
   from: string[]
   to: string[]
@@ -98,33 +128,30 @@ type StepStory = {
   wired: boolean
 }
 
-function formatDuration(ms: number | null | undefined): string {
-  if (ms == null || !Number.isFinite(ms) || ms < 0) return '—'
-  if (ms < 1000) return `${Math.round(ms)} ms`
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`
-  const m = Math.floor(ms / 60_000)
-  const s = Math.round((ms % 60_000) / 1000)
-  return `${m}m ${s}s`
-}
+const formatDuration = formatStepDuration
 
 function statusTone(status: string): string {
   const s = status.toLowerCase()
   if (s === 'failed' || s === 'error') return 'bg-rose-100 text-rose-900'
-  if (s === 'skipped' || s === 'cancelled' || s === 'canceled') return 'bg-ink-100 text-ink-600'
+  if (s === 'cancelled' || s === 'canceled') return 'bg-ink-100 text-ink-700'
   if (s === 'running' || s === 'queued' || s === 'paused') return 'bg-amber-100 text-amber-950'
-  if (s === 'completed' || s === 'succeeded' || s === 'success' || s === 'done')
-    return 'bg-emerald-100 text-emerald-900'
-  return 'bg-ink-100 text-ink-700'
+  if (s === 'awaiting_approval') return 'bg-violet-100 text-violet-900'
+  return ''
+}
+
+/** Success / unknown read as plain text; only exceptions get a coloured badge. */
+function isExceptionStatus(status: string): boolean {
+  return statusTone(status) !== ''
 }
 
 function summarizeWrote(
   files: OutputFileHint[],
   opts?: { inventoryTotal?: number | null },
-): { text: string; count: number } {
+): { text: string; count: number; raw: string } {
   const inventoryTotal = opts?.inventoryTotal
   // Match Run outputs empty copy — “nothing listed” sounded like a bug.
   if (!files.length && !(inventoryTotal && inventoryTotal > 0)) {
-    return { text: 'no files (data stayed in memory)', count: 0 }
+    return { text: 'no files (data stayed in memory)', count: 0, raw: '' }
   }
   const names = files.map((f) => String(f.name || f.path?.split('/').pop() || '').trim()).filter(Boolean)
   const audioish = names.filter((n) => /\.(wav|flac|mp3|ogg)$/i.test(n)).length
@@ -134,10 +161,10 @@ function summarizeWrote(
       : names.length
   // Prefer inventory total — UI listing caps audio dumps at ~32 samples.
   if (total >= 6 && (audioish >= names.length * 0.6 || (names.length === 0 && total >= 6))) {
-    return { text: `${total.toLocaleString()} audio clips`, count: total }
+    return { text: `${total.toLocaleString()} audio clips`, count: total, raw: names.slice(0, 8).join(', ') }
   }
   if (!names.length) {
-    return { text: `${total.toLocaleString()} files`, count: total }
+    return { text: `${total.toLocaleString()} files`, count: total, raw: '' }
   }
   const models = names.filter((n) => /\.(keras|h5|tflite|onnx|pb|pt|pth)$/i.test(n) || /model/i.test(n))
   const metrics = names.filter((n) => /metrics|confusion|roc|label/i.test(n) || /\.json$/i.test(n))
@@ -146,9 +173,13 @@ function summarizeWrote(
   const listedExtra = pick.length - shown.length
   const hidden = Math.max(0, total - names.length)
   const more = listedExtra + hidden
+  // Internal names (compiled_<hex>.keras) read as "Untrained model (architecture)";
+  // the raw names stay in the tooltip.
+  const friendly = shown.map((n) => friendlyArtifactName(n).label)
   return {
-    text: shown.join(', ') + (more > 0 ? ` +${more.toLocaleString()} more` : ''),
+    text: friendly.join(', ') + (more > 0 ? ` +${more.toLocaleString()} more` : ''),
     count: total,
+    raw: shown.some((n, i) => friendly[i] !== n) ? shown.join(', ') : '',
   }
 }
 
@@ -269,47 +300,13 @@ function buildStories(input: {
           ? String(extra.error)
           : null,
       wrote: wrote.text,
+      wroteRaw: wrote.raw,
       fileCount: wrote.count,
       from: [...new Set(fromMap.get(id) || [])],
       to: [...new Set(toMap.get(id) || [])],
       wired,
     }
   })
-}
-
-function laneToneClass(lane: string): string {
-  if (lane === 'shared') return 'bg-ink-100 text-ink-600'
-  if (lane === 'A') return 'bg-sky-50 text-sky-800'
-  if (lane === 'B') return 'bg-teal-50 text-teal-800'
-  return 'bg-amber-50 text-amber-900'
-}
-
-function shortPillLabel(full: string): string {
-  // Inside a Path track the "· Path B" suffix is redundant.
-  const t = full.trim().replace(/\s·\sPath [A-Z]$/, '')
-  if (t.length <= 22) return t
-  // Keep trailing #cue when present.
-  const cue = t.match(/\s+(#\S+)$/)
-  const base = cue ? t.slice(0, t.length - cue[0].length) : t
-  const clipped = base.length > 16 ? `${base.slice(0, 14)}…` : base
-  return cue ? `${clipped} ${cue[1]}` : `${t.slice(0, 20)}…`
-}
-
-function storyById(stories: StepStory[]): Map<string, StepStory> {
-  return new Map(stories.map((s) => [s.id, s]))
-}
-
-function trackDurationMs(ids: string[], byId: Map<string, StepStory>): number {
-  return ids.reduce((acc, id) => acc + (byId.get(id)?.durationMs || 0), 0)
-}
-
-/** Tip wrote string for a track (last file-producing step). */
-function trackTipWrote(ids: string[], byId: Map<string, StepStory>): string | null {
-  for (let i = ids.length - 1; i >= 0; i--) {
-    const s = byId.get(ids[i])
-    if (s && s.fileCount > 0) return s.wrote
-  }
-  return null
 }
 
 /** Domain-agnostic primary outcome for a linear run. */
@@ -331,308 +328,29 @@ function linearOutcome(stories: StepStory[]): string | null {
   return top ? top.wrote : null
 }
 
-function pillStatusClass(status: string): string {
-  const s = status.toLowerCase()
-  if (s === 'failed' || s === 'error') return 'border-rose-300 bg-rose-50 text-rose-900'
-  if (s === 'skipped' || s === 'cancelled' || s === 'canceled')
-    return 'border-dashed border-ink-300 bg-ink-50/50 text-ink-400'
-  if (s === 'running' || s === 'queued' || s === 'paused')
-    return 'border-amber-300 bg-amber-50 text-amber-950'
-  if (s === 'completed' || s === 'succeeded' || s === 'success' || s === 'done')
-    return 'border-emerald-200 bg-emerald-50/80 text-ink-900'
-  return 'border-ink-200 bg-white text-ink-800'
-}
-
-function StepPill({
-  story,
-  active,
-  onFocus,
-}: {
-  story: StepStory
-  active: boolean
-  onFocus?: (id: string) => void
-}) {
-  const label = shortPillLabel(story.label)
-  return (
-    <button
-      type="button"
-      title={`${story.label} · ${shortStatusLabel(story.status)} · ${formatDuration(story.durationMs)}`}
-      onClick={() => onFocus?.(story.id)}
-      className={`flex min-w-[4.5rem] max-w-[9rem] shrink-0 flex-col items-stretch rounded-lg border px-2 py-1.5 text-left transition ${pillStatusClass(
-        story.status,
-      )} ${active ? 'ring-2 ring-accent-400 ring-offset-1' : 'hover:border-ink-300'}`}
-    >
-      <span className="truncate text-[11px] font-semibold leading-tight">{label}</span>
-      <span className="mt-0.5 tabular-nums text-[10px] text-ink-500">
-        {formatDuration(story.durationMs)}
-      </span>
-    </button>
-  )
-}
-
-function PillSpine({
-  ids,
-  byId,
-  focusNodeId,
-  onFocusStep,
-}: {
-  ids: string[]
-  byId: Map<string, StepStory>
-  focusNodeId?: string | null
-  onFocusStep?: (nodeId: string | null) => void
-}) {
-  const stories = ids.map((id) => byId.get(id)).filter(Boolean) as StepStory[]
-  if (!stories.length) return null
-  return (
-    <div className="flex min-w-0 items-stretch gap-1 overflow-x-auto pb-0.5 [scrollbar-gutter:stable]">
-      {stories.map((s, i) => (
-        <React.Fragment key={s.id}>
-          {i > 0 ? (
-            <span className="mt-3 shrink-0 text-[10px] text-ink-300" aria-hidden>
-              →
-            </span>
-          ) : null}
-          <StepPill
-            story={s}
-            active={Boolean(focusNodeId && focusMatchesNode(focusNodeId, s.id))}
-            onFocus={onFocusStep ? (id) => onFocusStep(id) : undefined}
-          />
-        </React.Fragment>
-      ))}
-    </div>
-  )
-}
-
-function ForkConnector({ trackCount }: { trackCount: number }) {
-  // Simple Y-split affordance between shared spine and path tracks.
-  const label = trackCount === 2 ? 'fork' : `${trackCount} paths`
-  return (
-    <div className="flex items-center gap-2 py-1" aria-hidden>
-      <div className="h-px flex-1 bg-ink-200" />
-      <span className="text-[10px] font-medium uppercase tracking-wide text-ink-400">{label}</span>
-      <div className="h-px flex-1 bg-ink-200" />
-    </div>
-  )
-}
-
-function DurationBar({ ms, maxMs, tone }: { ms: number; maxMs: number; tone: string }) {
-  const pct = maxMs > 0 ? Math.max(4, Math.round((ms / maxMs) * 100)) : 0
-  const bar =
-    tone === 'A' ? 'bg-sky-400' : tone === 'B' ? 'bg-teal-400' : 'bg-amber-400'
-  return (
-    <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-ink-100">
-      <div className={`h-full rounded-full ${bar}`} style={{ width: `${pct}%` }} />
-    </div>
-  )
-}
-
-function PathTrack({
-  lane,
-  ids,
-  byId,
-  maxTrackMs,
-  focusNodeId,
-  onFocusStep,
-  path,
-  best,
-}: {
-  lane: string
-  ids: string[]
-  byId: Map<string, StepStory>
-  maxTrackMs: number
-  focusNodeId?: string | null
-  onFocusStep?: (nodeId: string | null) => void
-  /** Results for this path (description + metrics) when known. */
-  path?: PathResult | null
-  best?: boolean
-}) {
-  const total = trackDurationMs(ids, byId)
-  const tip = trackTipWrote(ids, byId)
-  const letter = path?.letter || lane
-  return (
-    <div
-      className={`min-w-0 rounded-lg border px-2.5 py-2 ${
-        best ? 'border-emerald-200 bg-emerald-50/40' : 'border-ink-100 bg-ink-50/40'
-      }`}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-        <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <span
-            className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${laneToneClass(letter)}`}
-          >
-            {laneLabel(letter)}
-          </span>
-          {path?.description ? (
-            <span className="truncate text-[11px] font-medium text-ink-700">{path.description}</span>
-          ) : null}
-        </span>
-        <span className="flex items-center gap-1.5">
-          {path ? <PathMetricChip path={path} best={best} /> : null}
-          <span className="tabular-nums text-[11px] text-ink-500">{formatDuration(total)}</span>
-        </span>
-      </div>
-      {maxTrackMs > 0 ? <DurationBar ms={total} maxMs={maxTrackMs} tone={letter} /> : null}
-      <div className="mt-2">
-        <PillSpine ids={ids} byId={byId} focusNodeId={focusNodeId} onFocusStep={onFocusStep} />
-      </div>
-      {tip ? (
-        <p className="mt-1.5 truncate text-[11px] text-ink-600" title={tip}>
-          <span className="text-ink-400">Got </span>
-          {tip}
-        </p>
-      ) : (
-        <p className="mt-1.5 text-[11px] text-ink-400">No files on this path</p>
-      )}
-    </div>
-  )
-}
+export type StepLogLine = { key: string; clock: string; text: string; failed: boolean }
 
 /**
- * Adaptive run story map: linear duration spine (default), or fork / parallel
- * tracks when the graph has multiple sinks.
+ * Scroll `el` into view inside its nearest scrolling ancestor only — never the
+ * document (scrollIntoView would also move the app shell when it overflows).
  */
-function RunStoryMap({
-  shape,
-  stories,
-  focusNodeId,
-  onFocusStep,
-  savedFiles,
-  provenance,
-  lanePaths,
-  bestPathId,
-}: {
-  shape: PipelineShape
-  stories: StepStory[]
-  focusNodeId?: string | null
-  onFocusStep?: (nodeId: string | null) => void
-  savedFiles?: number | null
-  provenance?: number | null
-  lanePaths?: Map<string, PathResult> | null
-  bestPathId?: string | null
-}) {
-  const byId = storyById(stories)
-  const multi = isMultiTrackShape(shape)
-
-  const trackTotals = shape.branches.map((b) => trackDurationMs(b, byId))
-  const maxTrackMs = Math.max(0, ...trackTotals)
-
-  let outcomeBlock: React.ReactNode = null
-  if (!multi) {
-    const got = linearOutcome(stories)
-    // Linear = Got + spine only (no Path metric chip on the story line — headline lives in Overview banner / Metrics).
-    outcomeBlock = got ? (
-      <p className="text-[12px] leading-relaxed text-ink-700">
-        <span className="text-ink-400">Got </span>
-        {got}
-      </p>
-    ) : (
-      <p className="text-[12px] text-ink-400">Got no downloadable files (data stayed in memory)</p>
-    )
+function scrollIntoPane(el: HTMLElement | null) {
+  if (!el) return
+  let p = el.parentElement
+  while (p) {
+    const oy = getComputedStyle(p).overflowY
+    if ((oy === 'auto' || oy === 'scroll') && p.scrollHeight > p.clientHeight) break
+    p = p.parentElement
   }
-
-  return (
-    <div className="mt-2 space-y-2">
-      {outcomeBlock}
-      {!multi ? (
-        <PillSpine
-          ids={shape.sharedIds}
-          byId={byId}
-          focusNodeId={focusNodeId}
-          onFocusStep={onFocusStep}
-        />
-      ) : (
-        <>
-          {shape.kind === 'fork' && shape.sharedIds.length > 0 ? (
-            <div>
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
-                Shared
-              </div>
-              <PillSpine
-                ids={shape.sharedIds}
-                byId={byId}
-                focusNodeId={focusNodeId}
-                onFocusStep={onFocusStep}
-              />
-              <ForkConnector trackCount={shape.branches.length} />
-            </div>
-          ) : null}
-          <div
-            className={`grid gap-2 ${
-              shape.branches.length === 2 ? 'sm:grid-cols-2' : 'sm:grid-cols-2 lg:grid-cols-3'
-            }`}
-          >
-            {shape.branches.map((branch, i) => {
-              const lane = String.fromCharCode(65 + i)
-              const path = lanePaths?.get(lane) ?? null
-              return (
-                <PathTrack
-                  key={lane}
-                  lane={lane}
-                  ids={branch}
-                  byId={byId}
-                  maxTrackMs={maxTrackMs}
-                  focusNodeId={focusNodeId}
-                  onFocusStep={onFocusStep}
-                  path={path}
-                  best={Boolean(path && bestPathId && path.pathId === bestPathId && shape.branches.length > 1)}
-                />
-              )
-            })}
-          </div>
-        </>
-      )}
-      {typeof savedFiles === 'number' || (typeof provenance === 'number' && provenance > 0) ? (
-        <p className="text-[11px] text-ink-400">
-          {typeof savedFiles === 'number' ? (
-            <>
-              <span className="font-medium text-ink-600">{savedFiles}</span> saved files
-            </>
-          ) : null}
-          {typeof savedFiles === 'number' && typeof provenance === 'number' && provenance > 0
-            ? ' · '
-            : null}
-          {typeof provenance === 'number' && provenance > 0 ? (
-            <>
-              <span className="font-medium text-ink-600">{provenance}</span> provenance
-            </>
-          ) : null}
-        </p>
-      ) : null}
-    </div>
-  )
-}
-
-type TimelineRow = { story: StepStory; execIndex: number }
-
-/** Chronological list, or Shared → Path A → Path B when multi-track. */
-function timelineSections(
-  stories: StepStory[],
-  shape: PipelineShape,
-  lanePaths?: Map<string, PathResult> | null,
-): Array<{ key: string; label: string | null; rows: TimelineRow[] }> {
-  const indexed = stories.map((story, i) => ({ story, execIndex: i + 1 }))
-  if (!isMultiTrackShape(shape)) {
-    return [{ key: 'all', label: null, rows: indexed }]
+  if (!p) return
+  const pr = p.getBoundingClientRect()
+  const er = el.getBoundingClientRect()
+  const margin = 8
+  if (er.top < pr.top + margin) p.scrollTop += er.top - pr.top - margin
+  else if (er.bottom > pr.bottom - margin) {
+    // Taller than the pane: align the row's top instead of its bottom.
+    p.scrollTop += Math.min(er.bottom - pr.bottom + margin, er.top - pr.top - margin)
   }
-  const laneOrder: string[] = []
-  if (shape.kind === 'fork') laneOrder.push('shared')
-  shape.branches.forEach((_, i) => laneOrder.push(String.fromCharCode(65 + i)))
-  const sections: Array<{ key: string; label: string | null; rows: TimelineRow[] }> = []
-  for (const lane of laneOrder) {
-    const rows = indexed.filter((r) => (shape.laneOf.get(r.story.id) || 'shared') === lane)
-    if (!rows.length) continue
-    const path = lane === 'shared' ? null : lanePaths?.get(lane)
-    sections.push({
-      key: lane,
-      label: path ? pathDisplayName(path) : laneLabel(lane),
-      rows,
-    })
-  }
-  // Any leftover ids (should be rare)
-  const seen = new Set(sections.flatMap((s) => s.rows.map((r) => r.story.id)))
-  const rest = indexed.filter((r) => !seen.has(r.story.id))
-  if (rest.length) sections.push({ key: 'rest', label: null, rows: rest })
-  return sections
 }
 
 export type OverviewExtras = {
@@ -643,7 +361,7 @@ export type OverviewExtras = {
   metrics?: Record<string, unknown> | null
   /** "Path C (DS-CNN · 30 epochs)" when `metrics` are the best path's (multi-path runs). */
   metricsPathLabel?: string | null
-  /** Other paths' headline metric, shown under the box for context. */
+  /** Other paths' headline metric, shown under the metrics row for context. */
   otherPathMetrics?: Array<{ label: string; primary: { name: string; value: number } }>
   recentErrors?: Array<Record<string, unknown>>
   showRegisterCta?: boolean
@@ -654,9 +372,15 @@ export type OverviewExtras = {
   nodeStats?: Array<Record<string, unknown>>
 }
 
-/** Run Overview — verdict, metrics, and audit trail (Pipeline-stack order). */
+/** Run Overview — summary, path table / metrics, step story, hot spots, record. */
 export function RunLineagePanel({
   runId,
+  liveStatus,
+  pathGrouping,
+  stepNames,
+  branchContext,
+  skipReasons,
+  stepStatuses,
   runMeta,
   focusNodeId = null,
   onBrowseOutputs,
@@ -667,6 +391,7 @@ export function RunLineagePanel({
   labelFor,
   orderedNodeIds,
   overview,
+  paths,
   lanePaths,
   nodePaths,
   bestPathId,
@@ -675,7 +400,40 @@ export function RunLineagePanel({
   stepFailures,
   runLabelFor,
   onOpenRun,
+  recordSlot,
+  topSlot,
+  stepResilience,
+  graphNodes,
+  schemaFor,
+  stepLogs,
+  onOpenLogs,
+  onOpenFile,
+  narrow = false,
 }: {
+  /** Live run status (status poll, incl. the awaiting_approval overlay) — wins over the trace snapshot. */
+  liveStatus?: string | null
+  /** false → workflow run: one ordered step list, no Path groups / Paths compared. Default: follow the graph shape. */
+  pathGrouping?: boolean
+  /** Workflow step names (title + type secondary text); null on ML runs. */
+  stepNames?: Map<string, StepName> | null
+  /** node id → "check → true" (branch the step hangs off). */
+  branchContext?: Map<string, string> | null
+  /** node id → raw node_skip reason. */
+  skipReasons?: Map<string, string> | null
+  /** node id → status from the journal (fills steps the trace has no status for, e.g. skipped). */
+  stepStatuses?: Map<string, string> | null
+  /** Graph snapshot nodes — the config each step ran with. */
+  graphNodes?: Array<{ id?: unknown; node_type?: unknown; config?: unknown }> | null
+  /** Node catalog config schema for a node type (defaults → "changed" highlight). */
+  schemaFor?: (nodeType: string) => { properties?: Record<string, Record<string, unknown>> } | null | undefined
+  /** Last formatted log lines of one step (+ total matching). */
+  stepLogs?: (nodeId: string) => { lines: StepLogLine[]; total: number }
+  /** Open Logs focused on this step. */
+  onOpenLogs?: (nodeId: string) => void
+  /** Open one output file in Run outputs. */
+  onOpenFile?: (path: string, nodeId: string) => void
+  /** Detail pane narrower than ~700 px: path table renders as stacked cards. */
+  narrow?: boolean
   /** node id → run whose cached outputs this step reused (`cache_source_run_id`). */
   cacheSources?: Map<string, string> | null
   /** node id → real failure (error_type: message + traceback) from node_error events. */
@@ -687,23 +445,31 @@ export function RunLineagePanel({
   runMeta?: Record<string, unknown> | null
   focusNodeId?: string | null
   onBrowseOutputs?: (nodeId?: string | null) => void
-  /** Select a step in the pipeline stack (keeps Overview open). */
+  /** Focus a step (null = All). Keeps Overview open. */
   onFocusStep?: (nodeId: string | null) => void
   outputFiles?: OutputFileHint[]
   /** Real inventory totals when the UI listing is sample-capped (e.g. Dataset Ingest). */
   fileTotalsByNode?: Record<string, number>
   graphEdges?: GraphEdge[] | null
   labelFor?: (nodeId: string) => string | undefined
-  /** Same order as the left Pipeline stack. */
+  /** Execution order of the run's steps. */
   orderedNodeIds?: string[]
   overview?: OverviewExtras | null
-  /** Shape lane → path results (description + metrics) for fork/parallel maps. */
+  /** Every path result (multi-path comparison table). */
+  paths?: PathResult[] | null
+  /** Shape lane → path results (description + metrics) for fork/parallel runs. */
   lanePaths?: Map<string, PathResult> | null
   /** Node id → its path (for evaluator step stories). */
   nodePaths?: Map<string, PathResult> | null
   bestPathId?: string | null
   /** Parsed evaluator metrics.json per node (+ confusion matrix image paths). */
   evaluator?: EvaluatorOutputs | null
+  /** Run record card (collapsed summary) rendered after Hot spots. */
+  recordSlot?: React.ReactNode
+  /** Rendered above the summary line (pending approval cards). */
+  topSlot?: React.ReactNode
+  /** node id → retries / routed error / continued failure (journal events). */
+  stepResilience?: Map<string, StepResilience> | null
 }) {
   const [trace, setTrace] = React.useState<TracePayload | null>(null)
   const [error, setError] = React.useState<string | null>(null)
@@ -764,11 +530,14 @@ export function RunLineagePanel({
     }
   }, [runId, parentEdges.length, trace?.run?.graph_name, trace?.graph?.name])
 
-  const effectiveEdges = parentEdges.length > 0 ? parentEdges : fetchedEdges || []
+  const effectiveEdges = React.useMemo(
+    () => (parentEdges.length > 0 ? parentEdges : fetchedEdges || []),
+    [parentEdges, fetchedEdges],
+  )
 
   const stories = React.useMemo(() => {
     if (!trace && !(orderedNodeIds && orderedNodeIds.length)) return [] as StepStory[]
-    return buildStories({
+    const built = buildStories({
       chain: Array.isArray(trace?.chain) ? trace!.chain! : [],
       nodes: Array.isArray(trace?.lineage?.nodes) ? (trace!.lineage!.nodes as TraceNode[]) : [],
       files: outputFiles || [],
@@ -778,7 +547,13 @@ export function RunLineagePanel({
       nodeStatsExtra: overview?.nodeStats,
       fileTotalsByNode,
     })
+    // Steps the trace never saw (skipped branches) take the journal status.
+    return built.map((st) => {
+      const j = stepStatuses?.get(st.id)
+      return j && (st.status === 'unknown' || !st.status) ? { ...st, status: j } : st
+    })
   }, [
+    stepStatuses,
     trace,
     outputFiles,
     effectiveEdges,
@@ -799,30 +574,120 @@ export function RunLineagePanel({
     : null
 
   const meta = runMeta && typeof runMeta === 'object' ? runMeta : {}
-  const runStatus = String(trace?.run?.status || meta.status || 'unknown')
+  const runStatus = String(liveStatus && liveStatus !== 'unknown' ? liveStatus : trace?.run?.status || meta.status || 'unknown')
   const graphName = String(
     trace?.graph?.name || trace?.run?.graph_name || meta.graph_name || '',
   ).trim()
   const totalMs = stories.reduce((acc, s) => acc + (s.durationMs || 0), 0)
-  const failed = stories.filter((s) => /fail|error/i.test(s.status))
+  /** Failures routed to an error branch / continued — handled, not run errors. */
+  const handledIds = handledErrorNodes(stepResilience)
+  const failed = stories.filter((s) => /fail|error/i.test(s.status) && !handledIds.has(s.id))
+  const flowMode = pathGrouping === false
   const cached = stories.filter((s) => s.cacheHit).length
   const shape = React.useMemo(
     () =>
       computePipelineShape(
         stories.map((s) => s.id),
-        stories.some((s) => s.wired) ? effectiveEdges : null,
+        stories.some((s) => s.wired) && !flowMode ? effectiveEdges : null,
       ),
-    [stories, effectiveEdges],
+    [stories, effectiveEdges, flowMode],
   )
   const edgesWired = stories.some((s) => s.wired)
   const multiTrack = isMultiTrackShape(shape)
-  const sections = timelineSections(stories, shape, lanePaths)
+  const groups = groupStepsByLane(stories, (s) => s.id, shape, lanePaths)
   const hotSpots = [...stories]
     .filter((s) => s.durationMs != null && s.durationMs > 0)
     .sort((a, b) => (b.durationMs || 0) - (a.durationMs || 0))
-    .slice(0, focusNodeId ? 3 : 5)
+    .slice(0, 5)
   const ov = overview || null
-  const metrics = ov?.metrics && typeof ov.metrics === 'object' ? ov.metrics : null
+  const metrics = ov?.metrics && typeof ov.metrics === 'object' ? scalarMetrics(ov.metrics) : {}
+  const savedFiles =
+    typeof (ov?.artifactCount ?? trace?.lineage?.artifact_count) === 'number'
+      ? Number(ov?.artifactCount ?? trace?.lineage?.artifact_count)
+      : null
+  const provenance =
+    typeof (ov?.provenanceCount ?? trace?.lineage?.provenance_count) === 'number'
+      ? Number(ov?.provenanceCount ?? trace?.lineage?.provenance_count)
+      : null
+
+  // ── Path comparison table (multi-path runs) ──
+  const allPaths = (paths || []).filter(Boolean)
+  const showPathTable = multiTrack && allPaths.length > 1
+  const storyById = React.useMemo(() => new Map(stories.map((s) => [s.id, s])), [stories])
+  const laneIdsOf = (p: PathResult): string[] => {
+    for (const [lane, lp] of lanePaths || []) {
+      if (lp.pathId !== p.pathId || lane === 'shared') continue
+      const idx = lane.charCodeAt(0) - 65
+      if (shape.branches[idx]) return shape.branches[idx]
+    }
+    return p.nodeIds
+  }
+  const tablePrimary = pathTablePrimaryName(allPaths, bestPathId)
+  const tableColumns = pathTableColumns(allPaths, tablePrimary)
+  const tableRows = showPathTable
+    ? pathTableRows({
+        paths: allPaths,
+        bestPathId,
+        columns: tableColumns,
+        primaryName: tablePrimary,
+        timingOf: (p) =>
+          pathTiming(
+            laneIdsOf(p),
+            (id) => storyById.get(id)?.durationMs ?? null,
+            (id) => storyById.get(id)?.nodeType ?? null,
+          ),
+      })
+    : []
+  const focusedPathLetter = focused ? nodePaths?.get(focused.id)?.letter ?? null : null
+  const linearGot = !multiTrack ? linearOutcome(stories) : null
+
+  // ── Collapsible groups: Shared open; best (or failed) path open; others folded ──
+  const bestLane = React.useMemo(() => {
+    if (!bestPathId) return null
+    for (const [lane, lp] of lanePaths || []) if (lane !== 'shared' && lp.pathId === bestPathId) return lane
+    return null
+  }, [lanePaths, bestPathId])
+  const groupKeys = groups.map((g) => g.key)
+  const failedLanes = multiTrack ? [...new Set(failed.map((s) => shape.laneOf.get(s.id) || 'shared'))] : []
+  const focusLane = focused ? (multiTrack ? shape.laneOf.get(focused.id) || 'shared' : groupKeys[0] ?? null) : null
+  const groupSig = `${runId}|${groupKeys.join(',')}|${bestLane || ''}|${failedLanes.join(',')}`
+  const [openGroups, setOpenGroups] = React.useState<{ sig: string; open: Set<string> } | null>(null)
+  const openSet =
+    openGroups && openGroups.sig === groupSig
+      ? openGroups.open
+      : defaultOpenGroups({ keys: groupKeys, bestLane, failedLanes })
+  const toggleGroup = (key: string) => {
+    const next = new Set(openSet)
+    const isOpen = next.has(key) || key === focusLane
+    if (isOpen) {
+      next.delete(key)
+      if (key === focusLane) onFocusStep?.(null)
+    } else next.add(key)
+    setOpenGroups({ sig: groupSig, open: next })
+  }
+
+  // ── Inline step details: scroll into view; Esc closes and returns focus ──
+  const focusedRowRef = React.useRef<HTMLLIElement | null>(null)
+  const focusedId = focused?.id ?? null
+  React.useEffect(() => {
+    if (!focusedId) return
+    const raf = requestAnimationFrame(() => scrollIntoPane(focusedRowRef.current))
+    return () => cancelAnimationFrame(raf)
+  }, [focusedId])
+  React.useEffect(() => {
+    if (!focusedId || !onFocusStep) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      if (document.querySelector('[aria-modal="true"]')) return
+      const t = e.target as HTMLElement | null
+      if (t?.closest('input, textarea, select, [contenteditable="true"], details[open]')) return
+      const btn = focusedRowRef.current?.querySelector<HTMLButtonElement>('button[data-step-row]')
+      onFocusStep(null)
+      btn?.focus()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [focusedId, onFocusStep])
 
   if (loading && !trace && stories.length === 0) {
     return <LoadingBlock label="Loading overview…" />
@@ -839,141 +704,124 @@ export function RunLineagePanel({
     )
   }
 
-  return (
-    <div className="space-y-3">
-      {/* Verdict + plain-language story */}
-      <div className="rounded-xl border border-ink-200 bg-white px-3 py-2.5">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span
-                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusTone(runStatus)}`}
-              >
-                {shortStatusLabel(runStatus)}
-              </span>
-              <span className="text-[13px] font-semibold text-ink-900">
-                {stories.length} step{stories.length === 1 ? '' : 's'}
-              </span>
-              {totalMs > 0 ? (
-                <span className="text-[12px] text-ink-500">· {formatDuration(totalMs)}</span>
-              ) : null}
-              {failed.length > 0 ? (
-                <span className="text-[12px] font-medium text-rose-700">
-                  · {failed.length} failed
-                </span>
-              ) : null}
-              {cached > 0 ? (
-                <span className="text-[12px] text-ink-400">· {cached} cached</span>
-              ) : null}
-            </div>
-            {graphName ? (
-              <p className="mt-1 text-[12px] font-medium text-ink-800">
-                {humanizeTemplateName(graphName)}
-              </p>
-            ) : null}
-            <RunStoryMap
-              shape={shape}
-              stories={stories}
-              focusNodeId={focusNodeId}
-              onFocusStep={onFocusStep}
-              lanePaths={lanePaths}
-              bestPathId={bestPathId}
-              savedFiles={
-                typeof (ov?.artifactCount ?? trace?.lineage?.artifact_count) === 'number'
-                  ? Number(ov?.artifactCount ?? trace?.lineage?.artifact_count)
-                  : null
-              }
-              provenance={
-                typeof (ov?.provenanceCount ?? trace?.lineage?.provenance_count) === 'number'
-                  ? Number(ov?.provenanceCount ?? trace?.lineage?.provenance_count)
-                  : null
-              }
-            />
-            {!edgesWired ? (
-              <p className="mt-1 text-[11px] text-ink-400">
-                Graph edges unavailable — showing pipeline order as the connection story.
-              </p>
-            ) : null}
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            {/* Files live on the Run outputs tab — no duplicate Browse here. */}
-            <ReproPackButton runId={runId} />
-            <button type="button" className="btn-quiet" aria-label="Refresh overview" onClick={() => void load()}>
-              <RefreshCw className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
-      </div>
+  const errorSplit = splitRunErrors({
+    errorCount: ov?.errorCount ?? null,
+    recentErrors: ov?.recentErrors ?? null,
+    handled: handledIds,
+  })
+  const runTone = statusTone(runStatus)
+  const summaryBits: React.ReactNode[] = []
+  summaryBits.push(
+    <span key="steps">
+      {stories.length} step{stories.length === 1 ? '' : 's'}
+    </span>,
+  )
+  if (totalMs > 0) summaryBits.push(<span key="time">{formatDuration(totalMs)}</span>)
+  if (failed.length > 0)
+    summaryBits.push(
+      <span key="failed" className="font-medium text-rose-700">
+        {failed.length} failed
+      </span>,
+    )
+  if (cached > 0) summaryBits.push(<span key="cached">{cached} cached</span>)
+  if (savedFiles != null) summaryBits.push(<span key="files">{savedFiles} saved files</span>)
+  const tracked = trackedFilesLabel(provenance)
+  if (tracked)
+    summaryBits.push(
+      <span key="prov" title="Files whose content hash is recorded for this run — Verify re-checks them">
+        {tracked}
+      </span>,
+    )
+  if (Number(ov?.checkpointCount || 0) > 0)
+    summaryBits.push(<span key="ckpt">{Number(ov?.checkpointCount)} checkpoints</span>)
+  if (errorSplit.unhandledCount > 0)
+    summaryBits.push(
+      <span key="errs" className="font-medium text-rose-700">
+        {errorSplit.unhandledCount} error{errorSplit.unhandledCount === 1 ? '' : 's'}
+      </span>,
+    )
+  if (errorSplit.handledCount > 0)
+    summaryBits.push(
+      <span key="handled" className="font-medium text-amber-800" title="Failures routed to an error branch or continued (on_error) — the run kept going">
+        {handledErrorsLabel(errorSplit.handledCount)}
+      </span>,
+    )
 
-      {/* Extra counts that are not folded into the map footer */}
-      {ov && (Number(ov.checkpointCount || 0) > 0 || Number(ov.errorCount || 0) > 0) ? (
-        <div className="flex flex-wrap gap-x-4 gap-y-1 rounded-xl border border-ink-100 bg-white px-3 py-2 text-[12px]">
-          {(
-            [
-              ...(Number(ov.checkpointCount || 0) > 0
-                ? ([['Checkpoints', ov.checkpointCount]] as Array<[string, unknown]>)
-                : []),
-              ...(Number(ov.errorCount || 0) > 0
-                ? ([['Errors', ov.errorCount]] as Array<[string, unknown]>)
-                : []),
-            ] as Array<[string, unknown]>
-          ).map(([label, val]) => (
-            <div key={label} className="flex items-baseline gap-1.5">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">
-                {label}
-              </span>
-              <span
-                className={`tabular-nums font-semibold ${
-                  label === 'Errors' ? 'text-rose-700' : 'text-ink-900'
-                }`}
-              >
-                {String(val ?? 0)}
-              </span>
-            </div>
-          ))}
-        </div>
+  return (
+    <div className="space-y-2">
+      {topSlot}
+      {/* Summary line: plain text for success; badge only for exceptions. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-0.5 text-[12px] text-ink-600">
+        {runTone ? (
+          <span className={clsx('rounded-full px-2 py-0.5 text-[11px] font-semibold', runTone)}>
+            {shortStatusLabel(runStatus)}
+          </span>
+        ) : (
+          <span className="font-medium text-ink-800">{shortStatusLabel(runStatus)}</span>
+        )}
+        {summaryBits.map((b, i) => (
+          <React.Fragment key={i}>
+            <span className="text-ink-300" aria-hidden>
+              ·
+            </span>
+            {b}
+          </React.Fragment>
+        ))}
+        {graphName ? (
+          <span className="min-w-0 truncate text-ink-400" title={`Pipeline ${graphName}`}>
+            · {humanizeTemplateName(graphName)}
+          </span>
+        ) : null}
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          {/* Files live on the Run outputs tab — no duplicate Browse here. */}
+          <ReproPackButton runId={runId} />
+          <button type="button" className="btn-quiet" aria-label="Refresh overview" onClick={() => void load()}>
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+        </span>
+      </div>
+      {linearGot ? (
+        <p className="-mt-1 px-0.5 text-[12px] text-ink-600">
+          <span className="text-ink-400">Got </span>
+          {linearGot}
+        </p>
+      ) : null}
+      {!edgesWired ? (
+        <p className="-mt-1 px-0.5 text-[11px] text-ink-400">
+          Graph edges unavailable — showing pipeline order as the connection story.
+        </p>
       ) : null}
 
-      {metrics && Object.keys(scalarMetrics(metrics)).length > 0 ? (
-        <div className="overflow-hidden rounded-xl border border-ink-200">
-          <div className="flex flex-wrap items-baseline gap-x-2 border-b border-ink-100 bg-ink-50 px-3 py-1.5">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">Metrics</span>
-            {ov?.metricsPathLabel ? (
-              <span className="text-[11px] text-ink-600">
-                · best path: <span className="font-semibold text-ink-800">{ov.metricsPathLabel}</span>
-              </span>
-            ) : null}
-          </div>
-          <ul className="divide-y divide-ink-100">
-            {Object.entries(scalarMetrics(metrics))
-              .slice(0, 12)
-              .map(([k, v]) => (
-                <li
-                  key={k}
-                  className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm"
-                >
-                  <span className="min-w-0 truncate font-medium text-ink-900" title={k}>
-                    {metricLabel(k)}
-                  </span>
-                  <span className="shrink-0 tabular-nums text-[12px] font-semibold text-ink-800">
-                    {Number.isInteger(v) && !isRatioMetric(k, v) ? v.toLocaleString() : formatMetricValue(k, v)}
-                  </span>
-                </li>
-              ))}
-          </ul>
+      {showPathTable ? (
+        <PathComparisonTable
+          rows={tableRows}
+          primaryName={tablePrimary}
+          columns={tableColumns}
+          activeLetter={focusedPathLetter}
+          stacked={narrow}
+          onSelect={(r) => {
+            if (r.focusNodeId) onFocusStep?.(r.focusNodeId)
+          }}
+        />
+      ) : Object.keys(metrics).length > 0 ? (
+        <div>
+          <CompactMetricsRow
+            metrics={metrics}
+            caption={ov?.metricsPathLabel ? `best path: ${ov.metricsPathLabel}` : null}
+          />
           {ov?.otherPathMetrics && ov.otherPathMetrics.length > 0 ? (
-            <div className="border-t border-ink-100 bg-ink-50/50 px-3 py-1.5 text-[11px] text-ink-500">
+            <p className="mt-1 px-0.5 text-[11px] text-ink-500">
               Other paths:{' '}
               {ov.otherPathMetrics
                 .map((o) => `${o.label} ${metricLabel(o.primary.name)} ${formatMetricValue(o.primary.name, o.primary.value)}`)
                 .join(' · ')}
-            </div>
+            </p>
           ) : null}
         </div>
       ) : null}
 
       {ov?.showRegisterCta && ov.onRegister ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent-200/70 bg-accent-50/40 px-3 py-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-ink-200 bg-white px-3 py-2">
           <div className="min-w-0 text-[12px] text-ink-700">
             <span className="font-medium text-ink-900">Next: register a model</span>
             <span className="text-ink-500"> — name it in the registry so Models / Ship can use it.</span>
@@ -988,38 +836,286 @@ export function RunLineagePanel({
         </div>
       ) : null}
 
-      {Number(ov?.errorCount || 0) > 0 && ov?.onJumpLogs ? (
-        <button type="button" className="btn-primary" onClick={ov.onJumpLogs}>
-          Jump to errors
-        </button>
-      ) : null}
-
-      {Array.isArray(ov?.recentErrors) && ov!.recentErrors!.length > 0 ? (
+      {errorSplit.unhandledRecent.length > 0 ? (
         <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-rose-700">
-            Recent errors
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-[12px] font-semibold text-rose-800">Recent errors</h3>
+            {errorSplit.unhandledCount > 0 && ov?.onJumpLogs ? (
+              <button type="button" className="btn-secondary !px-2 !py-0.5 text-[11px]" onClick={ov.onJumpLogs}>
+                Jump to errors
+              </button>
+            ) : null}
           </div>
           <ul className="mt-1 space-y-1 font-mono text-[11px] text-rose-900">
-            {ov!.recentErrors!.slice(-5).map((e, i) => (
+            {errorSplit.unhandledRecent.slice(-5).map((e, i) => (
               <li key={i}>{humanizeErrorText(String(e.message || JSON.stringify(e)))}</li>
             ))}
           </ul>
         </div>
+      ) : errorSplit.unhandledCount > 0 && ov?.onJumpLogs ? (
+        <button type="button" className="btn-secondary !px-2 !py-1 text-[11px]" onClick={ov.onJumpLogs}>
+          Jump to errors
+        </button>
       ) : null}
+      {errorSplit.handledCount > 0 ? (
+        <p className="px-0.5 text-[12px] text-amber-900">
+          <span className="font-semibold">Handled errors</span>
+          <span className="text-amber-800">
+            {' — '}
+            {[...handledIds]
+              .map((id) => `${labelById.get(id) || id}: ${handledErrorText(stepResilience?.get(id)).replace(/^Failed → /, '')}`)
+              .join(' · ')}
+          </span>
+        </p>
+      ) : null}
+
+      {Array.isArray(trace?.warnings) && trace!.warnings!.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+          {trace!.warnings!.map((w) => humanizeErrorText(String(w))).join(' · ')}
+        </div>
+      )}
+
+      <section aria-label="What happened" className="overflow-hidden rounded-xl border border-ink-200 bg-white">
+        <div className="flex items-baseline justify-between gap-2 border-b border-ink-100 px-3 py-1.5">
+          <h3 className="shrink-0 text-[13px] font-semibold text-ink-900">What happened</h3>
+          <span className="min-w-0 truncate text-[11px] text-ink-400">
+            {focused ? 'Esc closes step details' : 'Click a step for its details'}
+          </span>
+        </div>
+        <div className="divide-y divide-ink-100">
+          {groups.map((group) => {
+            const isPathLane = /^[A-Z]$/.test(group.key)
+            const open = openSet.has(group.key) || group.key === focusLane
+            const lanePath = isPathLane ? lanePaths?.get(group.key) ?? null : null
+            const groupMs = group.rows.reduce((a, r) => a + (r.item.durationMs || 0), 0)
+            const groupFailed = group.rows.some((r) => /fail|error/i.test(r.item.status))
+            const parts = isPathLane
+              ? pathGroupSummary({
+                  letter: lanePath?.letter ?? group.key,
+                  description: lanePath?.description,
+                  stepCount: group.rows.length,
+                  totalMs: groupMs,
+                  primary: lanePath?.primary ?? null,
+                })
+              : [
+                  group.key === 'shared' ? 'Shared steps' : group.label || 'Steps',
+                  `${group.rows.length} step${group.rows.length === 1 ? '' : 's'}`,
+                  ...(groupMs > 0 ? [formatDuration(groupMs)] : []),
+                ]
+            const isBestLane = Boolean(isPathLane && bestLane === group.key && allPaths.length > 1)
+            return (
+              <div key={group.key}>
+                {group.label ? (
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    className="flex w-full min-w-0 items-center gap-1.5 bg-ink-50/60 px-3 py-1.5 text-left text-[12px] hover:bg-ink-100/60"
+                    title={parts.join(' · ')}
+                    onClick={() => toggleGroup(group.key)}
+                  >
+                    {open ? (
+                      <ChevronDown className="h-3.5 w-3.5 shrink-0 text-ink-400" aria-hidden />
+                    ) : (
+                      <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-400" aria-hidden />
+                    )}
+                    <span className="min-w-0 flex-1 truncate">
+                      <span className="font-medium text-ink-900">{parts[0]}</span>
+                      <span className="text-ink-500"> · {parts.slice(1).join(' · ')}</span>
+                    </span>
+                    {groupFailed ? (
+                      <span className="shrink-0 rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-900">
+                        Failed
+                      </span>
+                    ) : null}
+                    {isBestLane ? (
+                      <span className="inline-flex shrink-0 items-center gap-0.5 text-[11px] font-medium text-emerald-700">
+                        <Trophy className="h-3 w-3" aria-hidden /> best
+                      </span>
+                    ) : null}
+                  </button>
+                ) : null}
+                {open ? (
+                  <ol className="divide-y divide-ink-50">
+                    {group.rows.map(({ item: s, index }) => {
+                      const active = focused ? focusMatchesNode(focused.id, s.id) : false
+                      const tone = statusTone(s.status)
+                      const label = multiTrack ? s.label.replace(/\s·\sPath [A-Z]$/, '') : s.label
+                      const name = stepNames?.get(s.id) ?? null
+                      const title = name?.title || label
+                      const skipped = /skip/i.test(s.status)
+                      const handledText = handledErrorText(stepResilience?.get(s.id))
+                      const branch = branchContext?.get(s.id) ?? ''
+                      const skipText = skipped && skipReasons?.get(s.id) != null ? skipReasonText(skipReasons.get(s.id)) : ''
+                      const pm = pickPrimaryMetric(evaluator?.metricsByNode[s.id])
+                      const cacheSrc = cacheSources?.get(s.id)
+                      const failureLine =
+                        stepFailures?.get(s.id)?.headline || (s.error ? failureView({ error: s.error })?.headline || s.error : null)
+                      const node = (graphNodes || []).find((n) => String(n?.id ?? '') === s.id) || null
+                      const nodeType = String(node?.node_type || s.nodeType || '')
+                      return (
+                        <li key={s.id} ref={active ? focusedRowRef : undefined}>
+                          <button
+                            type="button"
+                            data-step-row
+                            aria-expanded={active}
+                            className={clsx(
+                              'flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-left transition-colors',
+                              active ? 'bg-accent-50/70' : 'hover:bg-ink-50/80',
+                              skipped && !active && 'opacity-70',
+                            )}
+                            onClick={() => onFocusStep?.(active ? null : s.id)}
+                            title={active ? 'Hide step details' : 'Show step details'}
+                          >
+                            <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-ink-100 text-[10px] font-semibold tabular-nums text-ink-600">
+                              {index}
+                            </span>
+                            <span
+                              className={clsx(
+                                'min-w-0 max-w-[45%] shrink-0 truncate text-[13px] font-medium',
+                                skipped ? 'text-ink-500' : 'text-ink-900',
+                              )}
+                              title={name?.subtitle ? `${title} — ${name.subtitle}` : s.label}
+                            >
+                              {title}
+                              {name?.subtitle ? (
+                                <span className="ml-1 text-[11px] font-normal text-ink-400">{name.subtitle}</span>
+                              ) : null}
+                            </span>
+                            {handledText ? (
+                              <span
+                                className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-950"
+                                title={resilienceText(stepResilience?.get(s.id))}
+                              >
+                                {handledText}
+                              </span>
+                            ) : isExceptionStatus(s.status) ? (
+                              <span className={clsx('shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold', tone)}>
+                                {shortStatusLabel(s.status)}
+                              </span>
+                            ) : skipped ? (
+                              <span className="shrink-0 text-[11px] text-ink-400" title={skipReasons?.get(s.id) || undefined}>
+                                Skipped{skipText ? ` · ${skipText}` : ''}
+                              </span>
+                            ) : null}
+                            {!handledText && resilienceText(stepResilience?.get(s.id)) ? (
+                              <span className="shrink-0 text-[11px] text-amber-800" title={resilienceText(stepResilience?.get(s.id))}>
+                                {stepResilience?.get(s.id)?.routed
+                                  ? 'error routed'
+                                  : stepResilience?.get(s.id)?.retries.length
+                                    ? `retried ${stepResilience?.get(s.id)?.retries.length}×`
+                                    : 'continued'}
+                              </span>
+                            ) : null}
+                            {s.cacheHit ? (
+                              <span
+                                className="shrink-0 text-[11px] text-sky-800"
+                                title={
+                                  cacheSrc
+                                    ? `Reused outputs of run ${runLabelFor?.(cacheSrc) || cacheSrc} (${cacheSrc})`
+                                    : 'Reused cached outputs — source run not recorded'
+                                }
+                              >
+                                cached
+                              </span>
+                            ) : null}
+                            <span
+                              className="min-w-0 flex-1 truncate text-[11px] text-ink-500"
+                              title={[pm ? `${metricLabel(pm.name)} ${formatMetricValue(pm.name, pm.value)}` : '', `Wrote ${s.wroteRaw || s.wrote}`]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            >
+                              {pm ? (
+                                <span className="font-semibold tabular-nums text-ink-800">
+                                  {metricLabel(pm.name)} {formatMetricValue(pm.name, pm.value)}
+                                  <span className="font-normal text-ink-300"> · </span>
+                                </span>
+                              ) : null}
+                              {flowMode ? (
+                                <>
+                                  {branch ? <span className="text-ink-600">{branch}</span> : null}
+                                  {s.fileCount > 0 ? `${branch ? ' · ' : ''}${s.wrote}` : null}
+                                </>
+                              ) : (
+                                s.wrote
+                              )}
+                            </span>
+                            <span className="shrink-0 tabular-nums text-[11px] text-ink-500">
+                              {formatDuration(s.durationMs)}
+                            </span>
+                          </button>
+                          {failureLine && !active && !handledText ? (
+                            <div className="truncate px-3 pb-1.5 pl-9 font-mono text-[11px] text-rose-700" title={failureLine}>
+                              {failureLine}
+                            </div>
+                          ) : null}
+                          {active ? (
+                            <StepInlineDetails
+                              story={s}
+                              nodeType={nodeType}
+                              labelById={labelById}
+                              evaluatorMetrics={evaluator?.metricsByNode[s.id]}
+                              path={nodePaths?.get(s.id) ?? null}
+                              cacheSourceRunId={cacheSrc ?? null}
+                              failure={stepFailures?.get(s.id) ?? null}
+                              resilience={stepResilience?.get(s.id) ?? null}
+                              runLabelFor={runLabelFor}
+                              onOpenRun={onOpenRun}
+                              config={stepConfigEntries(
+                                node?.config && typeof node.config === 'object'
+                                  ? (node.config as Record<string, unknown>)
+                                  : null,
+                                nodeType ? schemaFor?.(nodeType) : null,
+                              )}
+                              hasGraph={Boolean(node)}
+                              images={imageOutputsForNode(
+                                [
+                                  ...(outputFiles || []).map((f) => ({
+                                    name: String(f.name || f.path?.split('/').pop() || ''),
+                                    path: String(f.path || ''),
+                                    node_id: f.node_id ?? null,
+                                  })),
+                                  ...(evaluator?.confusionImageByNode[s.id]
+                                    ? [
+                                        {
+                                          name: String(evaluator.confusionImageByNode[s.id].split('/').pop()),
+                                          path: evaluator.confusionImageByNode[s.id],
+                                          node_id: s.id,
+                                        },
+                                      ]
+                                    : []),
+                                ].filter((f) => f.path),
+                                s.id,
+                                focusMatchesNode,
+                              )}
+                              logs={stepLogs?.(s.id) ?? null}
+                              onOpenLogs={onOpenLogs ? () => onOpenLogs(s.id) : undefined}
+                              onOpenFile={onOpenFile ? (p) => onOpenFile(p, s.id) : undefined}
+                              onBrowseOutputs={onBrowseOutputs ? () => onBrowseOutputs(s.id) : undefined}
+                              onClose={onFocusStep ? () => onFocusStep(null) : undefined}
+                            />
+                          ) : null}
+                        </li>
+                      )
+                    })}
+                  </ol>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      </section>
 
       {hotSpots.length > 0 ? (
         <details className="overflow-hidden rounded-xl border border-ink-200 bg-white">
-          <summary className="cursor-pointer select-none border-b border-ink-100 bg-ink-50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+          <summary className="cursor-pointer select-none px-3 py-2 text-[13px] font-semibold text-ink-900">
             Hot spots{' '}
-            <span className="font-normal normal-case text-ink-400">
-              — slowest steps (not pipeline order)
-            </span>
+            <span className="text-[11px] font-normal text-ink-400">— slowest steps (not pipeline order)</span>
           </summary>
-          <ul className="divide-y divide-ink-100">
+          <ul className="divide-y divide-ink-100 border-t border-ink-100">
             {hotSpots.map((s) => (
               <li
                 key={s.id}
-                className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm"
+                className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-[13px]"
               >
                 <button
                   type="button"
@@ -1037,152 +1133,12 @@ export function RunLineagePanel({
         </details>
       ) : null}
 
-      {Array.isArray(trace?.warnings) && trace!.warnings!.length > 0 && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          {trace!.warnings!.map((w) => humanizeErrorText(String(w))).join(' · ')}
-        </div>
-      )}
-
-      {focused ? (
-        <StepDetailCard
-          story={focused}
-          evaluatorMetrics={evaluator?.metricsByNode[focused.id]}
-          confusionImagePath={evaluator?.confusionImageByNode[focused.id]}
-          path={nodePaths?.get(focused.id) ?? null}
-          labelById={labelById}
-          onBrowseOutputs={onBrowseOutputs}
-          onClearFocus={onFocusStep ? () => onFocusStep(null) : undefined}
-          cacheSourceRunId={cacheSources?.get(focused.id) ?? null}
-          failure={stepFailures?.get(focused.id) ?? null}
-          runLabelFor={runLabelFor}
-          onOpenRun={onOpenRun}
-        />
-      ) : null}
-
-      <div className="overflow-hidden rounded-xl border border-ink-200 bg-white">
-        <div className="flex items-center justify-between gap-2 border-b border-ink-100 bg-ink-50/60 px-3 py-1.5">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-            {focused
-              ? 'Full timeline'
-              : multiTrack
-                ? 'What happened'
-                : 'What happened (in order)'}
-          </div>
-          <span className="text-[11px] text-ink-400">Click a step for the full produce/consume story</span>
-        </div>
-        <div className="divide-y divide-ink-100">
-          {sections.map((section) => (
-            <div key={section.key}>
-              {section.label ? (
-                <div
-                  className={`px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide ${laneToneClass(
-                    section.key === 'rest' ? 'shared' : section.key,
-                  )}`}
-                >
-                  {section.label}
-                </div>
-              ) : null}
-              <ol className="divide-y divide-ink-50">
-                {section.rows.map(({ story: s, execIndex }) => {
-                  const active = focused ? focusMatchesNode(focused.id, s.id) : false
-                  const fromLabels = s.from.map(
-                    (id) => labelById.get(id) || displayNodeLabel(id, { withCue: true }),
-                  )
-                  const toLabels = s.to.map(
-                    (id) => labelById.get(id) || displayNodeLabel(id, { withCue: true }),
-                  )
-                  return (
-                    <li key={s.id}>
-                      <button
-                        type="button"
-                        className={`flex w-full items-start gap-3 px-3 py-2.5 text-left transition-colors ${
-                          active ? 'bg-accent-50/70' : 'hover:bg-ink-50/80'
-                        }`}
-                        onClick={() => onFocusStep?.(s.id)}
-                      >
-                        <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-ink-100 text-[11px] font-semibold tabular-nums text-ink-700">
-                          {execIndex}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="flex flex-wrap items-center gap-1.5">
-                            <span className="text-[13px] font-medium text-ink-900">{s.label}</span>
-                            <span
-                              className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusTone(s.status)}`}
-                            >
-                              {shortStatusLabel(s.status)}
-                            </span>
-                            {s.cacheHit ? (
-                              <span
-                                className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-800"
-                                title={(() => {
-                                  const src = cacheSources?.get(s.id)
-                                  if (!src) return 'Reused cached outputs — source run not recorded'
-                                  return `Reused outputs of run ${runLabelFor?.(src) || src} (${src})`
-                                })()}
-                              >
-                                {cacheSources?.get(s.id) ? `cached · ${shortRunId(cacheSources.get(s.id)!)}` : 'cached'}
-                              </span>
-                            ) : null}
-                            {(() => {
-                              const pm = pickPrimaryMetric(evaluator?.metricsByNode[s.id])
-                              return pm ? (
-                                <span className="rounded-md bg-white px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-ink-800 ring-1 ring-ink-200">
-                                  {metricLabel(pm.name)} {formatMetricValue(pm.name, pm.value)}
-                                </span>
-                              ) : null
-                            })()}
-                            <span className="ml-auto shrink-0 tabular-nums text-[11px] text-ink-500">
-                              {formatDuration(s.durationMs)}
-                            </span>
-                          </span>
-                          <span className="mt-0.5 block text-[12px] text-ink-700">
-                            <span className="text-ink-400">Wrote </span>
-                            {s.wrote}
-                          </span>
-                          <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-ink-500">
-                            {fromLabels.length > 0 ? (
-                              <span>
-                                <span className="text-ink-400">Fed by </span>
-                                {fromLabels.join(', ')}
-                              </span>
-                            ) : (
-                              <span className="text-ink-400">Start</span>
-                            )}
-                            {toLabels.length > 0 ? (
-                              <>
-                                <ArrowRight className="inline h-3 w-3 shrink-0 text-ink-300" aria-hidden />
-                                <span>
-                                  <span className="text-ink-400">feeds </span>
-                                  {toLabels.join(', ')}
-                                </span>
-                              </>
-                            ) : (
-                              <>
-                                <ArrowRight className="inline h-3 w-3 shrink-0 text-ink-300" aria-hidden />
-                                <span className="text-ink-400">End</span>
-                              </>
-                            )}
-                          </span>
-                          {s.error || stepFailures?.get(s.id) ? (
-                            <span className="mt-1 block truncate font-mono text-[11px] text-rose-700" title={stepFailures?.get(s.id)?.headline || s.error || undefined}>
-                              {stepFailures?.get(s.id)?.headline || failureView({ error: s.error })?.headline || s.error}
-                            </span>
-                          ) : null}
-                        </span>
-                      </button>
-                    </li>
-                  )
-                })}
-              </ol>
-            </div>
-          ))}
-        </div>
-      </div>
+      {recordSlot}
 
       {(trace?.lineage?.artifacts || []).length > 0 ? (
-        <details className="rounded-lg border border-ink-100 bg-ink-50/40">
-          <summary className="cursor-pointer select-none px-3 py-1.5 text-[11px] font-medium text-ink-500">
-            Advanced — registry IDs (support)
+        <details className="rounded-xl border border-ink-200 bg-white">
+          <summary className="cursor-pointer select-none px-3 py-2 text-[12px] font-medium text-ink-600">
+            Advanced — registry ids (support)
           </summary>
           <ul className="max-h-36 space-y-1 overflow-y-auto border-t border-ink-100 px-3 py-2">
             {(trace?.lineage?.artifacts || []).slice(0, 16).map((a, i) => (
@@ -1208,130 +1164,303 @@ export function RunLineagePanel({
   )
 }
 
-function StepDetailCard({
-  story,
-  labelById,
-  onBrowseOutputs,
-  onClearFocus,
-  evaluatorMetrics,
-  confusionImagePath,
-  path,
-  cacheSourceRunId,
-  failure,
-  runLabelFor,
-  onOpenRun,
-}: {
-  cacheSourceRunId?: string | null
-  failure?: FailureView | null
-  runLabelFor?: (runId: string) => string | undefined
-  onOpenRun?: (runId: string) => void
-  evaluatorMetrics?: unknown
-  confusionImagePath?: string
-  path?: PathResult | null
-  story: StepStory
-  labelById: Map<string, string>
-  onBrowseOutputs?: (nodeId?: string | null) => void
-  onClearFocus?: () => void
-}) {
-  const name = (id: string) => labelById.get(id) || displayNodeLabel(id, { withCue: true })
+/** Settings the step ran with: changed-from-default first (highlighted), defaults behind "Show all". */
+function ConfigList({ entries, hasGraph }: { entries: ConfigEntry[]; hasGraph: boolean }) {
+  const [all, setAll] = React.useState(false)
+  if (!entries.length) {
+    return (
+      <p className="text-[11px] text-ink-400">
+        {hasGraph ? 'No settings — this step ran with its defaults.' : 'Graph snapshot not available for this run.'}
+      </p>
+    )
+  }
+  const explicit = entries.filter((e) => !e.fromDefault)
+  const head = all ? entries : explicit.slice(0, 10)
+  const hidden = entries.length - head.length
+  const anyChanged = entries.some((e) => e.changed === true)
   return (
-    <div className="rounded-xl border border-accent-200/80 bg-accent-50/30 px-3 py-2.5">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-            Step story
-          </div>
-          <div className="mt-0.5 text-[15px] font-semibold text-ink-900">{story.label}</div>
-        </div>
-        {onClearFocus ? (
-          <button type="button" className="btn-quiet !px-1.5 !py-0.5 text-[11px]" onClick={onClearFocus}>
-            Show all steps
+    <div>
+      <dl className="grid grid-cols-[minmax(0,9rem)_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-[11px]">
+        {head.map((e) => (
+          <React.Fragment key={e.key}>
+            <dt
+              className={clsx('truncate font-mono', e.changed ? 'font-semibold text-amber-900' : 'text-ink-500')}
+              title={e.key}
+            >
+              {e.key}
+            </dt>
+            <dd
+              className={clsx(
+                'truncate font-mono',
+                e.changed ? 'rounded bg-amber-50 px-1 text-amber-950' : e.fromDefault ? 'text-ink-400' : 'text-ink-800',
+              )}
+              title={
+                e.changed
+                  ? `${e.value} (default ${e.defaultValue})`
+                  : e.fromDefault
+                    ? `${e.value} (default — not set in the graph)`
+                    : e.value
+              }
+            >
+              {e.value}
+            </dd>
+          </React.Fragment>
+        ))}
+      </dl>
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[10px] text-ink-400">
+        {anyChanged ? <span><span className="rounded bg-amber-50 px-1 text-amber-900">highlighted</span> = changed from default</span> : null}
+        {hidden > 0 || all ? (
+          <button type="button" className="font-medium text-accent-800 hover:underline" onClick={() => setAll((v) => !v)}>
+            {all ? 'Show fewer' : `Show all ${entries.length}${entries.length > explicit.length ? ' (incl. defaults)' : ''}`}
           </button>
         ) : null}
       </div>
-      <dl className="mt-2 grid gap-1.5 text-[12px] sm:grid-cols-2">
-        <div>
-          <dt className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">Status</dt>
-          <dd className="mt-0.5">
-            <span className={`rounded-full px-1.5 py-0.5 text-[11px] font-semibold ${statusTone(story.status)}`}>
-              {shortStatusLabel(story.status)}
-            </span>
-            {story.cacheHit ? <span className="ml-1.5 text-ink-500">· used cache</span> : null}
-            <span className="ml-1.5 text-ink-500">· {formatDuration(story.durationMs)}</span>
+    </div>
+  )
+}
+
+/** Step details, rendered inline under the clicked step row (accordion). */
+function StepInlineDetails({
+  story,
+  nodeType,
+  labelById,
+  evaluatorMetrics,
+  path,
+  cacheSourceRunId,
+  failure,
+  resilience,
+  runLabelFor,
+  onOpenRun,
+  config,
+  hasGraph,
+  images,
+  logs,
+  onOpenLogs,
+  onOpenFile,
+  onBrowseOutputs,
+  onClose,
+}: {
+  story: StepStory
+  nodeType: string
+  labelById: Map<string, string>
+  evaluatorMetrics?: unknown
+  path?: PathResult | null
+  cacheSourceRunId?: string | null
+  failure?: FailureView | null
+  resilience?: StepResilience | null
+  runLabelFor?: (runId: string) => string | undefined
+  onOpenRun?: (runId: string) => void
+  config: ConfigEntry[]
+  hasGraph: boolean
+  images: Array<{ name: string; path: string }>
+  logs: { lines: StepLogLine[]; total: number } | null
+  onOpenLogs?: () => void
+  onOpenFile?: (path: string) => void
+  onBrowseOutputs?: () => void
+  onClose?: () => void
+}) {
+  const name = (id: string) => labelById.get(id) || displayNodeLabel(id, { withCue: true })
+  const fedBy = story.from.length ? story.from.map(name).join(', ') : 'start of the pipeline'
+  const feeds = story.to.length ? story.to.map(name).join(', ') : 'end of this path'
+  const fv = failure || (story.error ? failureView({ error: story.error }) : null)
+  const logBox = React.useRef<HTMLOListElement | null>(null)
+  React.useEffect(() => {
+    // Newest lines at the bottom, in view.
+    if (logBox.current) logBox.current.scrollTop = logBox.current.scrollHeight
+  }, [logs?.lines.length])
+  return (
+    <div
+      role="region"
+      aria-label={`${story.label} details`}
+      className="mx-2 mb-2 mt-0.5 space-y-2 rounded-lg border border-accent-200 bg-white px-3 py-2 text-[12px] shadow-sm"
+    >
+      <div className="flex min-w-0 items-start gap-2">
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-ink-700">
+            {isExceptionStatus(story.status) ? (
+              <span className={clsx('rounded-full px-1.5 py-0.5 text-[11px] font-semibold', statusTone(story.status))}>
+                {shortStatusLabel(story.status)}
+              </span>
+            ) : (
+              <span className="font-medium text-ink-800">{shortStatusLabel(story.status)}</span>
+            )}
+            <span className="text-ink-300">·</span>
+            <span className="tabular-nums">{formatDuration(story.durationMs)}</span>
+            {nodeType ? (
+              <>
+                <span className="text-ink-300">·</span>
+                <span className="font-mono text-[11px] text-ink-500">{nodeType}</span>
+              </>
+            ) : null}
             {story.cacheHit ? (
-              <span className="mt-0.5 block text-[11px] text-ink-500">
-                {linkableRunId(cacheSourceRunId) ? (
-                  <>
-                    from run{' '}
-                    <span className="font-medium text-ink-800" title={cacheSourceRunId!}>
-                      {runLabelFor?.(cacheSourceRunId!) || shortRunId(cacheSourceRunId!)}
-                    </span>
-                    {runLabelFor?.(cacheSourceRunId!) ? (
-                      <span className="font-mono text-ink-400"> {shortRunId(cacheSourceRunId!)}</span>
-                    ) : null}
-                    {onOpenRun ? (
-                      <>
-                        {' '}
-                        (
+              <>
+                <span className="text-ink-300">·</span>
+                <span className="text-ink-600">
+                  used cache
+                  {linkableRunId(cacheSourceRunId) ? (
+                    <>
+                      {' from '}
+                      {onOpenRun ? (
                         <button
                           type="button"
-                          className="text-accent-800 underline-offset-2 hover:underline"
+                          className="font-medium text-accent-800 underline-offset-2 hover:underline"
+                          title={`Open run ${cacheSourceRunId}`}
                           onClick={() => onOpenRun(cacheSourceRunId!)}
                         >
-                          open
+                          {runLabelFor?.(cacheSourceRunId!) || shortRunId(cacheSourceRunId!)}
                         </button>
-                        )
-                      </>
-                    ) : null}
-                  </>
-                ) : (
-                  <span className="text-ink-400">source run not recorded</span>
-                )}
-              </span>
+                      ) : (
+                        <span title={cacheSourceRunId!}>{runLabelFor?.(cacheSourceRunId!) || shortRunId(cacheSourceRunId!)}</span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-ink-400"> (source run not recorded)</span>
+                  )}
+                </span>
+              </>
             ) : null}
-          </dd>
+          </div>
+          <div className="truncate text-[11px] text-ink-500" title={`Fed by ${fedBy}\nFeeds ${feeds}`}>
+            <span className="text-ink-400">Fed by </span>
+            {fedBy}
+            <span className="text-ink-300"> → </span>
+            <span className="text-ink-400">feeds </span>
+            {feeds}
+          </div>
         </div>
-        <div>
-          <dt className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">Wrote</dt>
-          <dd className="mt-0.5 text-ink-800">{story.wrote}</dd>
-        </div>
-        <div>
-          <dt className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">Received from</dt>
-          <dd className="mt-0.5 text-ink-800">
-            {story.from.length
-              ? story.from.map(name).join(', ')
-              : 'Start of the pipeline (or external input)'}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">Sent to</dt>
-          <dd className="mt-0.5 text-ink-800">
-            {story.to.length ? story.to.map(name).join(', ') : 'End of this path'}
-          </dd>
-        </div>
-      </dl>
-      {failure || story.error ? (
-        <div className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5">
-          {(() => {
-            const fv = failure || failureView({ error: story.error })
-            return fv ? <FailureDetails failure={fv} /> : null
-          })()}
-        </div>
-      ) : null}
-      {evaluatorMetrics != null || confusionImagePath ? (
-        <EvaluatorResult metrics={evaluatorMetrics} confusionImagePath={confusionImagePath} path={path} />
-      ) : null}
-      {onBrowseOutputs ? (
-        <div className="mt-2">
+        {onClose ? (
           <button
             type="button"
-            className="btn-secondary !px-2.5 !py-1 text-[12px]"
-            onClick={() => onBrowseOutputs(story.id)}
+            className="btn-quiet shrink-0 !px-1 !py-0.5"
+            aria-label="Close step details"
+            title="Close (Esc)"
+            onClick={onClose}
           >
-            Open this step’s files
+            <X className="h-3.5 w-3.5" />
           </button>
+        ) : null}
+      </div>
+
+      {fv ? (
+        <div className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5">
+          <FailureDetails failure={fv} />
         </div>
       ) : null}
+
+      {resilience && (resilience.retries.length || resilience.routed || resilience.continued) ? (
+        <section aria-label="Retries and error handling" className="rounded-lg border border-amber-200 bg-amber-50/60 px-2.5 py-1.5 text-[11.5px] text-amber-950">
+          <div className="font-semibold">{resilienceText(resilience)}</div>
+          {resilience.retries.length ? (
+            <ol className="mt-0.5 space-y-0.5">
+              {resilience.retries.map((r, i) => (
+                <li key={i} className="min-w-0 truncate" title={[r.errorType, r.error].filter(Boolean).join(': ')}>
+                  Attempt {r.attempt ?? i + 2}
+                  {r.maxAttempts ? `/${r.maxAttempts}` : ''}
+                  {r.waitS ? ` after ${r.waitS} s` : ''}
+                  {r.errorType || r.error ? (
+                    <span className="text-amber-800">
+                      {' '}
+                      — previous try: {[r.errorType, r.error].filter(Boolean).join(': ')}
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+          ) : null}
+          {resilience.routed ? (
+            <p className="mt-0.5 break-words">
+              Failed{resilience.routed.attempt ? ` after ${resilience.routed.attempt} attempt${resilience.routed.attempt === 1 ? '' : 's'}` : ''} — the error went to the{' '}
+              <span className="font-mono">{resilience.routed.port}</span> branch instead of failing the run
+              {resilience.routed.errorType || resilience.routed.error
+                ? ` (${[resilience.routed.errorType, resilience.routed.error].filter(Boolean).join(': ')})`
+                : ''}
+              .
+            </p>
+          ) : null}
+          {resilience.continued ? (
+            <p className="mt-0.5 break-words">
+              Failed and the run continued (on_error = continue); steps needing its outputs were skipped
+              {resilience.continued.errorType || resilience.continued.error
+                ? ` (${[resilience.continued.errorType, resilience.continued.error].filter(Boolean).join(': ')})`
+                : ''}
+              .
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+
+      {evaluatorMetrics != null ? <EvaluatorResult metrics={evaluatorMetrics} path={path} /> : null}
+
+      {images.length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {images.map((img) => (
+            <button
+              key={img.path}
+              type="button"
+              className="group flex flex-col items-start gap-0.5 text-left"
+              title={`${img.name} — open in Run outputs`}
+              onClick={() => onOpenFile?.(img.path)}
+              disabled={!onOpenFile}
+            >
+              <BlobImage
+                path={img.path}
+                alt={img.name}
+                className="h-28 w-auto max-w-[14rem] rounded border border-ink-200 bg-white object-contain group-hover:border-accent-300"
+              />
+              <span className="max-w-[14rem] truncate text-[10px] text-ink-500">{friendlyArtifactName(img.name).label}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <section aria-label="Settings used" className="min-w-0">
+          <h4 className="mb-1 text-[11px] font-semibold text-ink-700">Settings used</h4>
+          <ConfigList entries={config} hasGraph={hasGraph} />
+        </section>
+        <section aria-label="Step logs" className="min-w-0">
+          <div className="mb-1 flex items-baseline justify-between gap-2">
+            <h4 className="text-[11px] font-semibold text-ink-700">
+              Logs
+              {logs && logs.total > 0 ? (
+                <span className="font-normal text-ink-400">
+                  {' '}
+                  · {logs.total > logs.lines.length ? `last ${logs.lines.length} of ${logs.total.toLocaleString()}` : logs.total}
+                </span>
+              ) : null}
+            </h4>
+            {onOpenLogs ? (
+              <button type="button" className="text-[11px] font-medium text-accent-800 hover:underline" onClick={onOpenLogs}>
+                Open in Logs
+              </button>
+            ) : null}
+          </div>
+          {logs && logs.lines.length > 0 ? (
+            <ol ref={logBox} className="max-h-40 overflow-y-auto rounded-md bg-ink-950 px-2 py-1 font-mono text-[10.5px] leading-[1.45] text-ink-100">
+              {logs.lines.map((l) => (
+                <li key={l.key} className={clsx('truncate', l.failed && 'text-rose-300')} title={l.text}>
+                  {l.clock ? <span className="text-ink-500">{l.clock} </span> : null}
+                  {l.text}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="text-[11px] text-ink-400">No log lines for this step.</p>
+          )}
+        </section>
+      </div>
+
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-t border-ink-100 pt-1.5 text-[11px]">
+        <span className="min-w-0 flex-1 truncate text-ink-600" title={story.wroteRaw || story.wrote}>
+          <span className="text-ink-400">Wrote </span>
+          {story.wrote}
+        </span>
+        {onBrowseOutputs ? (
+          <button type="button" className="btn-secondary shrink-0 !px-2 !py-0.5 text-[11px]" onClick={onBrowseOutputs}>
+            Open this step’s files
+          </button>
+        ) : null}
+      </div>
     </div>
   )
 }

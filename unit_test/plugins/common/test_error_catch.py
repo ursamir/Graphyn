@@ -40,13 +40,13 @@ def test_passthrough(installed_cls):
     node = installed_cls(config={}, seed=0)
     out = node.process({"input": {"ok": True}})
     assert out["output"]["ok"] is True
-    assert out["error"] is None
+    assert "error" not in out
 
 
 def test_error_input(installed_cls):
     node = installed_cls(config={}, seed=0)
     out = node.process({"input": None, "error": {"message": "boom"}})
-    assert out["output"] is None
+    assert "output" not in out
     assert out["error"]["message"] == "boom"
 
 

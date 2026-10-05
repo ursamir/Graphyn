@@ -174,7 +174,7 @@ class TestUploadFile:
         with patcher:
             resp = api_client.post(
                 "/api/v1/data/inputs/upload",
-                files={"file": ("test.txt", io.BytesIO(b"hello"), "text/plain")},
+                files={"file": ("test.exe", io.BytesIO(b"hello"), "application/octet-stream")},
             )
         assert resp.status_code == 400
 

@@ -2,8 +2,9 @@
 """
 Bounded Context:  REST API Layer
 Responsibility:   Unified Trace (backtrack) and thin audit log endpoints.
-Owns:             GET /trace, GET /audit (offset / run_id / resource_id / action / q
-                  filters over the whole log; total + has_more).
+Owns:             GET /trace, GET /audit (offset / run_id / resource_id / action / q /
+                  category / exclude_category filters over the whole log;
+                  total + has_more; events carry label + category).
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain storage logic — delegate to app.core.runs.trace / audit.
 Dependencies:     fastapi, app.core.runs.trace, app.core.trust.audit,
@@ -66,14 +67,22 @@ def get_audit(
     run_id: str | None = Query(None, description="Events of this run (full id or prefix >= 8), incl. replays of it"),
     resource_id: str | None = Query(None, description="Exact resource id (or prefix >= 8)"),
     action: str | None = Query(None, description="Exact action, or 'run.*' prefix"),
-    q: str | None = Query(None, description="Case-insensitive free-text search over the event"),
+    q: str | None = Query(None, description="Case-insensitive free-text search over the event (and its label)"),
+    category: str | None = Query(None, description="Only these categories (comma list): run, model, admin, system, ui"),
+    exclude_category: str | None = Query(None, description="Hide these categories (comma list), e.g. ui,system"),
 ):
-    """Newest-first append-only audit events, filtered and paged over the whole log."""
+    """Newest-first append-only audit events, filtered and paged over the whole log.
+
+    Every event carries read-time ``label`` (plain words, e.g. "Model
+    registered") and ``category`` (run | model | admin | system | ui)
+    computed from its ``action``; raw ``action`` is unchanged.
+    """
     from app.core.trust.audit import list_audit
 
     events, total = list_audit(
         limit=limit, offset=offset, run_id=run_id, resource_id=resource_id,
         action=action, q=q, with_total=True,
+        category=category, exclude_category=exclude_category,
     )
     return {
         "events": events,

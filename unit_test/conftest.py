@@ -230,6 +230,8 @@ def _isolate_api_token_env(monkeypatch: pytest.MonkeyPatch) -> None:
     TestClient call return 401. Auth-gate tests set their own token via fixtures.
     """
     monkeypatch.delenv("GRAPHYN_API_TOKEN", raising=False)
+    monkeypatch.delenv("GRAPHYN_API_TOKENS", raising=False)
+    monkeypatch.delenv("GRAPHYN_API_TOKENS_FILE", raising=False)
     # Keep local defaults unless a test overrides.
     if "GRAPHYN_AUTH_REQUIRED" not in __import__("os").environ:
         monkeypatch.delenv("GRAPHYN_AUTH_REQUIRED", raising=False)

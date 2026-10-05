@@ -13,14 +13,33 @@ Graphyn today is a **single-operator** platform: one shared API token (when conf
 |---|---|---|
 | **Unauthenticated-dev** | `GRAPHYN_API_TOKEN` unset **and** auth not required | All `/api/v1/*` routes and MCP tools accept callers without a token. Intended for local single-user development only. |
 | **Shared bearer** | `GRAPHYN_API_TOKEN` set | REST requires `Authorization: Bearer <token>`; MCP requires `_meta.auth_token`. Same token for every operator and worker. |
+| **Named tokens** | `GRAPHYN_API_TOKENS` and/or `GRAPHYN_API_TOKENS_FILE` set | Each listed token is accepted (REST + MCP) alongside `GRAPHYN_API_TOKEN`. A mapped token **binds the audit actor**: events, run meta and sealed run records record the mapped name with `actor_verified: true`; a differing `X-Actor` is only `claimed_actor`. This is attribution, **not** authorization — every valid token still has full control-plane access. |
 | **Fail-closed** | `GRAPHYN_AUTH_REQUIRED=1` **or** `GRAPHYN_ENV` ∈ {`production`,`prod`,`staging`} | Empty `GRAPHYN_API_TOKEN` is rejected (401 / MCP unauthorized). Set a token before exposing the API. |
 
-Unauthenticated by design (always): `GET /`, `GET /health`.  
+**Audit identity.** With the single shared token (or no auth) the actor is the self-declared `X-Actor` header (or `"unidentified"`) and is recorded `actor_verified: false`. `"system"` is reserved for internal background jobs (no HTTP request). `GET /api/v1/me` shows the caller how they will be recorded.
+
+Unauthenticated by design (always): `GET /`, `GET /health`. `POST /api/v1/hooks/{workspace}/{pipeline}` is outside the global bearer dependency but **authenticates itself** (§1a).  
 **DNS-rebinding guard (unauthenticated-dev):** while `GRAPHYN_API_TOKEN` is unset, every request whose `Host` is not `localhost` / `*.localhost` / an IP literal (incl. `[::1]`) / `graphyn-api` (compose service name, used by the UI nginx proxy for `/files`) / `testserver` gets **403**. Add LAN / DNS names with `GRAPHYN_ALLOWED_HOSTS=name1,name2` (`*` disables the guard), or set a token (guard is off once a token is configured). IP literals are always accepted because a rebinding page can only present its own DNS name.  
 Static mounts `/files`, `/input-files`, `/run-files` use the **same** bearer policy as `/api/v1` when a token is configured.  
 OpenAPI UI (`/docs`, `/redoc`, `/openapi.json`) is not bearer-gated — treat the API host as operator-trusted network.
 
 Sensitive routers (plugins install, credentials, workers admin/job claim, deploy-related project packaging, proposals) are mounted with the **same** `_auth_dep` as the rest of `/api/v1`. There is no separate admin IdP.
+
+
+### 1a. Inbound webhooks and approval gates
+
+**Inbound webhooks** (`POST /api/v1/hooks/{workspace}/{pipeline}`) accept exactly two credentials:
+
+| Credential | Check | Recorded actor |
+|---|---|---|
+| HMAC-SHA256 | `X-Graphyn-Signature: sha256=HMAC(secret, "<X-Graphyn-Timestamp>." + raw_body)`, constant-time compare. Per-pipeline secret = credential connection of kind `inbound_webhook` (sealed in the credentials store; shown once by `…/hook/rotate`; only its id is in `hook.json`). | `webhook:<hook_id>`, `actor_verified: true` |
+| Bearer token | Same token rules as `/api/v1` (`GRAPHYN_API_TOKEN` or a `GRAPHYN_API_TOKENS` token). | `webhook:<hook_id>`; verified only for a mapped token (name kept as `claimed_actor`) |
+
+No credential → 401, even in unauthenticated-dev (the hook route never falls back to "allow all"). A disabled / missing hook → 404 before any signature work.
+
+**Replay protection:** the timestamp is inside the MAC and must be within ±`GRAPHYN_WEBHOOK_TOLERANCE_S` (default 300 s); a signature already accepted within the window is refused (409). The seen-signature cache is **in-process** — with several API workers a replay could land once per worker inside the window; use `Idempotency-Key` (24 h, persisted per hook) for exactly-once starts. Other limits: body cap `GRAPHYN_WEBHOOK_MAX_BYTES` (1 MiB), per-hook in-process token bucket (`GRAPHYN_WEBHOOK_RATE_BURST` / `GRAPHYN_WEBHOOK_RATE_PER_MIN`), `?env=` restricted to the hook's `allowed_envs` (the query string is not signed). Credentials (`authorization`, `cookie`, signature) are never forwarded to the graph; payload values are stored only as the run's override inputs, while run meta / audit keep `payload_sha256`, size, source IP and idempotency key. Refusals are audited (`webhook.rejected`).
+
+**Approval gates** (`hitl_approve`): decisions arrive only out-of-band — `POST /runs/{id}/gates/{node}/decision` (bearer, token-bound actor) or MCP `decide_gate`. The decision file is create-only and must match the gate's random `request_id`, so an upstream node cannot self-approve and a decision cannot be overwritten. MCP **approve** requires `GRAPHYN_MCP_HUMAN_APPROVAL=1` (an agent cannot approve its own gate by default); MCP reject is always allowed and recorded as `mcp:<actor>` unverified unless the MCP token is mapped. `role` is caller-declared (checked against `approver_roles`, not authenticated). Audit `gate.decision` stores `comment_sha256`, never the comment.
 
 ---
 
@@ -72,7 +91,7 @@ Once multi-user identity exists, **cross-project access must be prevented by def
 | LLM endpoint binding | A resolved API key is sent only to the endpoint bound to its credential: the connection's `base_url` (or provider default when unset). A node `base_url` that differs is refused. For env / named-secret keys the binding is the provider default (`*_BASE_URL` env); a different host needs `GRAPHYN_LLM_BASE_URL_ALLOWLIST=api.groq.com,…` or (preferred) a connection carrying that `base_url`. Plugins that build their own request (`structured_llm`, `asr_transcribe` openai_compat) use `llm_client.resolve_llm_endpoint()` for the same binding. |
 | Credential PATCH | A merge update that changes an endpoint field (`base_url`, `host`, `port`, `url`, `endpoint`) must re-supply every stored secret field (or use `rotate=true` with a full payload) — a stored key is never re-bound to a new host implicitly. |
 | Webhook URL | Treated as a secret (path/query usually is the token). REST **and** MCP (`get_webhooks` / `put_webhooks` / `test_webhook`) return `redact_webhook_url_for_api()` form (`scheme://host/***`); audit `resource_id` is redacted; audit export always re-serialises through `normalize_audit_event` (raw `events.jsonl` is never returned); egress/webhook error text and logs never embed the full URL. |
-| Output downloads | `GET /outputs/file` refuses config/secret files inside the jail roots: `webhooks.json`, `registry.json`, `schedules.json`, `notifications.jsonl`, dotfiles / `.env*`, `*.sqlite`/`*.db`/`*.key`/`*.pem`/`*.jsonl`, and anything under `credentials/`, `secrets/`, `audit/`, `plugins/`, `distributed/` or a dot-directory (403). |
+| Output downloads | `GET /outputs/file` refuses config/secret files inside the jail roots: `webhooks.json`, `registry.json`, `schedules.json`, `notifications.jsonl`, dotfiles / `.env*`, `*.sqlite`/`*.db`/`*.key`/`*.pem`/`*.jsonl`, and anything under `credentials/`, `secrets/`, `audit/`, `plugins/`, `distributed/` or a dot-directory (403). Explicit downloads (`?download=1`, run outputs zip, ship package download) are audited with path, size, sha256 and the token-bound actor (`model.download` / `run.output_download` / `run.outputs_zip` / `ship.download`); previews and probes are not. |
 | Dataset paths | MCP `list_dataset_versions` / `get_dataset_version`, `POST /projects/{name}/quality-check` and `QualityChecker.run` validate project (`[\w-]{1,128}`) and version (`v<N>[.<N>…]`) and require the resolved path to stay under `datasets/output` (422 / `validation_failed`; no `manifest.json` / `quality_report.json` written elsewhere). |
 | Plugin sources | URL userinfo (`https://user:TOKEN@…`) is used for the fetch only; the persisted `PluginRecord.source`, install logs, REST dependency-job errors and MCP plugin errors use `redact_url_userinfo()`. |
 | Logging | Store/API paths must not log secret values |
@@ -84,7 +103,7 @@ Once multi-user identity exists, **cross-project access must be prevented by def
 | Capability | Trust assumption | Hardening today | Not claimed |
 |---|---|---|---|
 | `python_code` | Graph authors are trusted operators | AST import/call filters; any `_`-prefixed attribute rejected; exec/spawn families (`posix_spawn`, `execv*`, `spawn*`, `fork`, `kill`, …) and frame/code introspection attributes (`gi_frame`, `f_globals`, `tb_frame`, …) rejected; `json` / `math` are curated wrapper namespaces (never real modules) and `import` resolves only to them; `str.format`/`format_map` banned; `allow_network=False` by default and refused entirely when egress mode is `restricted`; `open()` needs explicit `allowed_paths` | Process/container sandbox |
-| `http_request` / `http_webhook` | Same; arbitrary HTTP is intentional | Optional `GRAPHYN_HTTP_EGRESS_MODE=restricted` + allowlist | Full SSRF-proof pin-IP client (TOCTOU remains) |
+| `http_request` / `http_webhook` | Same; arbitrary HTTP is intentional | Optional `GRAPHYN_HTTP_EGRESS_MODE=restricted` + allowlist; httpx only with `follow_redirects=False` (a 3xx is a failure, so a redirect cannot reach an unchecked host — the `http_webhook` urllib fallback, which followed redirects, was removed); `http_request` caps the streamed body (`max_response_bytes`) and retries only retryable statuses on idempotent methods / with `Idempotency-Key`; credentials come from a named `connection_id` (`http_auth` bound to `allowed_hosts`, `webhook` URL as secret) or a secret *name* — never an inline secret field | Full SSRF-proof pin-IP client (TOCTOU remains) |
 | ASR / `structured_llm` HTTP | Calls vendor / configured provider URLs | `validate_http_egress_url` before every `httpx` call (same helper as `http_request` / `http_webhook`) | Pin-IP connect (TOCTOU remains) |
 | Platform webhooks (`WebhookService`) | Admin-configured callback | Always blocks private/loopback at save/send; POST connects to a validated public IP (`validated_webhook_ips`) with the original Host/SNI | DNS that returns a new public address after the pin is chosen |
 
@@ -124,6 +143,12 @@ In restricted mode the shared helper (`app/core/trust/egress.py`) used by `http_
 2. Blocks known metadata hostnames (`metadata.google.internal`, …)
 3. Optionally requires the host allowlist
 4. Resolves DNS (`getaddrinfo`) and rejects every address that is not `ip.is_global` — private / link-local / loopback / ULA / reserved / multicast / unspecified **and** CGNAT/shared `100.64.0.0/10` (incl. Alibaba metadata `100.100.100.200`), benchmarking, documentation, IETF-protocol ranges; IPv4-mapped / 6to4 / Teredo IPv6 forms are checked against the embedded IPv4 (including `169.254.169.254`). Platform webhooks use the same `is_blocked_ip`.
+
+**Redirects:** workflow HTTP nodes never follow redirects. Egress is validated for the URL actually requested and a `3xx` response fails the node, so a public URL cannot redirect into a private range. (`http_webhook` used to fall back to `urllib` when httpx was missing; `urllib` follows redirects without re-validation, so the fallback was removed and httpx is required.)
+
+**Workflow outbound side effects:** `send_email` sends only to config `to` unless `allow_payload_recipients=true`, and `allowed_recipient_domains` restricts every recipient. `csv_table` / `object_store` paths are jailed to the workspace (`write_paths.jail_relative_path`: no absolute, `~`, drive letter or `..`; symlink escapes rejected).
+
+**External call audit (G6):** every attempt by `http_request`, `http_webhook`, `send_email`, `llm_chat` and `structured_llm` is recorded via `Node.record_external_call` and sealed into `prove.json` as `external_calls`: kind, method, redacted URL (no userinfo / query / fragment; webhook URLs only `scheme://host/***`; SMTP as `smtp://relay:port`), status, `sha256:` of request and response bodies (never the bodies), duration, `connection_id`, node id. Calls before a node failure are recorded too. Secrets never enter the record. Not yet covered: isolated-runtime plugins and Mode B workers.
 
 **Limitations:** DNS is checked once before the HTTP client runs; the client may resolve again (rebinding TOCTOU). Pinning the TCP connection to the validated IP (as `WebhookService` does) is not yet applied to these nodes. IPv6 coverage depends on platform `getaddrinfo`.
 

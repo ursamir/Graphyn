@@ -3,6 +3,8 @@ import { CalendarClock as EmptyCalendarClock, ScrollText as EmptyScrollText } fr
 import { RefreshCw, Trash2 } from 'lucide-react'
 import { workspaceErrorMessage } from '../../lib/workspaceName'
 import { apiJson } from '../../api/client'
+import { CRON_PRESETS, describeCron, intervalText, scheduleCadence } from '../../lib/cron'
+import { ActorName } from '../../components/ActorName'
 import { unwrapList } from '../../api/unwrapList'
 import {
   formatCleanupToast,
@@ -15,11 +17,19 @@ import { useAppStore } from '../../store/appStore'
 import { goView, guardedNavigatePath } from '../../routes/nav'
 import { paths } from '../../routes/paths'
 import {
-  auditActionLabel,
+  AUDIT_CATEGORIES,
+  AUDIT_CATEGORY_LABEL,
+  DEFAULT_AUDIT_CATEGORIES,
   auditActionTone,
+  auditActorDisplay,
+  auditCategory,
+  auditCategoryQuery,
+  auditEventLabel,
   auditMatchesQuery,
+  auditResourceLabel,
   auditTarget,
   nextAuditLimit,
+  type AuditCategory,
   relatedRunId,
   type AuditEvent,
   type AuditTarget,
@@ -77,6 +87,8 @@ type ScheduleRow = {
   project?: string
   pipeline?: string
   interval_minutes?: number
+  /** 5-field UTC cron (overrides interval_minutes) — newer APIs only. */
+  cron?: string | null
   enabled?: boolean
   next_run_at?: string
   last_run_id?: string
@@ -87,8 +99,12 @@ type ScheduleRow = {
   disabled_reason?: string
 }
 
+/** Plain-language action, technical name in the tooltip. */
+const STUCK_RUNS_TIP =
+  'Reconcile abandoned runs — POST /system/cleanup with reconcile_abandoned: RUNNING/QUEUED runs with no heartbeat for 1h are marked FAILED. Nothing is deleted.'
+
 /** Shared label + control styling so every Add-schedule field lines up. */
-const SCHED_LABEL = 'mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-400'
+const SCHED_LABEL = 'mb-1 block text-[12px] font-semibold text-ink-600'
 const SCHED_FIELD = 'h-9 w-full rounded-lg border border-ink-200 bg-white px-3 text-sm disabled:bg-ink-50 disabled:text-ink-400'
 
 export default function SystemView() {
@@ -129,6 +145,11 @@ export default function SystemView() {
   const [auditError, setAuditError] = React.useState<string | null>(null)
   const [auditActorFilter, setAuditActorFilter] = React.useState('')
   const [auditResourceFilter, setAuditResourceFilter] = React.useState('')
+  /** Housekeeping events (notifications.*) are hidden unless this is on. */
+  /** Category chips (Runs · Models · Data · Admin · System · UI); UI + System hidden by default (server `exclude_category`). */
+  const [auditCategories, setAuditCategories] = React.useState<ReadonlySet<AuditCategory>>(DEFAULT_AUDIT_CATEGORIES)
+  const auditCatQueryRef = React.useRef(auditCategoryQuery(DEFAULT_AUDIT_CATEGORIES))
+  auditCatQueryRef.current = auditCategoryQuery(auditCategories)
   const [authStatus, setAuthStatus] = React.useState<{
     auth_required?: boolean
     token_configured?: boolean
@@ -142,6 +163,9 @@ export default function SystemView() {
   const [schedProject, setSchedProject] = React.useState('')
   const [schedPipeline, setSchedPipeline] = React.useState('')
   const [schedInterval, setSchedInterval] = React.useState(60)
+  const [schedCadence, setSchedCadence] = React.useState<'interval' | 'cron'>('interval')
+  const [schedCron, setSchedCron] = React.useState('0 9 * * 1-5')
+  const schedCronPreview = describeCron(schedCron)
   const [schedEnv, setSchedEnv] = React.useState<'draft' | 'staging' | 'prod'>('draft')
   const [projectOptions, setProjectOptions] = React.useState<string[]>([])
   const [pipelineOptions, setPipelineOptions] = React.useState<string[]>([])
@@ -166,8 +190,8 @@ export default function SystemView() {
         const n = Array.isArray(res?.removed) ? res.removed.length : 0
         pushToast(
           n
-            ? `Removed ${n} unused plugin venv${n === 1 ? '' : 's'}`
-            : 'No unused plugin venvs to remove',
+            ? `Removed ${n} unused plugin environment${n === 1 ? '' : 's'}`
+            : 'No unused plugin environments to remove',
           'success',
         )
       })
@@ -189,7 +213,9 @@ export default function SystemView() {
         url_configured?: boolean
         resource_version?: string
       }>('/system/webhooks'),
-      apiJson<{ events?: unknown[]; has_more?: boolean }>('/audit', { query: { limit: auditLimitRef.current } }),
+      apiJson<{ events?: unknown[]; has_more?: boolean }>('/audit', {
+        query: { limit: auditLimitRef.current, ...auditCatQueryRef.current },
+      }),
       apiJson<{
         auth_required?: boolean
         token_configured?: boolean
@@ -335,14 +361,53 @@ export default function SystemView() {
     const actorQ = auditActorFilter.trim().toLowerCase()
     const resourceQ = auditResourceFilter.trim().toLowerCase()
     return auditEvents.filter((ev) => {
-      if (actorQ && !String(ev.actor || '').toLowerCase().includes(actorQ)) return false
+      // Client-side too: older APIs ignore `exclude_category`.
+      if (!auditCategories.has(auditCategory(ev))) return false
+      if (actorQ) {
+        const who = `${ev.actor || ''} ${auditActorDisplay(ev).label}`.toLowerCase()
+        if (!who.includes(actorQ)) return false
+      }
       if (resourceQ) {
-        const blob = `${ev.resource_type || ''} ${ev.resource_id || ''} ${ev.action || ''} ${auditActionLabel(ev.action)}`.toLowerCase()
+        const blob = `${ev.resource_type || ''} ${ev.resource_id || ''} ${ev.action || ''} ${auditEventLabel(ev)}`.toLowerCase()
         if (!blob.includes(resourceQ)) return false
       }
       return auditMatchesQuery(ev, auditQuery)
     })
-  }, [auditEvents, auditActorFilter, auditResourceFilter, auditQuery])
+  }, [auditEvents, auditActorFilter, auditResourceFilter, auditQuery, auditCategories])
+
+  /** Category change → refetch the first page with the server-side filter. */
+  const auditCatKey = [...auditCategories].sort().join(',')
+  const firstAuditCatKey = React.useRef(auditCatKey)
+  React.useEffect(() => {
+    if (firstAuditCatKey.current === auditCatKey) return
+    firstAuditCatKey.current = auditCatKey
+    let cancelled = false
+    setAuditLimit(100)
+    apiJson<{ events?: unknown[]; has_more?: boolean }>('/audit', {
+      query: { limit: 100, ...auditCategoryQuery(new Set(auditCatKey.split(',').filter(Boolean))) },
+    })
+      .then((res) => {
+        if (cancelled) return
+        const events = Array.isArray(res?.events) ? res.events : []
+        setAuditEvents(events.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object') as AuditEvent[])
+        setAuditHasMore(typeof res?.has_more === 'boolean' ? res.has_more : null)
+        setAuditError(null)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setAuditError(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [auditCatKey])
+
+  const toggleAuditCategory = (c: AuditCategory) =>
+    setAuditCategories((prev) => {
+      const next = new Set(prev)
+      if (next.has(c)) next.delete(c)
+      else next.add(c)
+      return next.size === 0 ? prev : next
+    })
 
   /**
    * "Load more": with offset paging (new API, `has_more` present) append the next 100 older
@@ -353,7 +418,7 @@ export default function SystemView() {
     try {
       if (auditHasMore !== null) {
         const res = await apiJson<{ events?: unknown[]; has_more?: boolean }>('/audit', {
-          query: { limit: 100, offset: auditEvents.length },
+          query: { limit: 100, offset: auditEvents.length, ...auditCatQueryRef.current },
         })
         const more = (Array.isArray(res?.events) ? res.events : []).filter(
           (e): e is Record<string, unknown> => !!e && typeof e === 'object',
@@ -364,7 +429,7 @@ export default function SystemView() {
         return
       }
       const next = nextAuditLimit(auditLimit)
-      const res = await apiJson<{ events?: unknown[] }>('/audit', { query: { limit: next } })
+      const res = await apiJson<{ events?: unknown[] }>('/audit', { query: { limit: next, ...auditCatQueryRef.current } })
       const events = Array.isArray(res?.events) ? res.events : []
       setAuditEvents(events.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object') as AuditEvent[])
       setAuditLimit(next)
@@ -455,8 +520,8 @@ export default function SystemView() {
 
       {systemTab === 'status' && (
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-ink-200 bg-white px-4 py-3 text-sm shadow-sm">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Backend</span>
+          <div className="ui-card flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-[12px] font-semibold text-ink-600">Backend</span>
             {backendLabel ? (
               <span
                 className="rounded-full border border-ink-200 bg-ink-50 px-2.5 py-0.5 text-[12px] font-medium text-ink-800"
@@ -488,49 +553,14 @@ export default function SystemView() {
             >
               MCP: <code className="font-mono text-[10px]">graphyn mcp</code>
             </span>
-            <button
-              type="button"
-              className="btn-secondary ml-auto"
-              disabled={reconciling || cleanupBusy}
-              onClick={() => {
-                if (cleanupInFlight.current) return
-                cleanupInFlight.current = true
-                setReconciling(true)
-                void apiJson('/system/cleanup', {
-                  method: 'POST',
-                  timeoutMs: 600000,
-                  body: JSON.stringify({
-                    older_than_days: 36500,
-                    delete_cache: false,
-                    delete_artifacts: false,
-                    keep_latest: true,
-                    reconcile_abandoned: true,
-                    stale_after_hours: 1,
-                  }),
-                })
-                  .then((res) => {
-                    pushToast(formatCleanupToast(res), 'success')
-                    void refresh()
-                  })
-                  .catch((err) =>
-                    pushToast(err instanceof Error ? err.message : String(err), 'error'),
-                  )
-                  .finally(() => {
-                    cleanupInFlight.current = false
-                    setReconciling(false)
-                  })
-              }}
-            >
-              {reconciling ? 'Reconciling…' : 'Reconcile abandoned runs'}
-            </button>
           </div>
 
           {panelErrors.metrics ? (
             <p className="text-xs text-rose-700">{panelErrors.metrics}</p>
           ) : null}
           {metricsObj ? (
-            <div className="flex flex-wrap items-stretch gap-2 rounded-2xl border border-ink-200 bg-white px-3 py-2.5 shadow-sm">
-              <span className="self-center text-[11px] font-semibold uppercase tracking-wide text-ink-400 px-1">
+            <div className="flex flex-wrap items-stretch gap-2 ui-card ui-card-sm">
+              <span className="self-center px-1 text-[12px] font-semibold text-ink-600">
                 Metrics
               </span>
               {(
@@ -571,7 +601,7 @@ export default function SystemView() {
                   key={label}
                   className="min-w-[4.5rem] rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-1.5"
                 >
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+                  <div className="text-[11px] font-medium text-ink-500">
                     {label}
                   </div>
                   <div className="font-mono text-sm font-semibold text-ink-900">{value}</div>
@@ -581,7 +611,7 @@ export default function SystemView() {
           ) : null}
 
           <div className="grid gap-4 md:grid-cols-2">
-            <section className="rounded-2xl border border-ink-200 bg-white p-4">
+            <section className="ui-card">
               <div className="mb-3 flex items-center justify-between">
                 <h3 className="text-sm font-semibold">Health</h3>
                 <StatusBadge status={badgeFromPayload(health, ['ok'])} />
@@ -608,7 +638,7 @@ export default function SystemView() {
               </p>
             </section>
 
-            <section className="rounded-2xl border border-ink-200 bg-white p-4">
+            <section className="ui-card">
               <div className="mb-3 flex items-center justify-between">
                 <h3 className="text-sm font-semibold">Readiness</h3>
                 <StatusBadge status={badgeFromPayload(ready, ['ready'])} />
@@ -689,12 +719,60 @@ export default function SystemView() {
             </section>
           </div>
 
-          <section className="rounded-2xl border border-ink-200 bg-white px-4 py-3">
+          <section className="ui-card space-y-3" aria-labelledby="ops-maintenance-title">
+            <h3 id="ops-maintenance-title" className="text-sm font-semibold text-ink-900">
+              Maintenance
+            </h3>
             <div className="flex flex-wrap items-center gap-3">
               <div className="min-w-0 flex-1">
-                <h3 className="text-sm font-semibold text-ink-900">Maintenance</h3>
+                <div className="text-[13px] font-medium text-ink-800">Stuck runs</div>
                 <p className="text-[12px] text-ink-500">
-                  Remove unused isolated plugin environments left behind after uninstalls.
+                  Runs still marked running or queued with no progress for over an hour (for example
+                  after an API restart) are marked as failed.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-secondary"
+                title={STUCK_RUNS_TIP}
+                disabled={reconciling || cleanupBusy}
+                onClick={() => {
+                  if (cleanupInFlight.current) return
+                  cleanupInFlight.current = true
+                  setReconciling(true)
+                  void apiJson('/system/cleanup', {
+                    method: 'POST',
+                    timeoutMs: 600000,
+                    body: JSON.stringify({
+                      older_than_days: 36500,
+                      delete_cache: false,
+                      delete_artifacts: false,
+                      keep_latest: true,
+                      reconcile_abandoned: true,
+                      stale_after_hours: 1,
+                    }),
+                  })
+                    .then((res) => {
+                      pushToast(formatCleanupToast(res), 'success')
+                      void refresh()
+                    })
+                    .catch((err) =>
+                      pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                    )
+                    .finally(() => {
+                      cleanupInFlight.current = false
+                      setReconciling(false)
+                    })
+                }}
+              >
+                {reconciling ? 'Marking…' : 'Mark stuck runs as failed'}
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 border-t border-ink-100 pt-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-medium text-ink-800">Plugin environments</div>
+                <p className="text-[12px] text-ink-500">
+                  Remove own-environment folders left behind after plugins are uninstalled.
                 </p>
               </div>
               <button
@@ -702,9 +780,10 @@ export default function SystemView() {
                 className="btn-secondary"
                 disabled={venvGcBusy}
                 onClick={runPluginVenvGc}
+                title="Delete unused per-plugin virtualenvs under ~/.graphyn/plugins/venvs (POST /plugins/venvs/gc)"
               >
                 <Trash2 className="h-3.5 w-3.5" />
-                {venvGcBusy ? 'Cleaning…' : 'Clean unused plugin venvs'}
+                {venvGcBusy ? 'Cleaning…' : 'Clean unused environments'}
               </button>
             </div>
           </section>
@@ -712,7 +791,7 @@ export default function SystemView() {
       )}
 
       {systemTab === 'audit' && (
-        <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
+        <section className="ui-card space-y-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold">Audit events</h3>
@@ -738,23 +817,46 @@ export default function SystemView() {
               value={auditQuery}
               onChange={(e) => setAuditQuery(e.target.value)}
               placeholder="Search run id / resource"
-              className="min-w-[14rem] rounded-lg border border-ink-200 px-3 py-1.5 font-mono text-sm"
+              className="min-w-0 flex-1 basis-56 rounded-lg border border-ink-200 px-3 py-1.5 font-mono text-sm"
               aria-label="Search audit by run id or resource"
             />
             <input
               value={auditActorFilter}
               onChange={(e) => setAuditActorFilter(e.target.value)}
               placeholder="Filter actor"
-              className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+              className="min-w-0 flex-1 basis-32 rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
               aria-label="Filter audit by actor"
             />
             <input
               value={auditResourceFilter}
               onChange={(e) => setAuditResourceFilter(e.target.value)}
               placeholder="Filter type / action"
-              className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+              className="min-w-0 flex-1 basis-32 rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
               aria-label="Filter audit by resource type or action"
             />
+            <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Audit categories">
+              {AUDIT_CATEGORIES.map((c) => {
+                const on = auditCategories.has(c)
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    className={on ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
+                    aria-pressed={on}
+                    title={
+                      c === 'ui'
+                        ? 'Console housekeeping (notifications read …) — hidden by default'
+                        : c === 'system'
+                          ? 'Automatic events (schedule checks, workers, server) — hidden by default'
+                          : `${on ? 'Hide' : 'Show'} ${AUDIT_CATEGORY_LABEL[c].toLowerCase()} events`
+                    }
+                    onClick={() => toggleAuditCategory(c)}
+                  >
+                    {AUDIT_CATEGORY_LABEL[c]}
+                  </button>
+                )
+              })}
+            </div>
             {(auditActorFilter || auditResourceFilter || auditQuery) && (
               <button
                 type="button"
@@ -782,13 +884,16 @@ export default function SystemView() {
             />
           ) : filteredAuditEvents.length === 0 ? (
             <p className="py-4 text-center text-sm text-ink-500">
-              No events match these filters
-              {auditLimit < 1000 && auditEvents.length >= auditLimit ? ' in the loaded events — try Load more.' : '.'}
+              {auditEvents.every((ev) => !auditCategories.has(auditCategory(ev)))
+                ? 'Only events of hidden categories so far — turn on System or UI above to see them.'
+                : `No events match these filters${
+                    auditLimit < 1000 && auditEvents.length >= auditLimit ? ' in the loaded events — try Load more.' : '.'
+                  }`}
             </p>
           ) : (
             <div className="overflow-x-auto rounded-xl border border-ink-100">
-              <table className="w-full text-left text-[12px]">
-                <thead className="border-b border-ink-100 bg-ink-50/80 text-[10px] uppercase tracking-wide text-ink-500">
+              <table className="w-full min-w-[34rem] text-left text-[12px]">
+                <thead className="border-b border-ink-100 bg-ink-50/80 text-[11px] text-ink-500">
                   <tr>
                     <th className="px-2 py-1.5 font-semibold">When</th>
                     <th className="px-2 py-1.5 font-semibold">Actor</th>
@@ -802,14 +907,30 @@ export default function SystemView() {
                     const target = auditTarget(ev)
                     const related = relatedRunId(ev)
                     const tone = auditActionTone(ev.action, ev.result)
+                    const who = auditActorDisplay(ev)
+                    const resourceText = auditResourceLabel(ev)
                     return (
                       <tr key={ev.event_id || `${when}-${i}`} className="border-b border-ink-50 align-top last:border-0">
                         <td className="whitespace-nowrap px-2 py-1 text-ink-600" title={formatLocaleDateTime(when)}>
                           {when ? formatRelativeTime(when) : '—'}
                         </td>
                         <td className="max-w-[10rem] px-2 py-1 text-ink-800">
-                          <span className="block truncate" title={ev.actor || undefined}>{ev.actor || '—'}</span>
-                          {ev.actor_kind ? <span className="block text-[10px] text-ink-400">{ev.actor_kind}</span> : null}
+                          {who.muted ? (
+                            <span
+                              className="block truncate text-ink-400"
+                              title={`No name recorded (${who.detail}${ev.claimed_actor ? ` · claimed "${ev.claimed_actor}"` : ''}). Set your name under Access.`}
+                            >
+                              Unidentified
+                            </span>
+                          ) : (
+                            <ActorName
+                              actor={ev.actor}
+                              verified={typeof ev.actor_verified === 'boolean' ? ev.actor_verified : undefined}
+                              claimed={ev.claimed_actor}
+                              className="max-w-full"
+                            />
+                          )}
+                          {who.detail && !who.muted ? <span className="block text-[10px] text-ink-400">{who.detail}</span> : null}
                         </td>
                         <td className="whitespace-nowrap px-2 py-1">
                           <span
@@ -826,23 +947,25 @@ export default function SystemView() {
                             }
                             title={`${ev.action || ''}${ev.result && ev.result !== 'success' ? ` · ${ev.result}` : ''}`}
                           >
-                            {auditActionLabel(ev.action)}
+                            {auditEventLabel(ev)}
                           </span>
                         </td>
-                        <td className="min-w-0 px-2 py-1 font-mono text-[10.5px] text-ink-600">
+                        <td className="min-w-0 px-2 py-1 text-[11px] text-ink-600">
                           <span className="mr-1 text-ink-400">{ev.resource_type || '—'}</span>
                           {ev.resource_id ? (
                             target ? (
                               <button
                                 type="button"
-                                className="break-all text-left text-accent-800 underline-offset-2 hover:underline"
+                                className="break-all text-left font-mono text-accent-800 underline-offset-2 hover:underline"
                                 title={`Open ${ev.resource_type} ${ev.resource_id}`}
                                 onClick={() => openAuditTarget(target)}
                               >
-                                {ev.resource_id}
+                                {resourceText}
                               </button>
                             ) : (
-                              <span className="break-all">{ev.resource_id}</span>
+                              <span className="break-all font-mono" title={ev.resource_id}>
+                                {resourceText}
+                              </span>
                             )
                           ) : null}
                           {related ? (
@@ -850,11 +973,11 @@ export default function SystemView() {
                               run{' '}
                               <button
                                 type="button"
-                                className="break-all text-accent-800 underline-offset-2 hover:underline"
+                                className="font-mono text-accent-800 underline-offset-2 hover:underline"
                                 title={`Open run ${related}`}
                                 onClick={() => openAuditTarget({ kind: 'run', runId: related, project: '' })}
                               >
-                                {related}
+                                {related.length > 12 ? related.slice(0, 8) : related}
                               </button>
                             </span>
                           ) : null}
@@ -887,14 +1010,14 @@ export default function SystemView() {
       )}
 
       {systemTab === 'schedules' && (
-      <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
+      <section className="ui-card space-y-3">
         {panelErrors.schedules ? (
           <p className="text-xs text-rose-700">{panelErrors.schedules}</p>
         ) : null}
         <div>
           <h3 className="text-sm font-semibold">Schedules</h3>
           <p className="text-xs text-ink-500">
-            Run a saved pipeline on a fixed interval while this API is up. Draft runs the pipeline
+            Run a saved pipeline every N minutes or on a cron (UTC) while this API is up. Draft runs the pipeline
             as saved. Staging and prod run a published version.
           </p>
         </div>
@@ -975,18 +1098,41 @@ export default function SystemView() {
               />
             )}
           </label>
-          <label className="block text-sm text-ink-600">
-            <span className={SCHED_LABEL}>Interval (minutes)</span>
-            <input
-              type="number"
-              min={1}
-              className={SCHED_FIELD}
-              placeholder="e.g. 60"
-              value={schedInterval}
-              onChange={(e) => setSchedInterval(Number(e.target.value) || 60)}
-              aria-label="Interval in minutes"
-            />
-          </label>
+          <div className="block text-sm text-ink-600">
+            <span className={SCHED_LABEL}>Repeat</span>
+            <div className="flex gap-1">
+              <select
+                className={`${SCHED_FIELD} !w-auto shrink-0 !px-2`}
+                value={schedCadence}
+                onChange={(e) => setSchedCadence(e.target.value as 'interval' | 'cron')}
+                aria-label="Repeat by"
+              >
+                <option value="interval">Minutes</option>
+                <option value="cron">Cron</option>
+              </select>
+              {schedCadence === 'interval' ? (
+                <input
+                  type="number"
+                  min={1}
+                  className={`${SCHED_FIELD} min-w-0`}
+                  placeholder="e.g. 60"
+                  value={schedInterval}
+                  onChange={(e) => setSchedInterval(Number(e.target.value) || 60)}
+                  aria-label="Interval in minutes"
+                />
+              ) : (
+                <input
+                  className={`${SCHED_FIELD} min-w-0 font-mono`}
+                  placeholder="0 9 * * 1-5"
+                  value={schedCron}
+                  spellCheck={false}
+                  onChange={(e) => setSchedCron(e.target.value)}
+                  aria-label="Cron expression (minute hour day month weekday, UTC)"
+                  aria-invalid={!schedCronPreview.ok}
+                />
+              )}
+            </div>
+          </div>
           <label className="block text-sm text-ink-600">
             <span className={SCHED_LABEL}>Environment</span>
             <select
@@ -1000,6 +1146,30 @@ export default function SystemView() {
               <option value="prod">Prod</option>
             </select>
           </label>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]" aria-live="polite">
+          {schedCadence === 'cron' ? (
+            <>
+              <span className={schedCronPreview.ok ? 'text-ink-700' : 'font-medium text-rose-700'}>
+                {schedCronPreview.ok ? `Runs ${schedCronPreview.text}` : schedCronPreview.error}
+              </span>
+              <span className="flex flex-wrap gap-1">
+                {CRON_PRESETS.map((p) => (
+                  <button
+                    key={p.cron}
+                    type="button"
+                    className={`rounded border px-1.5 py-px text-[11px] ${schedCron.trim() === p.cron ? 'border-ink-700 text-ink-900' : 'border-ink-200 text-ink-500 hover:text-ink-800'}`}
+                    title={p.cron}
+                    onClick={() => setSchedCron(p.cron)}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </span>
+            </>
+          ) : (
+            <span className="text-ink-500">Runs {intervalText(schedInterval)}</span>
+          )}
         </div>
         {useProjectSelect && schedProject && pipelinesApiOk && !pipelinesLoading && pipelineOptions.length === 0 ? (
           <p className="text-xs text-ink-500">
@@ -1019,7 +1189,7 @@ export default function SystemView() {
           <button
             type="button"
             className="btn-primary"
-            disabled={!canAddSchedule || schedSaving}
+            disabled={!canAddSchedule || schedSaving || (schedCadence === 'cron' && !schedCronPreview.ok)}
             onClick={() => {
               if (schedSaving) return
               setSchedSaving(true)
@@ -1030,12 +1200,20 @@ export default function SystemView() {
                   project: schedProject.trim(),
                   pipeline: schedPipeline.trim(),
                   interval_minutes: schedInterval,
+                  ...(schedCadence === 'cron' ? { cron: schedCron.trim() } : {}),
                   env: schedEnv,
                   enabled: true,
                 }),
               })
-                .then(() => {
-                  pushToast('Schedule created', 'success')
+                .then((res) => {
+                  const ignoredCron =
+                    schedCadence === 'cron' && !(res && typeof res === 'object' && 'cron' in (res as object))
+                  pushToast(
+                    ignoredCron
+                      ? `This API does not support cron yet — created as ${intervalText(schedInterval)}`
+                      : 'Schedule created',
+                    ignoredCron ? 'info' : 'success',
+                  )
                   void refresh()
                 })
                 .catch((err) =>
@@ -1069,7 +1247,7 @@ export default function SystemView() {
         ) : schedules.length === 0 ? (
           <EmptyState icon={EmptyCalendarClock}
             title="No schedules yet"
-            description="Pick a workspace, one of its pipelines and an interval, then Add schedule. Jobs only fire while this API process is running."
+            description="Pick a workspace, one of its pipelines and an interval or cron, then Add schedule. Jobs only fire while this API process is running."
           />
         ) : (
           <ul className="space-y-2">
@@ -1103,7 +1281,7 @@ export default function SystemView() {
                     )}
                   </div>
                   <div className="text-[11px] text-ink-500">
-                    every {s.interval_minutes ?? '—'} min · {s.env || 'prod'}
+                    <span title={s.cron ? `cron ${s.cron} (UTC)` : undefined}>{scheduleCadence(s).text}</span> · {s.env || 'prod'}
                     {s.enabled && !orphaned && s.next_run_at ? ` · next ${formatRelativeTime(s.next_run_at)}` : ''}
                     {!s.enabled && !orphaned ? ' · paused' : ''}
                     {s.last_run_id ? ` · last run ${String(s.last_run_id).slice(0, 8)}…` : ''}
@@ -1208,7 +1386,7 @@ export default function SystemView() {
       )}
 
       {systemTab === 'webhooks' && (
-      <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
+      <section className="ui-card space-y-3">
         {panelErrors.webhooks ? (
           <p className="text-xs text-rose-700">{panelErrors.webhooks}</p>
         ) : null}
@@ -1230,7 +1408,7 @@ export default function SystemView() {
           </p>
         )}
         <label className="block text-sm text-ink-600">
-          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+          <span className="mb-1 block text-[12px] font-semibold text-ink-600">
             {webhookConfigured ? 'Replace endpoint URL' : 'Endpoint URL'}
           </span>
           <input
@@ -1343,7 +1521,7 @@ export default function SystemView() {
       )}
 
       {systemTab === 'cleanup' && (
-      <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
+      <section className="ui-card space-y-3">
         <h3 className="text-sm font-semibold">Cleanup</h3>
         <p className="text-sm text-ink-500">
           Free disk by deleting finished run records older than N days (always keeps the latest run
@@ -1403,7 +1581,7 @@ export default function SystemView() {
               setCleanupConfirmText('')
             }}
           />
-          Reconcile abandoned RUNNING/QUEUED runs first
+          <span title={STUCK_RUNS_TIP}>Mark stuck (running or queued) runs as failed first</span>
         </label>
         {!cleanupArmed ? (
           <button
@@ -1434,7 +1612,7 @@ export default function SystemView() {
                 </li>
                 <li>
                   {reconcileAbandoned
-                    ? 'Mark abandoned running or queued runs as failed first'
+                    ? 'Mark stuck running or queued runs as failed first'
                     : 'Leave running and queued runs unchanged'}
                 </li>
               </ul>

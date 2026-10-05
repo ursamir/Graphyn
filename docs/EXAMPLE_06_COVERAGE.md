@@ -241,6 +241,18 @@ default, enum, bounds) and that `ui.visible_if` references valid fields/values.
 | operator_fusion → "Weight optimization" (float32 + on = dynamic-range; result now reported as `dynamic_range`) | true | — | M::test_edge_optimizer_quantization[float32-True-…] |
 | prune | false | — | not implemented (warns) |
 
+| (1.1) `metadata.tensor_details` (input/output shape, dtype, int8 scale/zero_point), `input_shape`/`output_shape`, `source_model_path` | — | — | test_edge_optimizer::test_process_smoke |
+
+### deployment_packager (Ship → package)
+| Field | Default | Ship | Verified by |
+|---|---|---|---|
+| target edge\|docker\|mobile (runnable bundle) \| mcu (C header) \| cmsis_pack/arduino/zephyr/pte_bundle (stub) | mobile | edge | P::test_edge_package_is_runnable_and_traceable[*] |
+| include_inference_script (run_inference.py + serve.py) / include_metadata | true / true | true | as above |
+| (1.1) source_run_id — training run whose Feature Frontend / Dataset Builder config goes into `preprocessing.json` (empty = the package run's declared `source_run_id`, else a `runs/<id>/` segment of the model path) | "" | set by Ship | P::test_source_run_from_model_path |
+| (1.1) selftest strict\|warn\|off, selftest_samples 0–10 | strict / 3 | default | P::test_strict_selftest_fails_on_input_shape_mismatch |
+
+P = `unit_test/plugins/common/test_deployment_packager_bundle.py`.
+
 ### realtime_inference
 | Field | Default | Ex-06 | Verified by |
 |---|---|---|---|
@@ -283,6 +295,24 @@ default, enum, bounds) and that `ui.visible_if` references valid fields/values.
 20. **Stale installed plugins at the same version.** The container ran an old `plugins/…/trainer/nodes.py` (no progress code) because startup only reinstalled bundled plugins on a *version* change. Startup now compares a content hash of `PluginPackage/<pack>/<plugin>` with the installed copy and recopies the code when it differs (venv kept unless requirements changed) — see `PLUGIN_GUIDE.md` → Bundled auto-install. Tests: `unit_test/core/plugins/test_bundled_code_drift.py`.
 21. **Version bumps for fixes 19–20 code changes.** `trainer` plugin 1.0.0 → 1.1.0 (node `trainer` 1.0.0 → 1.1.0, node `model_builder` 1.1.0 → 1.2.0) and `dataset-builder` plugin 1.0.0 → 1.1.0 (node `dataset_builder` 1.0.0 → 1.1.0). Seeded weights and order-stable splits change results, so the node version (part of the pipeline-cache key) is bumped to invalidate outputs cached by the old code.
 
+22. **Runnable, traceable Ship packages (`deployment-packager` 1.0.0 → 1.1.0, `edge-optimizer` 1.0.0 → 1.1.0).** The old edge TAR had `model.tflite`, `labels.txt`, a `metadata.json` without any feature settings and a `run_inference.py` that fed `np.zeros((1,101,40,1))` — a user could not run the model on real audio (train/serve skew), int8 input scaling was not handled, nothing tied the package to its training run, and fastapi/uvicorn were listed but unused. Package contents now (edge = files at the TAR root; docker = `<name>/…` + `Dockerfile` running `serve.py`; mobile = ZIP + `inference_android.java`):
+
+    | File | Content |
+    |---|---|
+    | `model.tflite`, `labels.txt` | model + class order (`down, go, no, stop, up, yes`) |
+    | `preprocessing.json` | source run id; decode (`librosa.load(sr=None, mono=True)` like dataset_ingest) + resample; the **full Feature Frontend config of the source run** (from `runs/<source>/graph.json`, omitted keys filled from the node's defaults): feature_type, sample_rate, n_fft, hop/win length, n_mels, n_mfcc, fmin/fmax, log_scale, normalize (per-clip z-score), center, deltas, fixed_length; Dataset Builder `frames.fixed_length` (pad zeros at the end / keep the first frames; taken from the model input when training used 0); model input/output tensor shape, dtype and int8 `scale`/`zero_point`; labels; librosa/numpy versions of the training host |
+    | `run_inference.py` | WAV → exactly the training tensor → model → top-k (`--top-k`, `--json`, `--describe`, `--features x.npy`); quantizes for uint8/int8 inputs and dequantizes outputs; runtime `ai_edge_litert` → `tflite_runtime` → `tensorflow.lite` |
+    | `serve.py` + `requirements-serve.txt` | optional `POST /predict` (raw audio body); fastapi/uvicorn only here |
+    | `requirements.txt` | numpy, **librosa pinned to the training run's version**, soundfile, tflite-runtime / ai-edge-litert (tensorflow fallback noted) |
+    | `README.md` | what the model does, labels, source-run test accuracy, how to run, input requirements (16 kHz mono, 101 frames ≈ 1 s), provenance summary, `sha256sum -c SHA256SUMS` |
+    | `selftest.json` | see below |
+    | `provenance.json` | source run (id, graph hash, record hash, status, test accuracy), registered model (name / stage / version from the run's `lineage_request` + registry; `matches_source_run`), model sha256 / format / quantization / source path, dataset external inputs (path, content hash, file count) from the source `prove.json`, graphyn + packager version, build time, package run id, sha256 + size of every file |
+    | `SHA256SUMS`, `metadata.json` | `sha256sum -c` list; legacy metadata (+ input/output tensors) |
+
+    **Parity by construction + test.** `run_inference.py` is a line-for-line mirror of `feature_frontend` (same librosa calls and arguments, same resampler, same z-score, same (F,T)→(T,F) transpose and fixed_length handling) and `dataset_builder._pad_or_truncate`; all parameters come from the source run's own graph snapshot, and librosa is pinned to the training version. **Self-test** (in the packager, `selftest=strict` by default): picks up to `selftest_samples` real clips from the source run's dataset_ingest folder (prefers `test/`, one per label), runs the *shipped* script's preprocessing on them and compares with the platform's own Feature Frontend node on the same waveform (`preprocessing_parity`, max |diff| ≤ 1e-4), checks the feature shape against the model input tensor (`input_shape`), then runs the shipped `run_inference.py --features … --describe --json` with a TFLite-capable Python (host, else the edge-optimizer venv; `GRAPHYN_PACKAGER_SELFTEST_PYTHON` overrides) and records predictions vs the folder label (`model_runs`, informational — the evaluator keeps no per-sample predictions). Strict mode fails the package run on a parity/shape/model failure; missing data/runtime → `skipped`/`partial`, never a silent pass. On the live model (`787747eeb2…`, 6 test clips) parity diff is 0.0 and 4/6 clips are predicted correctly.
+    **Console sidecar** `<package>.manifest.json` (next to the archive): package sha256 + size, contents with roles/sizes/sha256, self-test summary, input summary, labels, metrics, how-to-run commands — shown in Ship step 4 and on the package run's Overview.
+    **Ship wizard** passes `source_run_id` into the packager config. `/outputs/file` now allows `.gz` / `.tgz` / `.h`, so edge / docker packages and MCU headers download from the console (previously 415). Explicit downloads are audited (`model.download` / `run.output_download` / `run.outputs_zip` / `ship.download`, with path, size, sha256, actor — see `TRUST_MODEL.md`). Tests: P (12), `test_edge_optimizer.py`, `unit_test/api/test_download_audit.py`, `graphyn-ui/src/features/edge/shipManifest.test.ts`.
+
 ## 5. Known limitations
 
 * A container started before fix 20 may still run older plugin copies; after an image rebuild/restart, startup now recopies any bundled plugin whose code differs from `PluginPackage/` (look for `source code changed at the same version` in the API log). Manual fallback: `graphyn plugin install --upgrade` / Plugins UI.
@@ -293,6 +323,7 @@ default, enum, bounds) and that `ui.visible_if` references valid fields/values.
 * `fairness_attribute_key=speaker_id` needs upstream metadata; dataset_ingest does not parse Speech Commands speaker ids from filenames.
 * **Reproducibility limits.** Bit-identical results need the same device and software stack: `trainer`/`model_builder` `device=auto` picks GPU only when free VRAM ≥ `GRAPHYN_TF_GPU_MIN_FREE_MIB`, so one run may train on GPU and the next on CPU (different float rounding → different model); a GPU failure mid-run retries on CPU. Set `device: cpu` (or keep the GPU free) for run-to-run equality. Different TF/CUDA/cuDNN versions, CPU instruction sets (oneDNN kernels) or `mixed_precision=true` also change results. Op determinism slows some GPU kernels; `GRAPHYN_ISOLATED_DETERMINISTIC=0` trades it back for speed. The INT8 TFLite converter is deterministic for a given SavedModel + calibration rows. In-process nodes (audio prep) are not given a `PYTHONHASHSEED`; none of them iterate hash-ordered sets for results.
 * `lazy`, `prune`, `detect`/`segment` modes, `batch_size` of realtime_inference are declared but not implemented (now documented as such).
+* Ship packages: `run_inference.py` classifies the first `fixed_length` frames (≈ 1 s) of a file, like training; long recordings must be trimmed to the keyword (no sliding window). The README's accuracy is the source run's Keras test accuracy, not the quantized export's. The self-test needs librosa on the API host and the source dataset on disk; otherwise it records `skipped` with the reason. ONNX exports get preprocessing/provenance/README but `run_inference.py` is TFLite-only.
 
 ## 6. App / UI bugs (fixed)
 

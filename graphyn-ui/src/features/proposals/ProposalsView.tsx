@@ -21,7 +21,7 @@ import {
   LoadingBlock,
   StatusBadge,
 } from '../../components/ui'
-import { MasterDetail, WorkbenchPage } from '../../layout'
+import { MasterDetail, MasterDetailToggle, WorkbenchPage } from '../../layout'
 import { formatLocaleDateTime } from '../../lib/format'
 import { paths } from '../../routes/paths'
 import { navigatePath } from '../../routes/parsePath'
@@ -449,20 +449,27 @@ export default function ProposalsView() {
     </div>
   )
 
+  // No proposals at all for this filter: one full-width empty state (with the
+  // only Generate button) instead of list + "Select a proposal" panes.
+  const listEmpty = !(loading && !items) && !items?.length
+  const emptyOffersGenerate = listEmpty && filter === 'pending' && !generateOpen
+
   return (
     <WorkbenchPage
       title="Agent inbox"
       description="Review pipelines proposed by agents (or generate a starter proposal) before they reach the Editor."
       actions={
         <>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => setGenerateOpen((o) => !o)}
-          >
-            <Sparkles className="h-3.5 w-3.5" />
-            Generate proposal
-          </button>
+          {emptyOffersGenerate ? null : (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setGenerateOpen((o) => !o)}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              Generate proposal
+            </button>
+          )}
           <button type="button" className="btn-quiet" onClick={() => void refresh()} disabled={loading}>
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             Refresh
@@ -516,7 +523,7 @@ export default function ProposalsView() {
         <div className="shrink-0 flex flex-wrap items-start gap-3 border-b border-ink-100 bg-accent-50/40 px-4 py-2.5 text-sm text-ink-800 sm:px-6">
           <p className="min-w-0 flex-1">
             <span title="MCP propose_graph or POST /api/v1/proposals">
-              AI agents send pipeline proposals here; review them and accept the ones you want in the Editor.
+              AI agents send pipeline proposals here. Accept one to open it in the Editor.
             </span>
           </p>
           <div className="flex shrink-0 items-center gap-2">
@@ -542,35 +549,38 @@ export default function ProposalsView() {
         </div>
       )}
 
+      {listEmpty ? (
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+          <EmptyState
+            icon={EmptyBot}
+            title={filter === 'pending' ? 'No proposals yet' : 'No proposals'}
+            description={
+              filter === 'pending'
+                ? 'Ask a connected AI agent to propose a pipeline, or generate a starter proposal. Accepting one opens it in the Editor.'
+                : 'Nothing matches this filter.'
+            }
+            action={
+              emptyOffersGenerate ? (
+                <button type="button" className="btn-primary inline-flex items-center gap-1" onClick={() => setGenerateOpen(true)}>
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Generate proposal
+                </button>
+              ) : undefined
+            }
+          />
+        </div>
+      ) : (
       <MasterDetail
         className="min-h-0 flex-1"
+        listLabel="proposals"
+        storageKey="graphyn.proposals"
+        selectedKey={selectedId}
         masterClassName="!bg-white"
         detailClassName="!p-0"
         master={
         <div className="min-h-0">
           {loading && !items ? (
             <LoadingBlock label="Loading proposals…" />
-          ) : !items?.length ? (
-            <div className="p-4">
-              <EmptyState
-                compact
-                icon={EmptyBot}
-                title="No proposals yet"
-                description={
-                  filter === 'pending'
-                    ? 'Create a starter proposal above, or ask a connected AI agent to propose a pipeline. Accepting one opens it in the Editor.'
-                    : 'Nothing matches this filter.'
-                }
-                action={
-                  filter === 'pending' ? (
-                    <button type="button" className="btn-primary inline-flex items-center gap-1" onClick={() => setGenerateOpen(true)}>
-                      <Sparkles className="h-3.5 w-3.5" />
-                      Generate proposal
-                    </button>
-                  ) : undefined
-                }
-              />
-            </div>
           ) : visibleItems.length === 0 ? (
             <div className="p-4">
               <EmptyState
@@ -595,8 +605,8 @@ export default function ProposalsView() {
                           : 'ide-row w-full flex-col items-start gap-1 !px-4 !py-3'
                       }
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="truncate text-[13px] font-medium text-ink-950">
+                      <div className="flex w-full min-w-0 items-center justify-between gap-2">
+                        <span className="min-w-0 truncate text-[13px] font-medium text-ink-950" title={p.summary || p.id}>
                           {p.summary || p.id}
                         </span>
                         <StatusBadge status={p.status} />
@@ -621,6 +631,7 @@ export default function ProposalsView() {
         }
         detail={
         <section className="min-h-0 px-4 py-4 sm:px-6">
+          <MasterDetailToggle className="mb-2" />
           {!selectedId ? (
             <EmptyState
               compact
@@ -642,7 +653,7 @@ export default function ProposalsView() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-lg font-semibold text-ink-950">{detail.summary || detail.id}</h3>
+                    <h3 className="break-words text-lg font-semibold text-ink-950">{detail.summary || detail.id}</h3>
                     <StatusBadge status={detail.status} />
                   </div>
                   <p className="mt-1 text-sm text-ink-500">
@@ -793,6 +804,7 @@ export default function ProposalsView() {
         </section>
         }
       />
+      )}
     </WorkbenchPage>
   )
 }

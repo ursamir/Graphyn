@@ -1,0 +1,20 @@
+[plugin]
+name             = "if-switch"
+version          = "1.0.0"
+description      = "Branch on expression or JSONPath; true/false (and optional cases) outputs."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["logic", "branch", "workflow", "common"]
+
+dependencies = []
+
+runtime = "inprocess"
+node_types = ["if_switch"]
+
+[config_schema.if_switch]
+expression = { type = "string", title = "Expression", default = "", description = "Boolean expression over the input payload (used when JSONPath is empty)." }
+jsonpath = { type = "string", title = "JSONPath", default = "", description = "JSONPath selecting a value; its truthiness chooses the true/false branch when set." }
+cases = { type = "array", title = "Cases", default = [], description = "Optional named cases [{name, expression}] for multi-way branching (advanced).", widget = "json" }

@@ -34,7 +34,7 @@ Start here: **[Getting Started](./GETTING_STARTED.md)** (Mode A single-machine v
 
 ## Concepts
 
-- **Graph IR** — versioned JSON DAG (current schema_version: 1.2). Optional placement for workers.
+- **Graph IR** — versioned JSON DAG (current schema_version: 1.3; loader accepts 1.0–1.3). Optional placement for workers (1.2), per-node `on_error` / `retry` (1.3).
 - **RuntimeBackend** — call get_backend().execute(graph). Default LocalPythonBackend; GRAPHYN_BACKEND=distributed for workers.
 - **Plugins** — nodes ship as plugin.toml packages under PluginPackage/.
 - **Console** — IR-native UI: project-first nav (Build · Library · Deploy · Admin; Runs/Editor under an open workspace).

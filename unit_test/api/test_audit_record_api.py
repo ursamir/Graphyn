@@ -116,7 +116,7 @@ def test_archive_restore_purge(api_client, aud_env):
     events = events["events"] if isinstance(events, dict) else events
     acts = {(e["action"], e["actor"]) for e in events if e.get("resource_id") == rid}
     assert ("run.archive", "alice") in acts and ("run.purge", "admin") in acts
-    assert ("run.finish", "alice") in acts and ("run.restore", "api") in acts
+    assert ("run.finish", "alice") in acts and ("run.restore", "unidentified") in acts
 
 
 def test_run_async_stamps_actor_trigger_and_declared_pipeline(api_client, aud_env):

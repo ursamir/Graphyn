@@ -160,6 +160,10 @@ export type PipelineVersionView =
 export type RunRecordView = {
   runId: string
   actor: string
+  /** true = named API token; false = self-declared (X-Actor); null = not recorded (old run). */
+  actorVerified: boolean | null
+  /** Name the caller claimed (X-Actor) when it differs from / was not trusted as the actor. */
+  claimedActor: string
   trigger: string
   startedAt: string
   endedAt: string
@@ -447,6 +451,8 @@ export function buildRunRecord(input: {
   const view: RunRecordView = {
     runId: input.runId,
     actor: firstStr(prove.actor, meta?.actor, detail?.actor),
+    actorVerified: boolOrNull(prove.actor_verified ?? meta?.actor_verified ?? detail?.actor_verified),
+    claimedActor: firstStr(prove.claimed_actor, meta?.claimed_actor, detail?.claimed_actor),
     trigger: firstStr(prove.trigger, meta?.trigger, detail?.trigger),
     startedAt,
     endedAt,
@@ -481,7 +487,7 @@ export function recordGaps(view: RunRecordView, prove: Rec = {}): RecordGap[] {
     return gaps
   }
   if (!view.actor) gaps.push({ key: 'actor', label: 'Actor', hint: 'who started the run was not recorded' })
-  else if (['system', 'api', 'unknown', 'anonymous'].includes(view.actor.toLowerCase())) {
+  else if (['system', 'api', 'unknown', 'anonymous', 'unidentified'].includes(view.actor.toLowerCase())) {
     gaps.push({ key: 'actor', label: 'Actor', hint: `only a generic actor ("${view.actor}") was recorded, not a person or agent` })
   }
   if (!view.graphHash) gaps.push({ key: 'graph_hash', label: 'Graph hash', hint: 'graph snapshot hash missing' })
@@ -677,6 +683,144 @@ export type VerifyItem = {
 
 export type VerifyGroup = { group: string; label: string; state: VerifyState; items: VerifyItem[] }
 
+/** One-line Verify strip: verdict, passed/total checks (items across groups), tone. */
+export function verifyStripSummary(
+  groups: Array<Pick<VerifyGroup, 'state' | 'items'>>,
+  ok: boolean | null,
+  status: string,
+  /** Server `summary` counts win over the client item count when present. */
+  counts?: Pick<VerifyCounts, 'passed' | 'total'> | null,
+): { verdict: string; passed: number; total: number; tone: 'ok' | 'warn' | 'bad' } {
+  const items = groups.flatMap((g) => (g.items.length ? g.items : [{ state: g.state }]))
+  const total = counts && counts.total > 0 ? counts.total : items.length
+  const passed = counts && counts.total > 0 ? counts.passed : items.filter((i) => i.state === 'pass').length
+  if (status === 'unsealed') return { verdict: 'Not sealed — nothing to verify', passed, total, tone: 'warn' }
+  if (ok) return { verdict: 'Verified ✓', passed, total, tone: 'ok' }
+  if (groups.some((g) => g.state === 'failed')) return { verdict: 'Verification failed', passed, total, tone: 'bad' }
+  if (groups.some((g) => g.state === 'changed')) return { verdict: 'Changed since this run', passed, total, tone: 'warn' }
+  return { verdict: 'Verification incomplete', passed, total, tone: 'warn' }
+}
+
+// ── Last verify / verify history (server-side record of every Verify) ───
+
+export type VerifyCounts = {
+  passed: number
+  failed: number
+  changed: number
+  missing: number
+  skipped: number
+  total: number
+}
+
+/** Server `summary:{passed, failed, changed, missing, skipped, total}` (null when absent). */
+export function parseVerifyCounts(raw: unknown): VerifyCounts | null {
+  const r = asRec(raw)
+  if (!r) return null
+  const n = (k: string) => finiteNum(r[k]) ?? 0
+  const total = finiteNum(r.total)
+  if (total == null) return null
+  return { passed: n('passed'), failed: n('failed'), changed: n('changed'), missing: n('missing'), skipped: n('skipped'), total }
+}
+
+export type LastVerify = {
+  checkedAt: string
+  actor: string
+  /** null = record predates verified identities. */
+  actorVerified: boolean | null
+  claimedActor: string
+  ok: boolean | null
+  status: string
+  passed: number | null
+  total: number | null
+}
+
+function boolOrNull(v: unknown): boolean | null {
+  return typeof v === 'boolean' ? v : null
+}
+
+/**
+ * A verify outcome from any of: run detail / list row `last_verify:{checked_at,
+ * actor, actor_verified, ok, status, passed, total}`, a `POST|GET /verify`
+ * response (`checked_at`, `actor`, …, `summary:{passed,total}`), or a history row.
+ */
+export function parseLastVerify(raw: unknown): LastVerify | null {
+  const r = asRec(raw)
+  if (!r) return null
+  const checkedAt = firstStr(r.checked_at, r.verified_at)
+  const counts = parseVerifyCounts(r.summary)
+  const ok = boolOrNull(r.ok)
+  const status = str(r.status).toLowerCase()
+  if (!checkedAt && ok == null && !status) return null
+  return {
+    checkedAt,
+    actor: str(r.actor),
+    actorVerified: boolOrNull(r.actor_verified),
+    claimedActor: str(r.claimed_actor),
+    ok,
+    status,
+    passed: finiteNum(r.passed) ?? counts?.passed ?? null,
+    total: finiteNum(r.total) ?? counts?.total ?? null,
+  }
+}
+
+/** `last_verify` of a run detail (top level, else meta) or list row. */
+export function lastVerifyOf(run: unknown): LastVerify | null {
+  const r = asRec(run)
+  if (!r) return null
+  return parseLastVerify(r.last_verify) ?? parseLastVerify(asRec(r.meta)?.last_verify)
+}
+
+/** "Oct 4 17:59" (local, no year/seconds). */
+export function formatVerifyWhen(iso: string | null | undefined): string {
+  const s = str(iso)
+  if (!s) return ''
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime())) return s
+  try {
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+  } catch {
+    return d.toISOString().slice(0, 16).replace('T', ' ')
+  }
+}
+
+/**
+ * Run record summary verdict from the last verify:
+ * "Verified ✓ Oct 4 17:59 by alice · 6/6" / "Verify failed Oct 4 17:59 by alice · 4/6" /
+ * "Not sealed" / "Not verified". Generic actors ("unidentified", "api") drop the "by".
+ */
+export function lastVerifyText(
+  lv: LastVerify | null | undefined,
+  fmt: (iso: string) => string = formatVerifyWhen,
+): { text: string; verdict: string; tone: 'ok' | 'bad' | 'warn' | 'muted' } {
+  if (!lv) return { text: 'Not verified', verdict: 'Not verified', tone: 'muted' }
+  if (lv.status === 'unsealed') return { text: 'Not sealed', verdict: 'Not sealed', tone: 'warn' }
+  const verdict = lv.ok ? 'Verified ✓' : 'Verify failed'
+  const parts = [verdict]
+  const when = lv.checkedAt ? fmt(lv.checkedAt) : ''
+  if (when) parts.push(when)
+  const generic = ['', 'unidentified', 'api', 'anonymous', 'unknown', 'system'].includes(lv.actor.toLowerCase())
+  if (!generic) parts.push(`by ${lv.actor}`)
+  let text = parts.join(' ')
+  if (lv.total != null && lv.total > 0) text += ` · ${lv.passed ?? 0}/${lv.total}`
+  return { text, verdict, tone: lv.ok ? 'ok' : 'bad' }
+}
+
+export type VerifyHistoryRow = LastVerify & { recordHash: string; counts: VerifyCounts | null }
+
+/** `GET /runs/{id}/verify/history` → newest-first rows + server total. */
+export function parseVerifyHistory(raw: unknown): { total: number; rows: VerifyHistoryRow[] } {
+  const r = asRec(raw)
+  const list = Array.isArray(raw) ? raw : Array.isArray(r?.history) ? (r!.history as unknown[]) : []
+  const rows: VerifyHistoryRow[] = []
+  for (const item of list) {
+    const lv = parseLastVerify(item)
+    if (!lv) continue
+    const o = asRec(item)!
+    rows.push({ ...lv, recordHash: str(o.record_hash), counts: parseVerifyCounts(o.summary) })
+  }
+  return { total: finiteNum(r?.total) ?? rows.length, rows }
+}
+
 const VERIFY_GROUPS: Array<[string, string, RegExp]> = [
   ['graph', 'Graph snapshot', /^(graph|graph_snapshot|graph_hash|materialized_graph)/],
   ['inputs', 'Inputs', /^(inputs?|external_inputs?|input_hashes|datasets?)/],
@@ -767,7 +911,7 @@ export function normalizeVerify(raw: unknown): { ok: boolean | null; status: str
       push(firstStr(o.check, o.key, o.name, o.id) || 'other', o, null)
     }
   } else {
-    const skip = new Set(['ok', 'run_id', 'verified_at', 'status', 'summary', 'message', 'valid', 'passed'])
+    const skip = new Set(['ok', 'run_id', 'verified_at', 'checked_at', 'status', 'summary', 'message', 'valid', 'passed', 'actor', 'actor_verified', 'claimed_actor', 'history_count'])
     for (const [key, v] of Object.entries(r)) {
       if (skip.has(key)) continue
       const o = asRec(v)

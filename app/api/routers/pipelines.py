@@ -3,7 +3,9 @@
 Bounded Context:  REST API Layer
 Responsibility:   HTTP endpoints for pipeline validation and execution.
 Owns:             POST /pipelines/validate, POST /pipelines/run,
-                  POST /pipelines/run-async.
+                  POST /pipelines/run-async (both accept optional ``inputs``
+                  {node_id: {port: value}} → input_overrides, and
+                  ``parameters`` {name: value} for GraphIR.parameters).
                   Template routes live in pipeline_templates.py.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain pipeline execution logic — delegate to SDK/orchestrator.
@@ -353,6 +355,7 @@ def run_pipeline_stream(request: Request, payload: dict = Body(...)):
     try:
         graph, deprecation_header = _build_graph_from_payload(payload)
         graph, project_fields = _stamp_graph_project(graph, payload)
+        graph, input_overrides, inputs_meta = _prepare_run_inputs(graph, payload)
         _refuse_invalid_graph(graph)
     except HTTPException:
         raise
@@ -360,12 +363,17 @@ def run_pipeline_stream(request: Request, payload: dict = Body(...)):
         raise HTTPException(status_code=422, detail=str(exc))
 
     from app.core.execution.graph_prepare import persist_project_fields, record_run_start
+    from app.core.execution.run_inputs import persist_run_inputs_meta
     from app.core.runs.run_journal import RunManager
 
     # Same contract as /run-async: run_id known before the first NDJSON event
     run_mgr = RunManager()
     run_id = run_mgr.run_id
     persist_project_fields(run_mgr, project_fields)
+    persist_run_inputs_meta(run_mgr, inputs_meta)
+    from app.core.execution.run_inputs import persist_run_inputs
+
+    persist_run_inputs(run_mgr, input_overrides)
     from app.api.actor import resolve_actor
     from app.core.execution.graph_prepare import persist_run_identity
 
@@ -384,7 +392,9 @@ def run_pipeline_stream(request: Request, payload: dict = Body(...)):
 
         terminal: dict[str, Any] | None = None
         try:
-            get_backend().execute(graph, logger=logger, run_manager=run_mgr)
+            get_backend().execute(
+                graph, logger=logger, run_manager=run_mgr, input_overrides=input_overrides
+            )
             # Success terminal normally comes from logger.pipeline_done
             # (type=done + run_id); synthesize one if the backend did not.
             if channel.terminal_seen is None:
@@ -469,6 +479,27 @@ def run_pipeline_stream(request: Request, payload: dict = Body(...)):
 
 # ── Run async ─────────────────────────────────────────────────────────────────
 
+def _prepare_run_inputs(graph, payload: dict):
+    """G3: apply ``parameters`` and validate ``inputs`` from the run payload.
+
+    Returns ``(graph, input_overrides | None, meta_fields)``. Maps
+    RunInputsError to HTTP 422 (413 when ``inputs`` exceed the size cap).
+    """
+    from app.core.execution.run_inputs import (
+        RunInputsError,
+        prepare_parameters,
+        prepare_run_inputs,
+    )
+
+    body = payload if isinstance(payload, dict) else {}
+    try:
+        graph, param_meta = prepare_parameters(graph, body.get("parameters"))
+        overrides, input_meta = prepare_run_inputs(graph, body.get("inputs"))
+    except RunInputsError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return graph, overrides, {**param_meta, **input_meta}
+
+
 def _refuse_invalid_graph(graph) -> None:
     """VAL-003: refuse execute when validation has error-severity findings.
 
@@ -508,18 +539,24 @@ def run_pipeline_async(request: Request, payload: dict = Body(...)):
         try:
             graph, deprecation_header = _build_graph_from_payload(payload)
             graph, project_fields = _stamp_graph_project(graph, payload)
+            graph, input_overrides, inputs_meta = _prepare_run_inputs(graph, payload)
             _refuse_invalid_graph(graph)
         except HTTPException:
             raise
         except Exception as exc:
             raise HTTPException(status_code=422, detail=str(exc))
 
+        from app.core.execution.run_inputs import persist_run_inputs_meta
         from app.core.runs.run_journal import RunManager
 
         # Create ONE RunManager before the thread starts so run_id is known immediately.
         # Constructor writes durable status=pending (PERS-001) before we ack.
         run_mgr = RunManager()
         run_id = run_mgr.run_id
+        persist_run_inputs_meta(run_mgr, inputs_meta)
+        from app.core.execution.run_inputs import persist_run_inputs
+
+        persist_run_inputs(run_mgr, input_overrides)
 
         # Persist project scoping immediately so GET /runs?project= can filter mid-flight
         from app.core.execution.graph_prepare import persist_project_fields, record_run_start
@@ -539,7 +576,9 @@ def run_pipeline_async(request: Request, payload: dict = Body(...)):
         def _run():
             try:
                 from app.core.execution.runtime_backend import get_backend  # noqa: PLC0415
-                get_backend().execute(graph, run_manager=run_mgr)
+                get_backend().execute(
+                    graph, run_manager=run_mgr, input_overrides=input_overrides
+                )
             except Exception as exc:
                 run_mgr.mark_failed(str(exc))
 

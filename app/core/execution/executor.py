@@ -337,6 +337,10 @@ class ParallelExecutor:
                 logger.node_end(
                     node_type, idx, node_duration, output_count=0, node_id=node_id
                 )
+                # G6: egress made before the failure is still audited.
+                from app.core.execution.external_calls import drain_external_calls
+
+                drain_external_calls(run_manager, node, node_id, node_type)
                 raise
 
             node_outputs[node_id] = outputs
@@ -425,6 +429,10 @@ class ParallelExecutor:
                         node_id,
                         _pub_exc,
                     )
+                # G6: external call audit side-channel → run meta.
+                from app.core.execution.external_calls import drain_external_calls
+
+                drain_external_calls(run_manager, node, node_id, node_type)
 
         node_duration = time.time() - node_start_time
         _node_outputs = node_outputs[node_id]

@@ -454,7 +454,7 @@ def _audit_register(actor: str, name: str, stage_s: str, run_id: str, slug: str)
             action="model.register",
             resource_type="model",
             resource_id=f"{name}@{stage_s}",
-            meta={"run_id": run_id, "slug": slug},
+            meta={"run_id": run_id, "slug": slug, "stage": stage_s},
         )
     except Exception:
         pass
@@ -551,7 +551,7 @@ def approve_prod(
         pending = rec.get("pending_prod")
         if not isinstance(pending, dict) or not pending.get("run_id"):
             raise ValueError("No pending_prod to approve")
-        return _register(
+        out = _register(
             name,
             run_id=str(pending["run_id"]),
             slug=str(pending.get("slug") or rec.get("slug") or ""),
@@ -562,6 +562,19 @@ def approve_prod(
             clear_pending_prod=True,
             artifact=_pending_artifact(pending, rec, base_dir),
         )
+    try:
+        from app.core.trust.audit import record_audit
+
+        record_audit(
+            actor=actor,
+            action="model.approve_prod",
+            resource_type="model",
+            resource_id=f"{name}@prod",
+            meta={"run_id": str(pending["run_id"]), "requested_by": pending.get("requested_by")},
+        )
+    except Exception:
+        pass
+    return out
 
 
 def _pending_artifact(

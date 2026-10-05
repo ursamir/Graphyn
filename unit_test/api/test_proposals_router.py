@@ -65,7 +65,7 @@ def test_accept_non_pending_conflict(api_client, tmp_workspace):
 
 
 def test_accept_reject_actor_from_header(api_client, tmp_workspace):
-    """X-Actor header is honored when the body carries no actor; default is human."""
+    """X-Actor header is honored when the body carries no actor; default is unidentified."""
     pid = api_client.post(
         "/api/v1/proposals", json={"summary": "h", "graph": SAMPLE_GRAPH}
     ).json()["id"]
@@ -80,4 +80,4 @@ def test_accept_reject_actor_from_header(api_client, tmp_workspace):
     ).json()["id"]
     rejected = api_client.post(f"/api/v1/proposals/{pid2}/reject", json={"reason": "no"})
     assert rejected.status_code == 200
-    assert rejected.json()["resolved_by"] == "human"
+    assert rejected.json()["resolved_by"] == "unidentified"

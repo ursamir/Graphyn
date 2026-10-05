@@ -1,7 +1,7 @@
 [plugin]
 name             = "audio-exporter"
-version          = "1.1.0"
-description      = "Export AudioSample objects to WAV files organised by split (train/val/test) and label."
+version          = "1.2.0"
+description      = "Export AudioSample objects to WAV files organised by split (train/val/test) and label, as immutable dataset versions with a sha256 manifest."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
 entry_points     = ["nodes.py"]
@@ -24,4 +24,5 @@ split_ratios = { type = "object", title = "Split ratios", default = { train = 0.
 group_by_source = { type = "boolean", title = "Group splits by source", default = true, description = "Keep every segment and augmented copy of a recording in the same split, so test clips never leak into training (On/Off). Off = random split per sample.", ui = { help_advanced = "Grouping key: metadata.parent, else the source path." } }
 version_tag = { type = "string", title = "Version tag", default = "v1", pattern = "^v[0-9]+(\\.[0-9]+)*$", description = "Canonical version tag matching vN / vN.N.N (e.g. v1, v1.0.0)." }
 random_seed = { type = "integer", title = "Random seed", default = 42, description = "RNG seed for reproducible split assignment." }
-append = { type = "boolean", title = "Append", default = false, description = "On = add to an existing dataset version (its file lists are merged); Off = replace that version.", ui = { help_advanced = "Merges labels.csv / metadata.json in <output_dir>/<version_tag>; Off deletes that folder first." } }
+append = { type = "boolean", title = "Append", default = false, description = "On = add to an existing dataset version (its file lists are merged); Off = write a new version (next free vN when the tag is taken).", ui = { help_advanced = "Merges labels.csv / metadata.json in <output_dir>/<version_tag> and recomputes manifest.json; refused when runs or packages reference that version." } }
+overwrite = { type = "boolean", title = "Overwrite existing version", default = false, description = "On = replace an existing version with the same tag (refused when runs or packages reference it); Off = never replace — an existing tag makes the export go to the next free version.", ui = { group = "Advanced", help_advanced = "Dataset versions are immutable by default: v1 taken → v2, v1.0.0 taken → v1.0.1 (logged)." } }

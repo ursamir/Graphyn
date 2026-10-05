@@ -227,7 +227,10 @@ def test_train_graph_reads_phase1_dataset() -> None:
         n for n in json.loads((EX06 / "pipeline_preprocess.graph.json").read_text())["nodes"]
         if n["node_type"] == "audio_exporter"
     )["config"]
-    assert ingest["path"] == f"{exporter['output_dir']}/{exporter['version_tag']}"
+    # Phase 2 reads the newest immutable version Phase 1 wrote ("latest" is
+    # resolved to a concrete vN before the run — app/core/execution/dataset_refs.py).
+    assert ingest["path"] == f"{exporter['output_dir']}/latest"
+    assert exporter["version_tag"].startswith("v")
     assert ingest.get("limit", 0) == 0, "template must not subsample the dataset"
     assert ingest["recursive"] is True
 

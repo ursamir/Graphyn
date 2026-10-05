@@ -29,6 +29,29 @@ log = logging.getLogger(__name__)
 SUPPORTED_AUDIO_EXTENSIONS = (".wav", ".mp3", ".m4a", ".ogg", ".webm", ".flac")
 
 
+class _ArchiveBudget:
+    """Counts bytes actually written while extracting (headers can lie)."""
+
+    def __init__(self, cap: int, archive: str) -> None:
+        self.cap = cap
+        self.used = 0
+        self.archive = archive
+
+    def copy(self, src, dest: Path) -> None:
+        with open(dest, "wb") as out:
+            while True:
+                chunk = src.read(1024 * 1024)
+                if not chunk:
+                    break
+                self.used += len(chunk)
+                if self.used > self.cap:
+                    raise ValueError(
+                        f"DatasetIngestNode: archive '{self.archive}' expands to more than "
+                        f"{self.cap // (1024 * 1024)} MB (raise Max archive size to allow it)"
+                    )
+                out.write(chunk)
+
+
 class DatasetIngestNode(Node):
     """Universal audio dataset ingestion from filesystem, archives, HuggingFace, S3, and manifests.
 
@@ -64,7 +87,7 @@ class DatasetIngestNode(Node):
             "HuggingFace, S3, and manifests."
         ),
         category="Input",
-        version="1.1.0",
+        version="1.2.0",
         tags=["audio", "input", "dataset", "ingestion"],
         requires_gpu=False,
         supports_cpu=True,
@@ -99,6 +122,8 @@ class DatasetIngestNode(Node):
         resume_from: str = Field(default='', title="Resume from", description="Optional checkpoint or manifest to resume an interrupted ingest from.")
         validate_integrity: bool = Field(default=False, title="Validate integrity", description="Verify checksum files (.sha256) next to the audio when present (On/Off).")
         deduplicate: bool = Field(default=False, title="Deduplicate", description="Skip duplicate waveforms by content hash (On/Off).")
+        max_archive_files: int = Field(default=100000, ge=1, title="Max archive files", description="ZIP / TAR only: refuse archives with more files than this (protects against archive bombs).")
+        max_archive_mb: int = Field(default=20480, ge=1, title="Max archive size (MB)", description="ZIP / TAR only: stop extracting once this many MB have been unpacked.")
 
     # ── process (multi-port / source node signature) ──────────────────────────
 
@@ -435,6 +460,42 @@ class DatasetIngestNode(Node):
 
         return samples
 
+    # ── archive safety (caps + member filtering) ─────────────────────────────
+
+    def _archive_file_cap(self) -> int:
+        return int(getattr(self.config, "max_archive_files", 100000) or 100000)
+
+    def _archive_byte_cap(self) -> int:
+        return int(getattr(self.config, "max_archive_mb", 20480) or 20480) * 1024 * 1024
+
+    def _check_archive_caps(self, n_files: int, declared_bytes: int, archive: str) -> None:
+        if n_files > self._archive_file_cap():
+            raise ValueError(
+                f"DatasetIngestNode: archive '{archive}' has more than {self._archive_file_cap()} files "
+                "(raise Max archive files to allow it)"
+            )
+        if declared_bytes > self._archive_byte_cap():
+            raise ValueError(
+                f"DatasetIngestNode: archive '{archive}' expands to more than "
+                f"{self._archive_byte_cap() // (1024 * 1024)} MB (raise Max archive size to allow it)"
+            )
+
+    @staticmethod
+    def _safe_member_dest(dest_root: str, name: str) -> Path | None:
+        """Destination for an archive member, or None when absolute / ``..`` / escaping."""
+        raw = name.replace("\\", "/")
+        parts = [p for p in raw.split("/") if p not in ("", ".")]
+        if raw.startswith("/") or not parts or ".." in parts or (len(parts[0]) == 2 and parts[0][1] == ":"):
+            log.warning("DatasetIngestNode: skipping unsafe archive member '%s'", name)
+            return None
+        root = os.path.realpath(dest_root)
+        dest = os.path.realpath(os.path.join(root, *parts))
+        if not dest.startswith(root + os.sep):
+            log.warning("DatasetIngestNode: skipping unsafe archive member '%s'", name)
+            return None
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        return Path(dest)
+
     # ── zip ───────────────────────────────────────────────────────────────────
 
     def _load_zip(self, zip_path: str) -> list[AudioSample]:
@@ -453,7 +514,23 @@ class DatasetIngestNode(Node):
         with tempfile.TemporaryDirectory() as tmp_dir:
             log.info("DatasetIngestNode: extracting ZIP '%s' to '%s'", zip_path, tmp_dir)
             with zipfile.ZipFile(zip_path, "r") as zf:
-                zf.extractall(tmp_dir)
+                members = []
+                for info in zf.infolist():
+                    if info.is_dir():
+                        continue
+                    mode = (info.external_attr >> 16) & 0o170000
+                    if mode and mode != 0o100000:
+                        log.warning("DatasetIngestNode: skipping non-regular ZIP member '%s'", info.filename)
+                        continue
+                    members.append((info.filename, info.file_size, info))
+                self._check_archive_caps(len(members), sum(m[1] for m in members), zip_path)
+                budget = _ArchiveBudget(self._archive_byte_cap(), zip_path)
+                for name, _size, info in members:
+                    dest = self._safe_member_dest(tmp_dir, name)
+                    if dest is None:
+                        continue
+                    with zf.open(info) as src:
+                        budget.copy(src, dest)
             samples = self._load_filesystem(tmp_dir)
             # Rewrite paths before tmp_dir is deleted
             for s in samples:
@@ -480,22 +557,31 @@ class DatasetIngestNode(Node):
         if not tar_path_obj.exists():
             raise ValueError(f"DatasetIngestNode: TAR file not found: {tar_path}")
 
-        def _safe_members(tf: "tarfile.TarFile", dest: str):
-            """Yield only members whose resolved path stays inside dest."""
-            dest_real = os.path.realpath(dest)
-            for member in tf.getmembers():
-                member_path = os.path.realpath(os.path.join(dest, member.name))
-                if not member_path.startswith(dest_real + os.sep) and member_path != dest_real:
-                    log.warning(
-                        "DatasetIngestNode: skipping unsafe TAR member '%s'", member.name
-                    )
-                    continue
-                yield member
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             log.info("DatasetIngestNode: extracting TAR '%s' to '%s'", tar_path, tmp_dir)
             with tarfile.open(tar_path, "r:*") as tf:
-                tf.extractall(tmp_dir, members=_safe_members(tf, tmp_dir))
+                members = []
+                for member in tf:
+                    if member.isdir():
+                        continue
+                    if not member.isreg():
+                        # symlinks / hard links / devices are never extracted
+                        log.warning("DatasetIngestNode: skipping non-regular TAR member '%s'", member.name)
+                        continue
+                    members.append(member)
+                    if len(members) > self._archive_file_cap():
+                        self._check_archive_caps(len(members), 0, tar_path)
+                self._check_archive_caps(len(members), sum(m.size for m in members), tar_path)
+                budget = _ArchiveBudget(self._archive_byte_cap(), tar_path)
+                for member in members:
+                    dest = self._safe_member_dest(tmp_dir, member.name)
+                    if dest is None:
+                        continue
+                    src = tf.extractfile(member)
+                    if src is None:
+                        continue
+                    with src:
+                        budget.copy(src, dest)
             samples = self._load_filesystem(tmp_dir)
             # Rewrite paths before tmp_dir is deleted
             for s in samples:

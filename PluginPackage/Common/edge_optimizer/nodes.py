@@ -21,7 +21,7 @@ import logging
 import subprocess
 import sys
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
 from pydantic import Field
 
 import numpy as np
@@ -92,6 +92,40 @@ def _export_display_name(artifact, model_format: str, quantization: str) -> str:
     return f"{base} · {tail}" if base else tail
 
 
+def _tflite_tensor_details(tf: Any, model_content: bytes) -> dict | None:
+    """Input/output shape, dtype and (scale, zero_point) of a TFLite model.
+
+    Recorded in ``DeploymentArtifact.metadata["tensor_details"]`` so the
+    deployment_packager can write preprocessing.json (int8 input scaling)
+    without a TFLite runtime of its own. Best effort — ``None`` on failure.
+    """
+    try:
+        interp = tf.lite.Interpreter(model_content=model_content)
+        interp.allocate_tensors()
+
+        def one(d: dict) -> dict:
+            scale, zero = d.get("quantization") or (0.0, 0)
+            return {
+                "name": d.get("name"),
+                "shape": [int(x) for x in d.get("shape", [])],
+                "dtype": np.dtype(d.get("dtype")).name,
+                "quantization": {"scale": float(scale), "zero_point": int(zero)} if scale else None,
+            }
+
+        return {
+            "inputs": [one(d) for d in interp.get_input_details()],
+            "outputs": [one(d) for d in interp.get_output_details()],
+        }
+    except Exception:
+        log.debug("EdgeOptimizerNode: could not read TFLite tensor details", exc_info=True)
+        return None
+
+
+def _first_shape(details: dict | None, key: str) -> list[int]:
+    rows = (details or {}).get(key) or []
+    return list(rows[0].get("shape") or []) if rows else []
+
+
 class EdgeOptimizerNode(Node):
     """Optimize a Keras SavedModel for edge deployment via TFLite or ONNX.
 
@@ -113,7 +147,7 @@ class EdgeOptimizerNode(Node):
         label="Edge Optimizer",
         description="Optimize models for edge deployment via TFLite or ONNX quantization.",
         category="Export",
-        version="1.0.0",
+        version="1.1.0",
         tags=["ml", "edge", "tflite", "onnx", "quantization", "common"],
         requires_gpu=False,
         supports_cpu=True,
@@ -243,15 +277,25 @@ class EdgeOptimizerNode(Node):
         labels_path.write_text("\n".join(labels), encoding="utf-8")
         file_size = dest.stat().st_size
         quant = str(self.config.quantization)
+        try:
+            import tensorflow as tf
+
+            tensor_details = _tflite_tensor_details(tf, dest.read_bytes())
+        except Exception:
+            tensor_details = None
         return DeploymentArtifact(
             artifact_path=str(dest),
             model_format="tflite",
             target_hardware="cpu",
             quantization=quant,
             labels=labels,
+            input_shape=_first_shape(tensor_details, "inputs"),
+            output_shape=_first_shape(tensor_details, "outputs"),
             file_size_bytes=file_size,
             metadata={
                 "source": str(src),
+                "source_model_path": str(src),
+                "tensor_details": tensor_details,
                 "copied": True,
                 "labels": list(labels),
                 "labels_path": str(labels_path),
@@ -357,6 +401,7 @@ class EdgeOptimizerNode(Node):
             f.write("\n".join(labels))
 
         file_size = len(tflite_model)
+        tensor_details = _tflite_tensor_details(tf, tflite_model)
         log.info("EdgeOptimizerNode: TFLite model saved to: %s (%d KB)", tflite_path, file_size // 1024)
         log.info("EdgeOptimizerNode: labels saved to: %s", labels_path)
         _report_progress({
@@ -371,9 +416,13 @@ class EdgeOptimizerNode(Node):
             target_hardware="cpu",
             quantization=effective_quant,
             labels=list(labels),
+            input_shape=_first_shape(tensor_details, "inputs"),
+            output_shape=_first_shape(tensor_details, "outputs"),
             file_size_bytes=file_size,
             metadata={
                 "requested_quantization": quantization,
+                "source_model_path": str(artifact.model_path),
+                "tensor_details": tensor_details,
                 "labels": list(labels),
                 "labels_path": str(labels_path),
                 "display_name": _export_display_name(artifact, "tflite", effective_quant),
