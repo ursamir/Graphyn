@@ -781,6 +781,16 @@ export default function App() {
         }
         return
       }
+      if (parsed.editorPipeline && parsed.workspaceId) {
+        const env = parsed.editorEnv
+        useAppStore
+          .getState()
+          .openPipelineInEditor(
+            parsed.editorPipeline,
+            env === 'draft' || env === 'staging' || env === 'prod' ? env : undefined,
+          )
+        return
+      }
       if (parsed.runId) {
         openRun(parsed.runId, {
           project: parsed.workspaceId,

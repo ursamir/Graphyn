@@ -5,14 +5,13 @@
 * ``ex-06-speech-commands-e2e`` (examples/06…/pipeline_train_ml) — Step 2.
 
 Both carry ``metadata.group = "speech-commands-e2e"``, ``phase`` 1/2,
-``step_title`` and a ``title``; Step 1's export folder is exactly what Step 2
-ingests after the template sync path rewrite. Every node has a human label
-consistent with its config.
+``step_title`` and a ``title``; Step 1 exports into Library Outputs
+(``workspace/datasets/output/…``) and Step 2 ingests that folder via ``latest``.
+Every node has a human label consistent with its config.
 """
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -129,15 +128,21 @@ def test_step1_output_is_step2_input_after_template_sync():
     s2 = rewrite_graph_paths(_graph(STEP2), slug=STEP2_ID)
     exp = next(n for n in s1["nodes"] if n["node_type"] == "audio_exporter")["config"]
     ing = next(n for n in s2["nodes"] if n["node_type"] == "dataset_ingest")["config"]
-    assert f"{exp['output_dir']}/{exp['version_tag']}" == ing["path"]
-    assert ing["path"].startswith("workspace/artifacts/speech-commands/dataset/")
+    assert exp["output_dir"].startswith("workspace/datasets/output/")
+    assert ing["path"].startswith(exp["output_dir"])
+    assert ing["path"] in (
+        f"{exp['output_dir']}/latest",
+        f"{exp['output_dir']}/{exp['version_tag']}",
+    )
 
 
-def test_ui_project_stamp_keeps_handoff_dir():
-    """projectStamp.ts never retargets workspace/artifacts/<slug>/dataset/... exporters."""
+def test_ui_project_stamp_retargets_library_export():
+    """Prepare templates use Library output_dir so stamp → datasets/output/<ws>."""
     exp = next(n for n in _graph(STEP1)["nodes"] if n["node_type"] == "audio_exporter")["config"]
-    assert re.search(r"(^|/)workspace/artifacts/[^/]+/dataset(/|$)", exp["output_dir"])
-    assert not exp["output_dir"].startswith("workspace/datasets/output/")
+    assert exp["output_dir"].startswith("workspace/datasets/output/")
+    assert "workspace/artifacts/" not in exp["output_dir"]
+    ing = next(n for n in _graph(STEP2)["nodes"] if n["node_type"] == "dataset_ingest")["config"]
+    assert ing["path"].startswith("workspace/datasets/output/")
 
 
 @pytest.mark.parametrize("path", sorted(EX06.glob("*.graph.json")) + [STEP1], ids=lambda p: p.name)

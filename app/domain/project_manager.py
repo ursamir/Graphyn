@@ -475,7 +475,10 @@ class ProjectManager:
         return self._project_dir(name) / "links.json"
 
     def get_links(self, name: str) -> dict:
-        """Return ``{inputs: string[], outputs: {version}[]}`` for a project."""
+        """Return ``{inputs: string[], outputs: {version}[]}`` for a project.
+
+        Console UI manages ``inputs`` only; ``outputs`` remains for API/MCP.
+        """
         self._require_project(name)
         data = self._read_json(self._links_path(name), {})
         if not isinstance(data, dict):

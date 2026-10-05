@@ -16,6 +16,7 @@ import { humanizeTemplateName, humanNodeLabel, stripIsolatedPrefix } from '../..
 import { workspaceErrorMessage, workspaceNameError } from '../../lib/workspaceName'
 import { buildNodeTypePluginMap, summarizeMissing, type PluginManifestLike } from './missingPlugins'
 import { apiFetch } from '../../api/client'
+import { onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 import { probePathExists } from '../edge/edgeDeployTemplate'
 import { applyTemplateFilter, templateFilterValue } from './templateFilter'
 import {
@@ -158,7 +159,26 @@ export default function TemplatesView() {
     errors: Array<{ id?: string; error?: string } | string>
   } | null>(null)
   const [syncing, setSyncing] = React.useState(false)
-  const [filter, setFilter] = React.useState<'all' | 'examples' | 'saved' | 'marketplace'>('all')
+  type TabFilter = 'all' | 'examples' | 'saved' | 'marketplace'
+  const tabFromUrl = (): TabFilter => {
+    const t = readSearchParams().get('tab')
+    return t === 'examples' || t === 'saved' || t === 'marketplace' ? t : 'all'
+  }
+  /* Tab is URL-addressable (?tab=marketplace) so the Marketplace catalog can be
+     linked, bookmarked and restored by the browser back button. */
+  const [filter, setFilterState] = React.useState<TabFilter>(tabFromUrl)
+  const setFilter = React.useCallback((next: TabFilter) => {
+    setFilterState(next)
+    replacePathSearch({ tab: next === 'all' ? undefined : next })
+  }, [])
+  React.useEffect(
+    () =>
+      onPathChange(() => {
+        const t = tabFromUrl()
+        setFilterState((cur) => (cur === t ? cur : t))
+      }),
+    [],
+  )
   const [search, setSearch] = React.useState('')
   const [marketplaceTotal, setMarketplaceTotal] = React.useState<number | null>(null)
   const [marketplaceStats, setMarketplaceStats] = React.useState<{

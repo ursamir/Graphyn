@@ -92,6 +92,7 @@ dataset_builder.process(features)
 workspace/
 ├── datasets/
 │   ├── input/
+│   │   ├── .graphyn_inventories/  # Cached per-label file/audio counts (GET /data/inputs)
 │   │   ├── {label}/           # Any allowlisted files (audio, csv, json, txt, md, pdf, png/jpg, parquet); sub-folders = classes
 │   │   │   ├── file1.wav
 │   │   │   └── file2.mp3
@@ -105,6 +106,7 @@ workspace/
 │       │   └── {label}/vN/    # copy + manifest.json; project id "_inputs/{label}"
 │       └── {project}/
 │           ├── project.json       # Project metadata
+│           ├── links.json         # `{inputs:[]}` Home pins (bookmark); `outputs` API-only
 │           ├── taxonomy.json      # Label hierarchy
 │           ├── contract.json      # Quality constraints
 │           ├── spec.md            # Free-form specification
@@ -268,8 +270,8 @@ data: {"type": "summary", "total_files": 3, "total_duration_seconds": 12.5, "lab
 
 ## Security Boundaries
 
-- `InputNode` and `MicInputNode` validate that `path` is inside `workspace/datasets/input/` using `os.path.commonpath`.
-- `ExportNode` validates that the output path stays inside `workspace/datasets/output/` and that `project` and `version` match `^[a-zA-Z0-9_\-]+$`.
+- `dataset_ingest` (and similar ingest nodes) validate that configured `path` resolves under the project dir (prefer `workspace/datasets/input/`); produced paths under `datasets/output/` or `artifacts/.../dataset/` do not fall back to example seeds unless `GRAPHYN_INGEST_EXAMPLE_FALLBACK=1`.
+- `audio_exporter` writes under `workspace/datasets/output/{project}/vN/` with an immutable `manifest.json`; `project` and `version` match `^[a-zA-Z0-9_\-]+$` / `vN…`.
 - All API endpoints that accept path components use `_safe_child()` to prevent path traversal.
 - Template names are validated against `^[A-Za-z0-9_-]+$`.
 - Run IDs are validated as alphanumeric before filesystem access.
@@ -283,8 +285,9 @@ data: {"type": "summary", "total_files": 3, "total_duration_seconds": 12.5, "lab
 
 Dataset versions are immutable: re-exporting writes the next version (`v2`, `v3`, …)
 instead of overwriting. A pipeline that should always train on the newest version can
-point a path at `…/<dataset folder>/latest` (Example 06's training template does:
-`workspace/artifacts/speech-commands/dataset/speech_commands/latest`). Before every run
+point a path at `…/<dataset folder>/latest` (Speech-commands Step 2 uses
+`workspace/datasets/output/<workspace>/latest` after stamp; the unsaved template
+default is `workspace/datasets/output/audio_export/latest`). Before every run
 (API, webhook, schedule, SDK, MCP) `app/core/execution/dataset_refs.py` replaces `latest`
 with the newest **non-empty** `v<N>(.<N>)*` folder, so the executed graph snapshot, the
 run record's `external_inputs` / `dataset_versions` and *Replay exactly* all pin that

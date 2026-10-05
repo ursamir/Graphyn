@@ -49,7 +49,7 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 | `edge_optimizer` | ML | optional: tensorflow, onnx, tf2onnx |
 | `realtime_inference` | Inference | optional: tensorflow, torch, onnxruntime |
 | `dataset_balancer` | ML | numpy |
-| `dataset_versioner` | ML | hashlib, json (stdlib) |
+| ~~`dataset_versioner`~~ | — | **Removed** (never shipped). Use `audio_exporter` + `dataset_versions` for `datasets/output/<project>/vN`. |
 | `experiment_tracker` | ML | json (stdlib); optional: mlflow |
 | `deployment_packager` | ML | zipfile, tarfile, json (stdlib); librosa (optional, self-test) — 1.1: runnable bundle (preprocessing.json from the source run, real-audio run_inference.py, README, provenance.json, SHA256SUMS, selftest.json, `<package>.manifest.json` sidecar) |
 | `embedding_generator` | Features | optional: torch, transformers, openl3, speechbrain |
@@ -145,7 +145,7 @@ WakeWord: `wakeword_data_gen`, `wakeword_feature_extract`, `wakeword_train`, `wa
 - **`drift_detect`** — `method` = `psi` (default; reference-quantile bins plus out-of-range tail bins) or `ks` (two-sample KS D, p-values reported); `bins` default 10 (must be ≥ 2); `split` = `all` (default, concatenates train/val/test) / `train` / `val` / `test` for DatasetArtifacts; `threshold` default 0.2. Score = max per-feature value; features are matched by name.
 - **`ab_assign`** — deterministic sha256 of `{experiment_key}:{unit_id}`. `variants` default `["control","treatment"]`, `weights` default `[0.5,0.5]` (empty = uniform; must be non-negative and sum to more than 0). Record input reads `unit_id_field` (default `unit_id`); a missing field raises. Collections and booleans are rejected.
 - **`feature_store_write` / `feature_store_read`** — each write appends a timestamped version per entity. `entity_keys` default `["id"]` (a missing field raises; `[]` = content-hash key). `event_time_field` (default empty = write time) sets the version timestamp. `feature_store_read.as_of` (ISO-8601, default empty = latest) returns each entity's latest version at or before that time.
-- **`dataset_versioner`** (Common) — `overwrite` default false: an existing `{output_dir}/{version_tag}` whose `lineage.json` hash differs raises `FileExistsError`. Re-running identical data is always allowed.
+- **`dataset_versioner`** — **Not shipped.** Prefer **`audio_exporter`** (writes immutable `datasets/output/<project>/vN/` + `manifest.json` via `app.core.mlops.dataset_versions`) or Datasets → Inputs **Freeze as version**.
 - **`yolo_val`** — `device` = `cpu` (default) / `auto` (ultralytics picks) / `cuda` / `mps`. Note: it runs ultralytics *predict* over the dataset and reports `mean_score` / `n` (not mAP), with a contrast-blob fallback when ultralytics or a model is missing.
 - **`rag_rerank`** — `backend` default `bm25` (lexical, no deps); `cross_encoder` needs sentence-transformers (`model_name_or_path`, `top_n` default 5).
 - **`kg_light_extract`** — `backend` default `pattern` (regex triples); `llm` is declared but raises `NotImplementedError`.
@@ -201,7 +201,7 @@ WakeWord: `wakeword_data_gen`, `wakeword_feature_extract`, `wakeword_train`, `wa
 | `edge_optimizer` | No | No | No | No | Yes | Yes |
 | `realtime_inference` | Optional | Yes (TFLite) | Yes | Yes | Yes | No |
 | `dataset_balancer` | No | No | No | No | No | No |
-| `dataset_versioner` | No | No | No | No | Yes | Yes |
+| `dataset_versioner` | — | — | — | — | — | Removed (use `audio_exporter`) |
 | `experiment_tracker` | No | No | No | No | Yes | Yes |
 | `deployment_packager` | No | Yes | No | No | No (build time, self-test) | No |
 | `embedding_generator` | Optional | No | No | No | Yes | Yes |

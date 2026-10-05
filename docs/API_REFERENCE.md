@@ -1047,23 +1047,55 @@ different bytes is stored as `name_1.ext`.
 
 Output projects and their versions (envelope by default; `?envelope=0` for a bare
 array). Frozen inputs follow the workspaces as `{"project": "_inputs/<label>",
-"label": "<label>", "versions": [...], "kind": "input_snapshot"}`.
+"label": "<label>", "versions": [...], "kind": "input_snapshot"}`. Legacy
+`artifacts/<slug>/dataset/<name>` trees are soft-listed as
+`{"project": "_artifacts/<slug>/<name>", "kind": "artifact_dataset",
+"fs_path": "workspace/artifacts/…", "versions": [...]}` (browse via Publish).
+
+### `POST /api/v1/data/outputs/publish-artifact`
+
+Copy one version of a soft-listed artifact dataset into Library Outputs:
+
+```json
+{"fs_path": "workspace/artifacts/speech-commands/dataset/speech_commands",
+ "source_version": "v1", "target_project": "my-test1"}
+```
+
+Returns `{project, version, path, file_count, content_hash, source}`. Audited
+`dataset.publish_artifact`.
 
 ### `GET /api/v1/data/outputs/{project}/{version}`
 
-`project` may be `_inputs/<label>`. Returns an **object**:
+`project` may be `_inputs/<label>`. Returns an **object**. Default is a **lean
+browse page** (no per-file sha256, empty `samples`, first 200 files):
+
+| Query | Default | Notes |
+|---|---|---|
+| `limit` | `200` | Max file rows (1–1000) |
+| `offset` | `0` | Pagination |
+| `include_hash` | `false` | Per-file `sha256` when true |
+| `include_samples` | `false` | Legacy `samples[]` (duplicates paths) when true |
+| `split` | — | Only files of this split; `file_count` / `truncated` then describe the split |
+
+Pages are ordered unsplit → train → val → dev → test → other splits, then by path.
 
 ```json
 {
   "project": "my-project", "version": "v1",
-  "files": [{"name": "a1b2.wav", "path": "train/speech/a1b2.wav", "size": 32044, "sha256": "…", "kind": "audio"}],
-  "file_count": 1, "content_hash": "64c1…", "created_at": "…",
-  "source": {"kind": "audio_exporter", "run_id": "…"},
-  "samples": [{"path": "my-project/v1/train/speech/a1b2.wav", "split": "train", "label": "speech"}]
+  "files": [{"name": "a1b2.wav", "path": "train/speech/a1b2.wav", "size": 32044, "kind": "audio", "split": "train", "label": "speech"}],
+  "file_count": 3700, "limit": 200, "offset": 0, "truncated": true,
+  "dataset_files": [{"name": "labels.csv", "path": "labels.csv", "size": 90211, "kind": "table", "modified_at": "…"}],
+  "content_hash": "64c1…", "created_at": "…", "samples": [],
+  "source": {"kind": "audio_exporter", "run_id": "…"}
 }
 ```
 
-`samples` comes from `labels.csv`, else the `train|val|test/<label>/*.wav` tree.
+`split` / `label` come from `labels.csv` or the `train|val|test/<label>/…` path.
+Version-root bookkeeping (`labels.csv`, `lineage.json`, `manifest.json`,
+`metadata.json`) is returned in `dataset_files`, not paged in `files`, so
+`file_count` counts data files only. Rows on the returned page (and
+`dataset_files`) carry `modified_at` from a filesystem stat.
+Pass `include_hash=1` for integrity tooling; `include_samples=1` for the old array.
 
 ### `GET /api/v1/data/outputs/{project}/{version}/stats`
 

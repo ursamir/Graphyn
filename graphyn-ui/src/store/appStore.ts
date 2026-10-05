@@ -177,6 +177,13 @@ interface AppState {
    */
   loadGraphIntoBuilder: (graph: GraphIR, opts?: { fromRunId?: string; snapshot?: boolean }) => void
   consumePendingGraph: () => GraphIR | null
+  /**
+   * Saved pipeline the Editor should open by name (keeps the toolbar's
+   * pipeline / Draft·staging·prod link, unlike `loadGraphIntoBuilder`).
+   */
+  pendingPipeline: { name: string; env?: 'draft' | 'staging' | 'prod' } | null
+  openPipelineInEditor: (name: string, env?: 'draft' | 'staging' | 'prod') => void
+  consumePendingPipeline: () => { name: string; env?: 'draft' | 'staging' | 'prod' } | null
   /** Run the Editor's canvas was opened from (set with the pending graph). */
   editorRunContext: { runId: string; snapshot: boolean } | null
   setEditorRunContext: (ctx: { runId: string; snapshot: boolean } | null) => void
@@ -557,6 +564,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     const g = get().pendingGraph
     if (g) set({ pendingGraph: null })
     return g
+  },
+  pendingPipeline: null,
+  openPipelineInEditor: (name, env) => {
+    navigatePath(paths.editor(get().activeProject || 'workspace'), true)
+    set({ pendingPipeline: { name, env }, view: 'builder' })
+  },
+  consumePendingPipeline: () => {
+    const p = get().pendingPipeline
+    if (p) set({ pendingPipeline: null })
+    return p
   },
   builderDataset: null,
   setBuilderDataset: (builderDataset) => set({ builderDataset }),

@@ -3,7 +3,7 @@
   "metadata": {
     "name": "speech_commands_e2e_preprocess_down",
     "seed": 42,
-    "description": "E2E speech commands — preprocessing phase (one command at a time, appending to shared output).",
+    "description": "E2E speech commands \u2014 preprocessing phase (one command at a time, appending to shared output).",
     "created_at": null,
     "tags": [
       "audio",
@@ -21,7 +21,7 @@
         "source_type": "filesystem",
         "recursive": false
       },
-      "label": "Load recordings · down",
+      "label": "Load recordings \u00b7 down",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -34,7 +34,7 @@
         "normalize": true,
         "normalize_method": "peak"
       },
-      "label": "Clean audio · 16 kHz mono",
+      "label": "Clean audio \u00b7 16 kHz mono",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -57,7 +57,7 @@
         "rejection_policy": "skip",
         "check_duration": false
       },
-      "label": "Quality check · SNR ≥ 5 dB",
+      "label": "Quality check \u00b7 SNR \u2265 5 dB",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -74,7 +74,7 @@
         "check_silence": false,
         "check_bandwidth": false
       },
-      "label": "Length check · 0.2–1.0 s",
+      "label": "Length check \u00b7 0.2\u20131.0 s",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -102,7 +102,7 @@
           }
         ]
       },
-      "label": "Augment · pitch + tempo ×2",
+      "label": "Augment \u00b7 pitch + tempo \u00d72",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -110,7 +110,7 @@
       "id": "audio_exporter_6",
       "node_type": "audio_exporter",
       "config": {
-        "output_dir": "workspace/artifacts/speech-commands/dataset/speech_commands",
+        "output_dir": "workspace/datasets/output/audio_export",
         "split_ratios": {
           "train": 0.7,
           "val": 0.15,
@@ -120,7 +120,7 @@
         "random_seed": 42,
         "append": true
       },
-      "label": "Save dataset · append",
+      "label": "Save dataset \u00b7 append",
       "capability_metadata": null,
       "event_trigger": null
     }

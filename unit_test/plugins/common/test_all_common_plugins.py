@@ -30,7 +30,7 @@ ALL_COMMON_PLUGINS = [
     ("PluginPackage/Common/edge_optimizer/", "edge_optimizer"),
     ("PluginPackage/Common/realtime_inference/", "realtime_inference"),
     ("PluginPackage/Common/dataset_balancer/", "dataset_balancer"),
-    ("PluginPackage/Common/dataset_versioner/", "dataset_versioner"),
+    # dataset_versioner was never shipped — versioning is audio_exporter + dataset_versions
     ("PluginPackage/Common/experiment_tracker/", "experiment_tracker"),
     ("PluginPackage/Common/deployment_packager/", "deployment_packager"),
     ("PluginPackage/Common/embedding_generator/", "embedding_generator"),

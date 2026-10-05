@@ -3,7 +3,7 @@
   "metadata": {
     "name": "speech_commands_e2e_prepare",
     "seed": 42,
-    "title": "Speech commands E2E · Step 1 · Prepare dataset",
+    "title": "Speech commands E2E \u00b7 Step 1 \u00b7 Prepare dataset",
     "description": "Step 1 of 2. Cleans, splits, quality-checks and augments the recordings of all six commands (yes, no, up, down, go, stop) and saves one train/val/test dataset (about 3,700 clips) that Step 2 trains on. Runs in a few minutes on CPU; re-running replaces the dataset.",
     "created_at": null,
     "tags": [
@@ -27,7 +27,7 @@
         "source_type": "filesystem",
         "recursive": true
       },
-      "label": "Load recordings · 6 commands",
+      "label": "Load recordings \u00b7 6 commands",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -40,7 +40,7 @@
         "normalize": true,
         "normalize_method": "peak"
       },
-      "label": "Clean audio · 16 kHz mono",
+      "label": "Clean audio \u00b7 16 kHz mono",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -63,7 +63,7 @@
         "rejection_policy": "skip",
         "check_duration": false
       },
-      "label": "Quality check · SNR ≥ 5 dB",
+      "label": "Quality check \u00b7 SNR \u2265 5 dB",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -80,7 +80,7 @@
         "check_silence": false,
         "check_bandwidth": false
       },
-      "label": "Length check · 0.2–1.0 s",
+      "label": "Length check \u00b7 0.2\u20131.0 s",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -108,7 +108,7 @@
           }
         ]
       },
-      "label": "Augment · pitch + tempo ×2",
+      "label": "Augment \u00b7 pitch + tempo \u00d72",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -116,7 +116,7 @@
       "id": "audio_exporter_6",
       "node_type": "audio_exporter",
       "config": {
-        "output_dir": "workspace/artifacts/speech-commands/dataset/speech_commands",
+        "output_dir": "workspace/datasets/output/audio_export",
         "split_ratios": {
           "train": 0.7,
           "val": 0.15,
@@ -126,7 +126,7 @@
         "random_seed": 42,
         "append": false
       },
-      "label": "Save dataset · 70/15/15 split",
+      "label": "Save dataset \u00b7 70/15/15 split",
       "capability_metadata": null,
       "event_trigger": null
     }

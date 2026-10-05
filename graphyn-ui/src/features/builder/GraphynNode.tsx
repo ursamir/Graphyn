@@ -7,6 +7,7 @@ import { progressBadgeText, type NodeProgress } from '../runs/runProgress'
 import { numberInputAttrs } from './configValidation'
 import { nodeSummary } from './editorChrome'
 import { AugmentationsEditor } from './AugmentationsEditor'
+import { DatasetPathPicker, isDatasetInputPathKey } from './DatasetPathPicker'
 import { LayersEditor } from './LayersEditor'
 import { SplitRatiosEditor } from './SplitRatiosEditor'
 import { StringListEditor } from './StringListEditor'
@@ -447,6 +448,7 @@ function fieldEditor(
   }
   const pathish =
     k.includes('path') || k.includes('dir') || k.includes('file') || k.endsWith('_url') || k === 'url'
+  const datasetInputPath = isDatasetInputPathKey(key)
   return (
     <div>
       <input
@@ -464,6 +466,7 @@ function fieldEditor(
         }}
         onMouseDown={(e) => e.stopPropagation()}
       />
+      {datasetInputPath ? <DatasetPathPicker value={value} onPick={(p) => onChange(p)} /> : null}
       {secretHint}
     </div>
   )

@@ -9,8 +9,11 @@ Responsibility:   Input-dataset (``datasets/input/<label>``) operations shared b
 Owns:             AUDIO_EXTENSIONS, UPLOAD_ALLOWED_EXTENSIONS, UploadLimits,
                   UploadSession, UploadError, file_kind, iter_files,
                   label_file_rows, label_counts, label_stats,
-                  snapshot_input_label, list_input_snapshots, iter_zip_stream,
-                  sha256_file, audit_file_meta, INPUT_SNAPSHOT_PROJECT.
+                  snapshot_input_label, list_input_snapshots, list_artifact_datasets,
+                  publish_artifact_dataset, iter_zip_stream,
+                  sha256_file, audit_file_meta, INPUT_SNAPSHOT_PROJECT,
+                  LABEL_INVENTORY_DIR, LABEL_INVENTORY_NAME,
+                  invalidate_label_inventory.
 Public Surface:   Same.
 Must NOT:         Import app.api or app.domain; record audit events (callers
                   audit with their own actor).
@@ -53,9 +56,12 @@ UPLOAD_ALLOWED_EXTENSIONS: frozenset[str] = frozenset(
 ARCHIVE_SUFFIXES: tuple[str, ...] = (".zip", ".tar", ".tar.gz", ".tgz")
 # Snapshots of input labels live under this pseudo-project in datasets/output.
 INPUT_SNAPSHOT_PROJECT = "_inputs"
+# Cached file/audio counts for large input trees (sibling dir, not inside the label).
+LABEL_INVENTORY_DIR = ".graphyn_inventories"
+LABEL_INVENTORY_NAME = ".graphyn_label_inventory.json"  # legacy in-label name (ignored in walks)
 _LABEL_RE = re.compile(r"^[\w\-]{1,64}$")
 _UNSAFE_CHARS_RE = re.compile(r"[^\w.\-]")
-_SKIP_NAMES = frozenset({"__MACOSX", "Thumbs.db", "desktop.ini"})
+_SKIP_NAMES = frozenset({"__MACOSX", "Thumbs.db", "desktop.ini", LABEL_INVENTORY_NAME, LABEL_INVENTORY_DIR})
 _CHUNK = 1024 * 1024
 
 
@@ -205,18 +211,144 @@ def iter_files(root: Path, *, jail: Path | None = None) -> Iterator[tuple[Path, 
         yield abs_path, rel
 
 
-def label_counts(label_path: Path) -> dict[str, int]:
-    """Cheap per-label counts (no stat): ``{file_count, audio_count}``."""
+def count_files_budgeted(
+    root: Path,
+    *,
+    max_files: int = 50_000,
+) -> dict[str, Any]:
+    """Walk *root* counting files, stopping after *max_files*.
+
+    Returns ``{file_count, audio_count, truncated}``. Prefer this over unbounded
+    ``rglob`` (MCP / large trees). Hidden / skip-name entries are ignored.
+    """
     total = audio = 0
-    for dirpath, dirnames, filenames in os.walk(label_path, followlinks=True):
-        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+    truncated = False
+    root = Path(root)
+    if not root.is_dir():
+        return {"file_count": 0, "audio_count": 0, "truncated": False}
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in _SKIP_NAMES]
         for fn in filenames:
-            if fn.startswith("."):
+            if fn.startswith(".") or fn in _SKIP_NAMES:
                 continue
             total += 1
             if fn.lower().endswith(AUDIO_EXTENSIONS):
                 audio += 1
-    return {"file_count": total, "audio_count": audio}
+            if total >= max_files:
+                truncated = True
+                return {"file_count": total, "audio_count": audio, "truncated": truncated}
+    return {"file_count": total, "audio_count": audio, "truncated": truncated}
+
+
+def _dir_mtime_signature(root: Path, *, max_dirs: int = 5_000) -> str:
+    """Cheap tree fingerprint: directory mtimes + file counts (not per-file hashes)."""
+    parts: list[str] = []
+    n = 0
+    root = Path(root)
+    if not root.is_dir():
+        return ""
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in _SKIP_NAMES]
+        visible = [f for f in filenames if not f.startswith(".") and f not in _SKIP_NAMES]
+        try:
+            st = Path(dirpath).stat()
+            mtime_ns = getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))
+        except OSError:
+            mtime_ns = 0
+        rel = Path(dirpath).relative_to(root).as_posix() if Path(dirpath) != root else "."
+        parts.append(f"{rel}:{mtime_ns}:{len(visible)}")
+        n += 1
+        if n >= max_dirs:
+            parts.append(f"…truncated:{n}")
+            break
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:32]
+
+
+def invalidate_label_inventory(label_path: Path) -> None:
+    """Drop the cached inventory so the next :func:`label_counts` rescans."""
+    label_path = Path(label_path)
+    for path in (
+        label_path.parent / LABEL_INVENTORY_DIR / f"{label_path.name}.json",
+        label_path / LABEL_INVENTORY_NAME,
+    ):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _inventory_path(label_path: Path) -> Path:
+    return Path(label_path).parent / LABEL_INVENTORY_DIR / f"{Path(label_path).name}.json"
+
+
+def _read_label_inventory(label_path: Path) -> dict[str, Any] | None:
+    path = _inventory_path(label_path)
+    if not path.is_file():
+        # Migrate / ignore legacy in-label file
+        legacy = Path(label_path) / LABEL_INVENTORY_NAME
+        if legacy.is_file():
+            try:
+                legacy.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _write_label_inventory(label_path: Path, payload: dict[str, Any]) -> None:
+    path = _inventory_path(label_path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def label_counts(label_path: Path, *, max_files: int = 50_000) -> dict[str, int]:
+    """Cheap per-label counts (no per-file stat): ``{file_count, audio_count}``.
+
+    Caps the walk at *max_files* so huge trees cannot hang list endpoints.
+    Caches results under ``datasets/input/.graphyn_inventories/<label>.json``
+    keyed by a directory mtime signature so large trees are not re-walked on
+    every ``GET /data/inputs``.
+    """
+    label_path = Path(label_path)
+    sig = _dir_mtime_signature(label_path)
+    cached = _read_label_inventory(label_path)
+    if (
+        cached
+        and cached.get("signature") == sig
+        and cached.get("max_files") == max_files
+        and isinstance(cached.get("file_count"), int)
+        and isinstance(cached.get("audio_count"), int)
+    ):
+        return {"file_count": int(cached["file_count"]), "audio_count": int(cached["audio_count"])}
+
+    counted = count_files_budgeted(label_path, max_files=max_files)
+    out = {"file_count": int(counted["file_count"]), "audio_count": int(counted["audio_count"])}
+    _write_label_inventory(
+        label_path,
+        {
+            **out,
+            "truncated": bool(counted.get("truncated")),
+            "max_files": max_files,
+            "signature": sig,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    return out
 
 
 def label_file_rows(input_root: Path, label_path: Path, label: str) -> list[dict[str, Any]]:
@@ -450,6 +582,7 @@ class UploadSession:
         if original and Path(original).name != final.name:
             row["original_name"] = original
         self.written.append(row)
+        invalidate_label_inventory(self.input_root / label)
 
     def _write_member(self, src: IO[bytes], parts: list[str], folders_as_labels: bool, original: str, *, budget: int | None) -> int:
         label, sub = self.plan(parts, folders_as_labels)
@@ -756,6 +889,99 @@ def list_input_snapshots(output_root: Path) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def list_artifact_datasets(artifacts_root: Path) -> list[dict[str, Any]]:
+    """Legacy template hand-off trees under ``artifacts/<slug>/dataset/<name>/vN``.
+
+    Returned as soft-listed Outputs rows (``kind: artifact_dataset``) so the
+    console can show them and offer Publish into ``datasets/output/<workspace>``.
+    """
+    from app.core.mlops.dataset_versions import VERSION_RE
+
+    root = Path(artifacts_root)
+    out: list[dict[str, Any]] = []
+    if not root.is_dir():
+        return out
+    for slug in sorted(root.iterdir()):
+        if not slug.is_dir() or slug.name.startswith("."):
+            continue
+        ds_root = slug / "dataset"
+        if not ds_root.is_dir():
+            continue
+        for name in sorted(ds_root.iterdir()):
+            if not name.is_dir() or name.name.startswith("."):
+                continue
+            versions = sorted(
+                v.name
+                for v in name.iterdir()
+                if v.is_dir() and VERSION_RE.match(v.name) and any(v.iterdir())
+            )
+            if not versions:
+                continue
+            fs_path = f"workspace/artifacts/{slug.name}/dataset/{name.name}"
+            out.append(
+                {
+                    "project": f"_artifacts/{slug.name}/{name.name}",
+                    "label": f"{slug.name}/{name.name}",
+                    "versions": versions,
+                    "kind": "artifact_dataset",
+                    "fs_path": fs_path,
+                }
+            )
+    return out
+
+
+def publish_artifact_dataset(
+    *,
+    source_dir: Path,
+    target_project_dir: Path,
+    version: str | None = None,
+) -> dict[str, Any]:
+    """Copy an artifact dataset version tree into ``datasets/output/<project>/vN``."""
+    from app.core.mlops.dataset_versions import (
+        VERSION_RE,
+        compute_manifest,
+        next_free_version,
+        write_manifest,
+    )
+
+    src = Path(source_dir)
+    if not src.is_dir():
+        raise FileNotFoundError(f"Source dataset version not found: {src}")
+    target_project_dir = Path(target_project_dir)
+    target_project_dir.mkdir(parents=True, exist_ok=True)
+    ver = (version or "").strip()
+    if ver and not VERSION_RE.match(ver):
+        raise ValueError(f"Invalid version {ver!r}")
+    if not ver:
+        ver = next_free_version(target_project_dir)
+    dest = target_project_dir / ver
+    if dest.exists():
+        ver = next_free_version(target_project_dir)
+        dest = target_project_dir / ver
+    staging = target_project_dir / f".publish-{uuid.uuid4().hex}"
+    try:
+        shutil.copytree(src, staging, dirs_exist_ok=False)
+        man = compute_manifest(staging)
+        man["source"] = {
+            "kind": "artifact_publish",
+            "from": str(src).replace("\\", "/"),
+        }
+        man["created_at"] = datetime.now(timezone.utc).isoformat()
+        write_manifest(staging, man)
+        os.rename(staging, dest)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return {
+        "project": target_project_dir.name,
+        "version": ver,
+        "path": str(dest),
+        "file_count": man.get("file_count"),
+        "content_hash": man.get("content_hash"),
+        "source": man.get("source"),
+    }
 
 
 # ── streamed zip ─────────────────────────────────────────────────────────────

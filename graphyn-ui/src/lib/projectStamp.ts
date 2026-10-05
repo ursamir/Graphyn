@@ -15,6 +15,15 @@ const PROJECT_STAMP_NODES = new Set([
 export const GENERIC_EXPORT_OUTPUT_DIR = 'workspace/datasets/output/audio_export'
 const DATASETS_OUTPUT_PREFIX = 'workspace/datasets/output/'
 
+const INGEST_PATH_KEYS = new Set([
+  'path',
+  'dataset_path',
+  'input_path',
+  'source_path',
+  'manifest_path',
+  'dataset',
+])
+
 function normPath(raw: unknown): string {
   return typeof raw === 'string' ? raw.trim().replace(/\\/g, '/').replace(/\/+$/, '') : ''
 }
@@ -22,9 +31,7 @@ function normPath(raw: unknown): string {
 /**
  * True when an exporter's `output_dir` may be moved into the project's
  * Library folder: unset, the plugin default, or already a Library export
- * (`workspace/datasets/output/...`). Explicit artifact paths
- * (`workspace/artifacts/<slug>/dataset/...`) are hand-off locations another
- * template of the same example ingests from — they are never rewritten.
+ * (`workspace/datasets/output/...`).
  */
 export function isRetargetableExportDir(raw: unknown): boolean {
   const p = normPath(raw)
@@ -34,19 +41,61 @@ export function isRetargetableExportDir(raw: unknown): boolean {
 }
 
 /** Stable dataset hand-off trees (`workspace/artifacts/<slug>/dataset/...`). */
-function isArtifactDatasetPath(raw: unknown): boolean {
+export function isArtifactDatasetPath(raw: unknown): boolean {
   return /(^|\/)workspace\/artifacts\/[^/]+\/dataset(\/|$)/.test(normPath(raw))
+}
+
+/** Ingest paths that should follow the active workspace Library Outputs folder. */
+export function shouldRewritePreparedIngestPath(raw: unknown): boolean {
+  const p = normPath(raw)
+  if (!p) return false
+  if (isArtifactDatasetPath(p)) return true
+  if (p === GENERIC_EXPORT_OUTPUT_DIR || p.startsWith(`${GENERIC_EXPORT_OUTPUT_DIR}/`)) return true
+  return false
+}
+
+/** Map a prepared-dataset ingest path onto `datasets/output/<project>/(latest|vN)`. */
+export function rewritePreparedIngestPath(raw: unknown, project: string): string | null {
+  const p = normPath(raw)
+  const proj = project.trim()
+  if (!p || !proj || !shouldRewritePreparedIngestPath(p)) return null
+  const parts = p.split('/').filter(Boolean)
+  const last = parts[parts.length - 1] || ''
+  const suffix = last === 'latest' || /^v\d+(\.\d+)*$/.test(last) ? last : 'latest'
+  return `${DATASETS_OUTPUT_PREFIX}${proj}/${suffix}`
+}
+
+/**
+ * Inspector note for exporter `project` / `output_dir`: the editor shows the
+ * unstamped graph, so a blank Project would otherwise hide where Run writes.
+ */
+export function exportDestinationHint(
+  nodeType: string,
+  fieldKey: string,
+  cfg: Record<string, unknown>,
+  project: string,
+): string | null {
+  if (!PROJECT_STAMP_NODES.has(nodeType)) return null
+  if (fieldKey !== 'project' && fieldKey !== 'output_dir') return null
+  const proj = project.trim()
+  if (!isRetargetableExportDir(cfg.output_dir)) {
+    if (fieldKey !== 'output_dir') return null
+    return isArtifactDatasetPath(cfg.output_dir)
+      ? 'Legacy dataset folder — runs show up in Datasets → Outputs only after Publish.'
+      : 'Custom folder — Run writes here, outside Datasets → Outputs.'
+  }
+  if (!proj) return 'Open a workspace — Run then writes into Datasets → Outputs for it.'
+  if (fieldKey === 'project') return cfg.project === proj ? null : `Run fills this with “${proj}”.`
+  return `Run writes to ${DATASETS_OUTPUT_PREFIX}${proj}/ (next free vN).`
 }
 
 /**
  * Stamp project (+ optional version_tag) onto exporter/versioner nodes and metadata.
  *
- * Exporters only get `project` / `output_dir` when their output_dir is
- * retargetable (see {@link isRetargetableExportDir}) — the exporter ignores
- * output_dir once `project` is set, so stamping an explicit artifact path
- * would break the Phase-1 → Phase-2 hand-off. Run attribution still comes
- * from `metadata.project`. The backend (`graph_prepare`) never rewrites node
- * paths for a project either.
+ * Exporters get `project` / `output_dir = workspace/datasets/output/<ws>` when
+ * retargetable. Prepared-dataset ingest paths (Library default or legacy
+ * `artifacts/<slug>/dataset/...`) rewrite to `datasets/output/<ws>/latest|vN`
+ * so Step 1 → Step 2 hand-off stays in Datasets → Outputs.
  */
 export function stampProjectOnGraph(graph: GraphIR, project: string, version?: string): GraphIR {
   const nodes = (graph.nodes ?? []).map((n) => {
@@ -77,15 +126,23 @@ export function stampProjectOnGraph(graph: GraphIR, project: string, version?: s
       cfg.output_dir.includes('workspace/artifacts/') &&
       !isArtifactDatasetPath(cfg.output_dir)
     ) {
-      // Rewrite artifact sink paths for project isolation without injecting `project`
-      // (caption_export / experiment_tracker declare output_dir but not project).
-      // Dataset hand-off trees (<slug>/dataset/...) are left alone.
+      // Rewrite artifact sink paths for project isolation without injecting `project`.
       // Use node id (not only node_type) so two trainers / evaluators never share a dir.
       const sink = n.id || n.node_type
       const next = `workspace/artifacts/${project}/${sink}`
       if (cfg.output_dir !== next) {
         cfg.output_dir = next
         changed = true
+      }
+    }
+    if (project) {
+      for (const key of INGEST_PATH_KEYS) {
+        if (!(key in cfg)) continue
+        const next = rewritePreparedIngestPath(cfg[key], project)
+        if (next && cfg[key] !== next) {
+          cfg[key] = next
+          changed = true
+        }
       }
     }
     return changed ? { ...n, config: cfg } : n

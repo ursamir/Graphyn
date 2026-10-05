@@ -28,6 +28,21 @@ describe('normalizeDatasetRows', () => {
     expect(rows).toEqual([{ path: 'p/v1/labels.csv', size_bytes: 5 }])
   })
 
+  it('maps lean files with split/label when samples are empty', () => {
+    const rows = normalizeDatasetRows(
+      {
+        project: 'p',
+        version: 'v1',
+        files: [{ path: 'train/yes/a.wav', size: 10, split: 'train', label: 'yes' }],
+        samples: [],
+      },
+      { project: 'p', version: 'v1' },
+    )
+    expect(rows).toEqual([
+      { path: 'p/v1/train/yes/a.wav', size_bytes: 10, split: 'train', label: 'yes' },
+    ])
+  })
+
   it('returns [] for junk', () => {
     expect(normalizeDatasetRows(null)).toEqual([])
     expect(normalizeDatasetRows('nope')).toEqual([])

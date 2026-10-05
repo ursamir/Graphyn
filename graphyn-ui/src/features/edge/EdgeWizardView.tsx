@@ -187,6 +187,8 @@ export default function EdgeWizardView() {
   /** Run id whose artifacts are in `sourceArtifacts` (null while loading / failed). */
   const [sourceArtifactsRun, setSourceArtifactsRun] = React.useState<string | null>(null)
   const [registryModels, setRegistryModels] = React.useState<RegistryModel[]>([])
+  /** False until the first /models answer lands — keeps "No registered models yet" honest. */
+  const [registryLoaded, setRegistryLoaded] = React.useState(false)
   const [pickedModel, setPickedModel] = React.useState('')
 
   const [step, setStep] = React.useState<WizardStep>(1)
@@ -244,6 +246,7 @@ export default function EdgeWizardView() {
     void apiJson<{ models?: RegistryModel[] }>('/models')
       .then((res) => setRegistryModels(Array.isArray(res?.models) ? res.models : []))
       .catch(() => setRegistryModels([]))
+      .finally(() => setRegistryLoaded(true))
   }, [])
 
   // Wave A: list ship packages for workspace (SRS §9.2.14) — non-blocking.
@@ -550,6 +553,13 @@ export default function EdgeWizardView() {
     const id = row?.summary?.best_path_id
     return typeof id === 'string' ? id : null
   }, [projectRuns, sourceRunId])
+  /* "Best result" only discriminates between model paths: on a single-path run
+     every file is path-a, so keras + saved_model would both badge. Runs
+     suppresses the badge the same way (RunsView: pathResults.length > 1). */
+  const multiModelPath = React.useMemo(
+    () => new Set(runModels.map((m) => m.path_id).filter(Boolean)).size > 1,
+    [runModels],
+  )
 
   /** Path we set automatically (so a run switch can clear it without eating user input). */
   const autoModelPathRef = React.useRef<string | null>(null)
@@ -1411,7 +1421,7 @@ export default function EdgeWizardView() {
                               <span className="min-w-0 flex-1">
                                 <span className="flex flex-wrap items-center gap-2 text-[13px] font-medium text-ink-900">
                                   <span className="truncate">{runModelTitle(m)}</span>
-                                  {bestPathId && m.path_id === bestPathId && shippable ? (
+                                  {bestPathId && multiModelPath && m.path_id === bestPathId && shippable ? (
                                     <span className="text-[11px] font-normal text-emerald-700">Best result</span>
                                   ) : null}
                                 </span>
@@ -1573,7 +1583,9 @@ export default function EdgeWizardView() {
                   />
                   {registryModels.length === 0 ? (
                     <p className="mb-2 text-[11px] text-ink-400">
-                      No registered models yet — register one from Models, or paste a path below.
+                      {registryLoaded
+                        ? 'No registered models yet — register one from Models, or paste a path below.'
+                        : 'Looking for registered models…'}
                     </p>
                   ) : (
                     <div className="mb-2 flex flex-wrap items-center gap-2">

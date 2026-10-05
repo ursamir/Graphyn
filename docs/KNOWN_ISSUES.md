@@ -56,6 +56,15 @@ Linear materialize scoring tied on `list[AudioSample]` for `output` vs `rejected
 
 ## Open — Fix This Sprint
 
+### UX-DATASETS-2026-10-05 — Dataset counts / naming gaps found in the UI walkthrough
+
+- **EXPORT-SILENT-SKIP** — `audio_exporter` skips samples with empty data or an invalid sample rate with only a log warning. Run lineage reports the input count (e.g. 3,709 clips) while the version holds 3,705 files; nothing in the run or Datasets says 4 were dropped. Surface a `skipped` count in the node output / run summary. (The warnings also land in the collapsed "N updates" group in run Logs, so even the log trail is easy to miss.)
+- **RUN-OUTPUTS-BASENAMES** — Runs → Run outputs lists files by basename only. Worst case seen: the edge-optimizer step listed **six identical `labels.txt` rows** (different subdirs). Mitigated 2026-10-05: rows with a colliding basename now show their parent dir (`file · 22 B · int8/`). Step summaries ("Got manifest.json, … +4 more") still use bare basenames; show paths relative to the step's output folder there too.
+- **MODEL-DATASET-NAME** — Models → Made from shows `Load prepared dataset · path · <hash> · 3,708 files`: no dataset name/version link, and the count includes `labels.csv` / `lineage.json` / `metadata.json` (Datasets now reports 3,705 data files). Third count for the same data: run banner "3,705 clips", step 1 "3,706 audio clips", Made-from "3,708 files".
+- **INGEST-COUNT-OFF-BY-ONE** — prepare run header says “Used 1,200 clips from speech-commands” while step 1 reports “1,201 audio clips” (Inputs lists 1,200 files).
+- **SHIP-EXISTING-PACKAGE** — Ship wizard step 3 only enables Download after *this session's* package run; a package built earlier from the same model (visible under Models → Used in) is not detected, so users re-run packaging or hunt through the old run's outputs. Offer "a package for this model already exists (built <time>) — Download" when one is found.
+- **RUN-ROW-EMPTY-METRIC-SLOT** — Runs list rows for pipelines without metrics render a stray blank line between status and age (`Done\n \n3h ago`) — a metric placeholder renders empty instead of being omitted.
+
 ### AUDIT-2026-10 — Backend contract gaps (outputs inventory follow-on)
 
 Found by a wider backend logical-gap audit after the generic `publish_files` / `file_tree` / `list_files` redesign. Not style issues — ownership and runtime holes.
@@ -85,17 +94,15 @@ Worker envelope + host `IsolatedResult` / `Node.accept_published_file_trees`. Se
 **Risk:** Divergent jail/edge-case behaviour (absolute vs relative, symlink).  
 **Fix direction:** One helper in `app.core.paths` used by all three.
 
-#### AUDIT-MCP-INPUTS-WALK-1 (P2) — MCP input listing full-tree `rglob`
+#### AUDIT-MCP-INPUTS-WALK-1 (P2) — MCP input listing full-tree `rglob` — **FIXED 2026-10**
 
-**Evidence:** [`app/mcp/handlers/workspace.py`](app/mcp/handlers/workspace.py) `list_data_inputs_handler` counts with `path.rglob("*")`.  
-**Risk:** Slow/OOM on large input trees; same scavenger class as the outputs bug.  
-**Fix direction:** Shallow count or cached manifest; stop-at-budget. Share helper with data API once LG-03 is fixed.
+**Was:** [`app/mcp/handlers/workspace.py`](app/mcp/handlers/workspace.py) `list_data_inputs_handler` counted with unbounded `path.rglob("*")`.  
+**Fix:** Shared `count_files_budgeted` in [`dataset_inputs.py`](app/core/mlops/dataset_inputs.py) (cap 50k); MCP + `label_counts` use it. `label_counts` also caches under `datasets/input/.graphyn_inventories/<label>.json` (mtime signature) so large trees are not re-walked on every list.
 
-#### AUDIT-DATA-INVENTORY-1 (P0) — Data API scavenges `labels.csv` + `rglob("*.wav")`
+#### AUDIT-DATA-INVENTORY-1 (P0) — Data API scavenges `labels.csv` + `rglob("*.wav")` — **FIXED 2026-10**
 
-**Evidence (scavenger audit):** [`app/api/routers/data.py`](app/api/routers/data.py) merge (~511–557), input walks (~107–174), output detail prefers labels else wav-tree (~299–339, ~415–427).  
-**Impact:** API layer owns audio dataset layout; duplicates ProjectManager/exporter inventories; dual sources drift; non-wav assets missed.  
-**Fix direction:** Domain/ProjectManager owns inventory read/write; API only calls that; drop wav-tree fallback when inventory exists.
+**Was:** Output detail fell back to wav-tree scavenges; `/stats` 404'd without `labels.csv`.  
+**Fix:** Prefer `manifest.json` inventory for samples and stats when `labels.csv` is absent (`source: "manifest"`); no `*.wav`-only walk.
 
 #### AUDIT-RUN-DIR-JAIL-1 (P1) — `run_control` resolves run dirs without the jail used by `runs`
 

@@ -99,6 +99,15 @@ export function runLevelFileCue(name: string): { title: string; hint: string } {
   if (n === 'outputs_index.json') {
     return { title: 'Outputs index', hint: 'Internal inventory of written files' }
   }
+  if (n === 'graph.logical.json') {
+    return { title: 'Logical graph', hint: 'The graph before run-scoped output paths were stamped in' }
+  }
+  if (n === 'outputs_manifest.json') {
+    return { title: 'Outputs manifest', hint: 'Every file the run wrote, with sizes and hashes' }
+  }
+  if (n === 'verify.json') {
+    return { title: 'Verification record', hint: 'Hash-chain and replay check outcome' }
+  }
   return { title: base || 'Run file', hint: 'Run journal file' }
 }
 

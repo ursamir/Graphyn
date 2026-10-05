@@ -121,13 +121,63 @@ class TestGetOutputDataset:
             resp = api_client.get("/api/v1/data/outputs/myproject/v1")
         assert resp.status_code == 200
         body = resp.json()
-        # SRS DATA-VER / §9.2.7: object with files + content_hash (samples legacy)
+        # Lean browse default: object with files + content_hash; samples empty
         assert isinstance(body, dict)
         assert body.get("project") == "myproject"
         assert body.get("version") == "v1"
         assert "content_hash" in body
         assert "files" in body
-        assert "samples" in body
+        assert body.get("samples") == []
+        assert body.get("limit") == 200
+        assert body.get("offset") == 0
+        assert body.get("truncated") is False
+
+    def test_lean_browse_omits_sha256_and_paginates(self, api_client, tmp_path):
+        """Default browse strips per-file hashes and pages files."""
+        from app.core.mlops.dataset_versions import write_manifest
+
+        patcher, output_root = _patch_output(tmp_path)
+        dataset_dir = output_root / "big" / "v1"
+        (dataset_dir / "train" / "yes").mkdir(parents=True)
+        files = []
+        for i in range(5):
+            rel = f"train/yes/f{i}.wav"
+            (dataset_dir / rel).write_bytes(b"RIFF")
+            files.append({"path": rel, "size": 4, "sha256": f"deadbeef{i}"})
+        write_manifest(
+            dataset_dir,
+            {
+                "files": files,
+                "file_count": 5,
+                "content_hash": "abc",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            },
+        )
+        with patcher:
+            lean = api_client.get("/api/v1/data/outputs/big/v1?limit=2&offset=0")
+            hashed = api_client.get("/api/v1/data/outputs/big/v1?include_hash=1&limit=2")
+            sampled = api_client.get("/api/v1/data/outputs/big/v1?include_samples=1&limit=2")
+        assert lean.status_code == 200
+        body = lean.json()
+        assert body["file_count"] == 5
+        assert body["truncated"] is True
+        assert len(body["files"]) == 2
+        assert all("sha256" not in f for f in body["files"])
+        assert body["files"][0].get("split") == "train"
+        assert body["files"][0].get("label") == "yes"
+        assert body["samples"] == []
+        assert all(f.get("modified_at") for f in body["files"])
+        assert isinstance(body["dataset_files"], list)
+        assert all(f["path"] != "manifest.json" for f in body["files"])
+        with patcher:
+            only_val = api_client.get("/api/v1/data/outputs/big/v1?split=val").json()
+            only_train = api_client.get("/api/v1/data/outputs/big/v1?split=train&limit=2").json()
+        assert only_val["file_count"] == 0 and only_val["files"] == []
+        assert only_train["file_count"] == 5 and len(only_train["files"]) == 2
+        assert hashed.status_code == 200
+        assert all("sha256" in f for f in hashed.json()["files"])
+        assert sampled.status_code == 200
+        assert len(sampled.json()["samples"]) >= 1
 
 
 class TestMergeDatasets:
@@ -309,8 +359,12 @@ class TestSafeChildLexicalJail:
         body = resp.json()
         assert isinstance(body, dict)
         assert body.get("content_hash")
-        samples = body.get("samples") or []
-        assert len(samples) >= 1
+        files = body.get("files") or []
+        assert len(files) >= 1
+        assert files[0].get("split") == "train" or any(
+            (f.get("path") or "").startswith("train/") for f in files
+        )
+        assert body.get("samples") == []
 
     def test_symlink_escape_rejected_by_default(self, tmp_path, monkeypatch):
         """Default: symlink target outside root is rejected (passwd-style escape)."""

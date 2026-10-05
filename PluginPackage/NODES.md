@@ -462,17 +462,14 @@ speaker_key: str = "speaker_id"
 
 ---
 
-### `dataset_versioner` — Dataset Versioning
-**Category:** ML | **Version:** v1.0.0
+### `dataset_versioner` — Dataset Versioning (removed)
 
-```python
-output_dir: str = "workspace/datasets/versioned"
-version_tag: str = ""          # auto-generated from SHA256 hash if empty
-include_metadata: bool = True
-create_snapshot: bool = False  # copy files to versioned dir
-```
+**Status:** Not shipped. On-disk versioning is **`audio_exporter`** (writes
+`datasets/output/<project>/vN/` + `manifest.json` via
+`app.core.mlops.dataset_versions`). Prefer that node (or Freeze as version on
+Datasets → Inputs) instead of a separate versioner.
 
-**Ports:** `input: DatasetArtifact` → `output: DatasetArtifact` (with `version`, `hash`, `manifest_path`)
+~~Former sketch: `output_dir`, `version_tag`, `DatasetArtifact` in/out.~~
 
 ---
 
@@ -828,7 +825,7 @@ path: str = ""
 | `edge_optimizer` | No | No | No | No | Yes | Yes |
 | `realtime_inference` | Optional | Yes (TFLite) | Yes | Yes | Yes | No |
 | `dataset_balancer` | No | No | No | No | No | No |
-| `dataset_versioner` | No | No | No | No | Yes | Yes |
+| `dataset_versioner` | — | — | — | — | — | Removed (use `audio_exporter`) |
 | `experiment_tracker` | No | No | No | No | Yes | Yes |
 | `deployment_packager` | No | No | No | No | Yes | Yes |
 | `embedding_generator` | Optional | No | No | No | Yes | Yes |

@@ -151,17 +151,26 @@ def list_data_inputs_handler(arguments: dict[str, Any] | None = None) -> dict[st
     import os
 
     from app.core.config import datasets_input_dir
+    from app.core.mlops.dataset_inputs import count_files_budgeted
 
     root = datasets_input_dir()
     labels: list[dict[str, Any]] = []
     if root.is_dir():
         for label in sorted(os.listdir(root)):
+            if label.startswith("."):
+                continue
             path = root / label
             if not path.is_dir():
                 continue
             try:
-                n = sum(1 for p in path.rglob("*") if p.is_file())
+                counts = count_files_budgeted(path)
+                n = int(counts["file_count"])
+                truncated = bool(counts.get("truncated"))
             except OSError:
                 n = 0
-            labels.append({"label": label, "file_count": n})
+                truncated = False
+            row: dict[str, Any] = {"label": label, "file_count": n}
+            if truncated:
+                row["truncated"] = True
+            labels.append(row)
     return {"inputs": labels, "count": len(labels)}

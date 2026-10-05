@@ -65,7 +65,12 @@ import {
   loadPresetIntoConfig,
   type ModelBuilderPreset,
 } from './modelBuilderPresets'
-import { stampProjectOnGraph } from '../../lib/projectStamp'
+import {
+  exportDestinationHint,
+  GENERIC_EXPORT_OUTPUT_DIR,
+  isRetargetableExportDir,
+  stampProjectOnGraph,
+} from '../../lib/projectStamp'
 import { normalizeRunStatus } from '../../lib/runStatus'
 import {
   ConfirmButton,
@@ -350,6 +355,26 @@ function BuilderInner() {
   const setBuilderDataset = useAppStore((s) => s.setBuilderDataset)
   const setGetCanvasGraph = useAppStore((s) => s.setGetCanvasGraph)
   const backendMode = useAppStore((s) => s.backendMode)
+  const [pinnedInputLabels, setPinnedInputLabels] = React.useState<string[]>([])
+
+  React.useEffect(() => {
+    let cancelled = false
+    if (!activeProject) {
+      setPinnedInputLabels([])
+      return
+    }
+    void apiJson<{ inputs?: string[] }>(`/projects/${encodeURIComponent(activeProject)}/links`)
+      .then((data) => {
+        if (cancelled) return
+        setPinnedInputLabels(Array.isArray(data?.inputs) ? data.inputs.filter(Boolean) : [])
+      })
+      .catch(() => {
+        if (!cancelled) setPinnedInputLabels([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeProject])
 
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphynNodeData>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
@@ -360,6 +385,8 @@ function BuilderInner() {
   const lastFitBoxRef = React.useRef({ w: 0, h: 0 })
   /** Graph shown at the readable minimum zoom (not all of it) → show "Fit all". */
   const [partialView, setPartialView] = React.useState(false)
+  /** Steps cut off on the right in the partial view — named on the "Fit all" chip. */
+  const [offscreenSteps, setOffscreenSteps] = React.useState(0)
   /** Latest node_progress per running node (canvas bar + log line); view-only. */
   const [nodeProgress, setNodeProgress] = React.useState<Record<string, NodeProgress>>({})
   /** Run id whose journal currently fills the execution log (hydrated, not streamed). */
@@ -514,7 +541,9 @@ function BuilderInner() {
     // with this project's default pipeline. This really happened: accepting
     // an empty-stub proposal into the Editor showed the project's saved
     // pipeline instead of the stub the user just accepted.
-    const hadPendingGraphAtMount = Boolean(useAppStore.getState().pendingGraph)
+    const hadPendingGraphAtMount = Boolean(
+      useAppStore.getState().pendingGraph || useAppStore.getState().pendingPipeline,
+    )
     void (async () => {
       try {
         const pipes = await apiJson<
@@ -537,7 +566,11 @@ function BuilderInner() {
         // first saved pipeline" here either — that's exactly as misleading
         // as auto-loading it (see the comment below), just via the label
         // instead of the canvas.
-        if (!hadPendingGraphAtMount && !useAppStore.getState().pendingGraph) {
+        if (
+          !hadPendingGraphAtMount &&
+          !useAppStore.getState().pendingGraph &&
+          !useAppStore.getState().pendingPipeline
+        ) {
           setPipelinePick((prev) => prev || autoPick || templateName || graphName || '')
         }
         // The line above can select a pipeline name in the toolbar's picker
@@ -556,7 +589,8 @@ function BuilderInner() {
           autoPick &&
           nodesRef.current.length === 0 &&
           !hadPendingGraphAtMount &&
-          !useAppStore.getState().pendingGraph
+          !useAppStore.getState().pendingGraph &&
+          !useAppStore.getState().pendingPipeline
         ) {
           void openPipelineEnv(autoPick, undefined, { confirm: false })
         }
@@ -1471,7 +1505,14 @@ function BuilderInner() {
         fitView(FIT_VIEW_OPTIONS)
         setPartialView(false)
       } else {
-        setViewport(leftAnchoredViewport(bounds, h, plan.zoom))
+        const vp = leftAnchoredViewport(bounds, h, plan.zoom)
+        setViewport(vp)
+        setOffscreenSteps(
+          rfNodes.filter((n) => {
+            const x = (n.positionAbsolute?.x ?? n.position.x) + (n.width ?? 0)
+            return x * vp.zoom + vp.x > w
+          }).length,
+        )
         setPartialView(true)
       }
     },
@@ -1538,6 +1579,14 @@ function BuilderInner() {
     loadGraph(graph)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingGraph, catalog])
+
+  const pendingPipeline = useAppStore((s) => s.pendingPipeline)
+  React.useEffect(() => {
+    if (!pendingPipeline || !activeProject) return
+    const req = useAppStore.getState().consumePendingPipeline()
+    if (req) void openPipelineEnv(req.name, req.env)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingPipeline, activeProject])
 
   /**
    * Re-decorate nodes that landed before the catalog loaded, and fix ports when
@@ -2926,13 +2975,40 @@ function BuilderInner() {
               {pendingProposalCount} proposal{pendingProposalCount === 1 ? '' : 's'}
             </button>
           )}
+          {pinnedInputLabels.length > 0 && (
+            <div
+              className="inline-flex max-w-[18rem] items-center gap-0.5 rounded-full border border-ink-200 bg-ink-50 pl-2 text-[11px] text-ink-700"
+              title={
+                pinnedInputLabels.length === 1
+                  ? `Pinned input “${pinnedInputLabels[0]}” — set ingest path via the Linked picker on path fields`
+                  : `Pinned inputs: ${pinnedInputLabels.join(', ')} — set ingest path via the Linked picker on path fields`
+              }
+            >
+              <button
+                type="button"
+                className="min-w-0 truncate py-0.5 hover:underline"
+                title="Open pinned inputs in Datasets"
+                onClick={() =>
+                  openData({
+                    mode: 'inputs',
+                    label: pinnedInputLabels[0],
+                    project: activeProject || undefined,
+                  })
+                }
+              >
+                Pins:{' '}
+                {pinnedInputLabels.slice(0, 2).join(', ')}
+                {pinnedInputLabels.length > 2 ? ` +${pinnedInputLabels.length - 2}` : ''}
+              </button>
+            </div>
+          )}
           {builderDataset?.project && (
             <div
               className="inline-flex max-w-[16rem] items-center gap-0.5 rounded-full border border-ink-200 bg-ink-50 pl-2 text-[11px] text-ink-700"
               title={
                 builderDataset.version
-                  ? `Linked dataset ${builderDataset.project} / ${builderDataset.version}`
-                  : `Linked dataset ${builderDataset.project}`
+                  ? `Output dataset ${builderDataset.project} / ${builderDataset.version}`
+                  : `Output project ${builderDataset.project}`
               }
             >
               <button
@@ -2947,7 +3023,7 @@ function BuilderInner() {
                   })
                 }
               >
-                Dataset: {builderDataset.project}
+                Output: {builderDataset.project}
                 {builderDataset.version ? ` / ${builderDataset.version}` : ''}
               </button>
               <button
@@ -3376,7 +3452,9 @@ function BuilderInner() {
                   title="Zoomed to a readable size — the graph continues to the right. Fit the whole graph (small)."
                   onClick={fitAll}
                 >
-                  Fit all
+                  {offscreenSteps > 0
+                    ? `Fit all · ${offscreenSteps} more step${offscreenSteps === 1 ? '' : 's'} →`
+                    : 'Fit all'}
                 </button>
               </Panel>
             ) : null}
@@ -3869,6 +3947,12 @@ function BuilderInner() {
                             const fieldIssues = nodeIssues?.get(key) ?? []
                             const hintFull = schemaFieldHint(def)
                             const lrNote = key === 'learning_rate' ? learningRateNote(lrLinks.get(node.id)) : null
+                            const destNote = exportDestinationHint(
+                              String(node.data.nodeType || ''),
+                              key,
+                              cfg,
+                              activeProject || '',
+                            )
                             return (
                             <label key={key} className="block text-[12px] text-ink-700">
                               <span className="font-medium">{schemaFieldLabel(key, def)}</span>
@@ -3876,6 +3960,23 @@ function BuilderInner() {
                               {lrNote ? (
                                 <span className="mt-0.5 block rounded bg-sky-50 px-1.5 py-0.5 text-[11px] leading-snug text-sky-900 ring-1 ring-sky-100">
                                   {lrNote}
+                                </span>
+                              ) : null}
+                              {destNote ? (
+                                <span className="mt-0.5 block rounded bg-sky-50 px-1.5 py-0.5 text-[11px] leading-snug text-sky-900 ring-1 ring-sky-100">
+                                  {destNote}
+                                  {key === 'output_dir' && activeProject && !isRetargetableExportDir(cfg.output_dir) ? (
+                                    <button
+                                      type="button"
+                                      className="ml-1 font-medium text-accent-800 underline-offset-2 hover:underline"
+                                      onClick={(e) => {
+                                        e.preventDefault()
+                                        node.data.onChangeConfig?.('output_dir', GENERIC_EXPORT_OUTPUT_DIR)
+                                      }}
+                                    >
+                                      Save into Datasets → Outputs
+                                    </button>
+                                  ) : null}
                                 </span>
                               ) : null}
                               <ConfigFieldEditor

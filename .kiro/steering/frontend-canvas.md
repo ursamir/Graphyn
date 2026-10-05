@@ -24,7 +24,7 @@ Canonical IA (Phase 1): `docs/IA_PROJECT_FIRST.md`.
 | Label | Path |
 |---|---|
 | **Home** | `/workspaces/:id` |
-| **Editor** | `/workspaces/:id/editor` |
+| **Editor** | `/workspaces/:id/editor` · `/workspaces/:id/editor/pipelines/:name[/:env]` (`paths.editor(ws, name, env)`; parsed to `editorPipeline`/`editorEnv`, App calls `openPipelineInEditor` → Editor `openPipelineEnv`, URL replaced with `/editor`) |
 | **Runs** | `/workspaces/:id/runs` |
 | **Models** | `/workspaces/:id/models` |
 | **Ship** | `/workspaces/:id/ship` |

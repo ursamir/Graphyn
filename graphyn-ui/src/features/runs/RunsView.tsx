@@ -3837,13 +3837,26 @@ export default function RunsView() {
                   }
 
                   const activePath = selectedFile?.path ?? null
-                  const renderFileList = (files: OutputFile[], group: string) => (
+                  const renderFileList = (files: OutputFile[], group: string) => {
+                    /* Basename collisions (six labels.txt in one step) are
+                       indistinguishable rows — the full path only sat in the
+                       tooltip. Show the parent dir when a name repeats. */
+                    const nameCounts = new Map<string, number>()
+                    for (const f of files) nameCounts.set(f.name, (nameCounts.get(f.name) ?? 0) + 1)
+                    const parentDir = (p: string): string | null => {
+                      const segs = p.split('/').filter(Boolean)
+                      return segs.length >= 2 ? segs[segs.length - 2] : null
+                    }
+                    const disambiguate = (f: OutputFile): string | null =>
+                      (nameCounts.get(f.name) ?? 0) > 1 ? parentDir(f.path) : null
+                    return (
                     <ul className="space-y-0.5">
                       {files.map((f) => {
                         const active = activePath === f.path
                         const cue = group === 'run' ? runLevelFileCue(f.name) : null
                         // compiled_<hex>.keras → "Untrained model (architecture)"; raw name in the tooltip / path line.
                         const friendly = friendlyArtifactName(f.name)
+                        const dupDir = disambiguate(f)
                         return (
                           <li key={`${f.path}-${f.name}`}>
                             <button
@@ -3875,6 +3888,7 @@ export default function RunsView() {
                               {!cue ? (
                                 <div className="text-[11px] text-ink-500">
                                   {f.kind} · {formatBytes(f.size)}
+                                  {dupDir ? ` · ${dupDir}/` : ''}
                                 </div>
                               ) : null}
                             </button>
@@ -3882,7 +3896,8 @@ export default function RunsView() {
                         )
                       })}
                     </ul>
-                  )
+                    )
+                  }
 
                   return (
                     <>

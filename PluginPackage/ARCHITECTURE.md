@@ -144,7 +144,7 @@ AudioSample (raw)
     │       │                       │       └── evaluator ── ModelArtifact (+ metrics)
     │       │                       │               └── edge_optimizer ── DeploymentArtifact
     │       │                       │                       └── deployment_packager ── package
-    │       │                       └── dataset_balancer / dataset_versioner / experiment_tracker
+    │       │                       └── dataset_balancer / experiment_tracker
     │       │
     │       ├── speech_enhancer ────── cleaned AudioSample
     │       ├── speaker_separator ──── per-speaker AudioSample

@@ -118,6 +118,19 @@ describe('parsePathname with aliases', () => {
     expect(parsePathname('/editor')).toMatchObject({ view: 'builder', workspaceId: 'demo' })
   })
 
+  it('parses saved-pipeline Editor links', () => {
+    expect(parsePathname('/workspaces/demo/editor/pipelines/train%20ml')).toMatchObject({
+      view: 'builder',
+      workspaceId: 'demo',
+      editorPipeline: 'train ml',
+      editorEnv: undefined,
+    })
+    expect(parsePathname('/workspaces/demo/editor/pipelines/p/staging')).toMatchObject({
+      editorPipeline: 'p',
+      editorEnv: 'staging',
+    })
+  })
+
   it('lands workspace aliases on the picker without a workspace', () => {
     expect(parsePathname('/models')).toMatchObject({ view: 'projects', canonical: '/workspaces' })
   })

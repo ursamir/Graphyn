@@ -18,6 +18,7 @@ import {
   zipPath,
   type DataCapabilities,
 } from './dataApi'
+import { outputSelectionKnown } from './outputSelection'
 import { useAppStore } from '../../store/appStore'
 import {
   ConfirmButton,
@@ -45,6 +46,9 @@ import { naturalCompare } from '../../lib/naturalSort'
 interface OutputProject {
   project: string
   versions: string[]
+  kind?: 'input_snapshot' | 'artifact_dataset' | string
+  fs_path?: string
+  label?: string
 }
 interface InputLabel {
   label: string
@@ -60,12 +64,58 @@ type DataMode = 'outputs' | 'inputs' | 'ingest' | 'merge'
 type ManageTab = 'upload' | 'ingest' | 'merge'
 
 const LIST_CAP = 200
+/** First page size for Outputs detail (matches API default `limit`). */
+const OUTPUT_PAGE = 200
+const OUTPUT_FILE_PREFIX = 'workspace/datasets/output/'
+
+type OutputDetailCache = {
+  rows: Array<Record<string, unknown>>
+  stats: unknown
+  fileCount: number
+  truncated: boolean
+  nextOffset: number
+  datasetFiles: Array<Record<string, unknown>>
+  provenance: string | null
+}
+
+/** One-line provenance from a version manifest's `source` block. */
+function describeOutputSource(source: unknown): string | null {
+  if (!source || typeof source !== 'object') return null
+  const s = source as Record<string, unknown>
+  const kind = String(s.kind ?? '')
+  if (kind === 'input_label' && s.label) return `Frozen from input “${String(s.label)}”`
+  if (kind === 'artifact_publish') {
+    const from = String(s.from ?? '').replace(/\\/g, '/')
+    const m = from.match(/artifacts\/[^/]+\/dataset\/(.+)$/)
+    return m ? `Published from legacy ${m[1]}` : 'Published from a legacy artifact'
+  }
+  if (kind === 'merge' && Array.isArray(s.sources)) {
+    return `Merged from ${s.sources.length} version${s.sources.length === 1 ? '' : 's'}`
+  }
+  if (s.run_id) return `Written by run ${String(s.run_id).slice(0, 8)}`
+  return null
+}
+
+const SPLIT_ORDER = ['train', 'val', 'dev', 'test']
+/** Sort rank for split names; rows without a split sort first (they are not samples). */
+function splitRank(split: unknown): number {
+  if (typeof split !== 'string' || !split) return 0
+  return SPLIT_ORDER.indexOf(split) + 1 || 99
+}
+
+/** `0.7 s`, `1 s`, `12 s` — keeps sub-second clips distinguishable. */
+function formatClipSeconds(s: number): string {
+  if (!Number.isFinite(s)) return '?'
+  return s < 10 ? String(Number(s.toFixed(2))) : String(Math.round(s))
+}
 
 function sanitizePathSeg(value: string | undefined | null): string | undefined {
   const v = (value || '').trim()
   if (!v) return undefined
   // Frozen input labels are addressed as `_inputs/<label>` (one slash, allowed).
   if (isSnapshotProject(v) && !v.includes('\\') && !v.includes('..')) return v
+  // Soft-listed legacy artifact datasets use `_artifacts/<slug>/<name>`.
+  if (v.startsWith('_artifacts/') && !v.includes('\\') && !v.includes('..')) return v
   // Reject path-like hash/state — never send nested segments to /data/outputs/{project}/{version}.
   if (v.includes('/') || v.includes('\\')) return undefined
   return v
@@ -119,6 +169,8 @@ function parseDataLocation(): {
   label?: string
   manage?: boolean
   onWorkspaceDatasets?: boolean
+  /** Workspace id from `/workspaces/:id/datasets` (shell), may differ from Outputs selection. */
+  workspacePathId?: string
 } {
   const params = readSearchParams()
   const parts = window.location.pathname.replace(/\/+$/, '').split('/').filter(Boolean)
@@ -138,26 +190,27 @@ function parseDataLocation(): {
         ? false
         : undefined
   const onWorkspaceDatasets = Boolean(projectFromPath)
-  // On /workspaces/:id/datasets the path id is SoT — do not prefer redundant ?project=.
   const projectParam = sanitizePathSeg(params.get('project'))
+  // Outputs: prefer explicit ?project= (shared library pick) over the workspace
+  // path id. Path id only seeds when no query project is set — otherwise every
+  // replacePathSearch→popstate yanked the selection back to the shell workspace
+  // and spammed 404s for missing versions (e.g. e06/v2 while browsing e06/v1).
   return {
     mode,
-    // Workspace path id seeds Outputs only; Inputs use ?label= / list pick.
     project:
       mode === 'inputs'
         ? projectParam
-        : onWorkspaceDatasets
-          ? sanitizePathSeg(projectFromPath)
-          : projectParam ?? sanitizePathSeg(projectFromPath),
+        : projectParam ?? sanitizePathSeg(projectFromPath),
     version: sanitizePathSeg(params.get('version')),
     label: sanitizePathSeg(params.get('label')),
     manage,
     onWorkspaceDatasets,
+    workspacePathId: sanitizePathSeg(projectFromPath),
   }
 }
 
 function isInvalidWorkspacePathError(detail: string): boolean {
-  return /path is outside workspace|invalid path segment/i.test(detail)
+  return /path is outside workspace|invalid path segment|dataset not found/i.test(detail)
 }
 
 function humanizeDataError(
@@ -244,6 +297,13 @@ export default function DataView() {
     setSortDir(key === 'path' ? 'asc' : 'desc')
   }
   const [detailEpoch, setDetailEpoch] = React.useState(0)
+  const [outputFileCount, setOutputFileCount] = React.useState(0)
+  const [outputTruncated, setOutputTruncated] = React.useState(false)
+  const [outputDatasetFiles, setOutputDatasetFiles] = React.useState<Array<Record<string, unknown>>>([])
+  const [outputProvenance, setOutputProvenance] = React.useState<string | null>(null)
+  const [splitFilter, setSplitFilter] = React.useState('')
+  const [libraryOpen, setLibraryOpen] = React.useState(false)
+  const [loadingMoreOutputs, setLoadingMoreOutputs] = React.useState(false)
   const skippedOutputKey = React.useRef<string | null>(null)
   /** Input labels that failed with invalid-path — do not auto-reselect after clear. */
   const skippedInputLabels = React.useRef<Set<string>>(new Set())
@@ -252,6 +312,22 @@ export default function DataView() {
   /** Omit project from search while clearing — prevents stale React state from re-writing query. */
   const skipProjectHashRef = React.useRef(false)
   const appliedUnscopeEpochRef = React.useRef<number | null>(null)
+  /** Catalogue snapshot for detail effect without re-fetching on every outputs reload. */
+  const outputsRef = React.useRef(outputs)
+  outputsRef.current = outputs
+  /** In-memory Outputs detail pages keyed by project/version. */
+  const outputDetailCacheRef = React.useRef(new Map<string, OutputDetailCache>())
+  const lastDetailEpochRef = React.useRef(0)
+  /** `key` is `<project>/<version>`; drops every split variant (`…#train`) of it. */
+  const invalidateOutputDetail = React.useCallback((key?: string) => {
+    const cache = outputDetailCacheRef.current
+    if (!key) {
+      cache.clear()
+      return
+    }
+    const base = key.split('#')[0]
+    for (const k of [...cache.keys()]) if (k.split('#')[0] === base) cache.delete(k)
+  }, [])
   // Active ingest stream (EventSource or fetch reader) — closed on unmount so
   // it stops consuming the server stream and never toasts into another view.
   const ingestStreamCancelRef = React.useRef<(() => void) | null>(null)
@@ -367,8 +443,18 @@ export default function DataView() {
           setVersion('')
           return ''
         }
+        // Default selection matches the list order: the open workspace's versions
+        // lead the list, so they should be the default too — not the
+        // alphabetically-first catalogue entry.
+        const home = (useAppStore.getState().activeProject || '').trim()
+        const homePick =
+          home && !out.find((o) => o.project === home)?.kind
+            ? usable.find((u) => u.project === home)
+            : undefined
         const proj =
-          safe && out.some((o) => o.project === safe) ? safe : (usable[0]?.project ?? '')
+          safe && out.some((o) => o.project === safe)
+            ? safe
+            : (homePick?.project ?? usable[0]?.project ?? '')
         const vers = out.find((o) => o.project === proj)?.versions ?? []
         setVersion((vPrev) => {
           const vSafe = sanitizePathSeg(vPrev) ?? ''
@@ -434,8 +520,9 @@ export default function DataView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Write selection into pathname search (no popstate — avoid echo loops via replacePathSearch).
-  // On /workspaces/:id/datasets the path id is SoT — never mirror ?project= (strip if present).
+  // Write selection into pathname search. replacePathSearch → navigatePath dispatches
+  // popstate, so Outputs selection must be round-trippable via ?project= (not only the
+  // /workspaces/:id path shell) or the shell id overwrites a shared-library pick.
   React.useEffect(() => {
     const parts = window.location.pathname.replace(/\/+$/, '').split('/').filter(Boolean)
     const onWorkspaceDatasets =
@@ -451,9 +538,12 @@ export default function DataView() {
         skipProjectHashRef.current = false
       }
       // omit project + version while clearing / stale
-    } else if (onWorkspaceDatasets) {
-      // Path already has workspace id — keep version/label only; strip ?project=.
+    } else if (mode === 'outputs' && project.trim()) {
+      params.project = project.trim()
       if (version.trim()) params.version = version.trim()
+    } else if (onWorkspaceDatasets) {
+      // Inputs (and other modes) on a workspace page: keep label; do not force Outputs project.
+      if (version.trim() && mode === 'outputs') params.version = version.trim()
     } else if (project.trim()) {
       params.project = project.trim()
       if (version.trim()) params.version = version.trim()
@@ -467,28 +557,104 @@ export default function DataView() {
   React.useEffect(() => {
     let cancelled = false
     const run = async () => {
+      setOutputDatasetFiles([])
+      setOutputProvenance(null)
       // Do not clear a banner from list-load while a detail retry is in flight for the same selection.
       if (mode === 'outputs') {
         if (!project || !version) {
           setRows([])
           setStats(null)
+          setOutputFileCount(0)
+          setOutputTruncated(false)
+          return
+        }
+        const outs = outputsRef.current
+        // Avoid requesting phantom pairs (e.g. shell workspace + leftover ?version=v2)
+        // once the catalogue is known — stops /stats 404 storms in the console.
+        if (outs.length > 0 && !outputSelectionKnown(outs, project, version)) {
+          const vers = outs.find((o) => o.project === project)?.versions ?? []
+          if (vers.length > 0) {
+            setVersion(vers[0] ?? '')
+            return
+          }
+          setRows([])
+          setStats(null)
+          setOutputFileCount(0)
+          setOutputTruncated(false)
+          return
+        }
+        const meta = outs.find((o) => o.project === project)
+        if (meta?.kind === 'artifact_dataset') {
+          // Soft-listed legacy trees are not browsable via /data/outputs — show publish CTA.
+          setRows([])
+          setStats({
+            project,
+            version,
+            kind: 'artifact_dataset',
+            fs_path: meta.fs_path,
+            note: 'Legacy artifact dataset — publish into this workspace to browse and reuse from Outputs.',
+          })
+          setPathRecovery(false)
+          setError(null)
+          setErrorDetail(null)
+          setOutputFileCount(0)
+          setOutputTruncated(false)
+          return
+        }
+        const cacheKey = `${project}/${version}#${splitFilter}`
+        if (detailEpoch !== lastDetailEpochRef.current) {
+          lastDetailEpochRef.current = detailEpoch
+          invalidateOutputDetail(cacheKey)
+        }
+        const cached = outputDetailCacheRef.current.get(cacheKey)
+        if (cached) {
+          setPathRecovery(false)
+          setError(null)
+          setErrorDetail(null)
+          setRows(cached.rows)
+          setStats(cached.stats)
+          setOutputFileCount(cached.fileCount)
+          setOutputTruncated(cached.truncated)
+          setOutputDatasetFiles(cached.datasetFiles)
+          setOutputProvenance(cached.provenance)
           return
         }
         setError(null)
         setErrorDetail(null)
         try {
+          const path = outputVersionPath(project, version)
           const [data, st] = await Promise.all([
-            apiJson<unknown>(
-              outputVersionPath(project, version),
-            ),
-            apiJson(
-              `${outputVersionPath(project, version)}/stats`,
-            ).catch(() => null),
+            apiJson<Record<string, unknown>>(path, {
+              query: { limit: OUTPUT_PAGE, offset: 0, ...(splitFilter ? { split: splitFilter } : {}) },
+            }),
+            apiJson(`${path}/stats`).catch(() => null),
           ])
           if (cancelled) return
+          const pageRows = normalizeDatasetRows(data, { project, version })
+          const fileCount = typeof data.file_count === 'number' ? data.file_count : pageRows.length
+          const truncated = Boolean(data.truncated)
+          const datasetFiles = normalizeDatasetRows(
+            { files: Array.isArray(data.dataset_files) ? data.dataset_files : [] },
+            { project, version },
+          )
+          const provenance = describeOutputSource(data.source)
+          const entry: OutputDetailCache = {
+            rows: pageRows,
+            stats: st,
+            fileCount,
+            truncated,
+            nextOffset: pageRows.length,
+            datasetFiles,
+            provenance,
+          }
+          outputDetailCacheRef.current.set(cacheKey, entry)
           setPathRecovery(false)
-          setRows(normalizeDatasetRows(data, { project, version }))
+          setRows(pageRows)
           setStats(st)
+          setOutputFileCount(fileCount)
+          setOutputTruncated(truncated)
+          setOutputDatasetFiles(datasetFiles)
+          setOutputProvenance(provenance)
         } catch (err) {
           if (cancelled) return
           const h = humanizeDataError(err, 'outputs')
@@ -496,6 +662,8 @@ export default function DataView() {
           setErrorDetail(h.detail)
           setRows([])
           setStats(null)
+          setOutputFileCount(0)
+          setOutputTruncated(false)
           if (h.invalidPath) {
             skippedOutputKey.current = `${project}/${version}`
             setPathRecovery(true)
@@ -548,14 +716,56 @@ export default function DataView() {
     return () => {
       cancelled = true
     }
-  }, [mode, project, version, label, loadSources, detailEpoch])
+  }, [mode, project, version, label, splitFilter, loadSources, detailEpoch, invalidateOutputDetail])
 
+  React.useEffect(() => {
+    setSplitFilter('')
+  }, [mode, project, version])
+
+  const loadMoreOutputs = async () => {
+    if (!project || !version || loadingMoreOutputs) return
+    const cacheKey = `${project}/${version}#${splitFilter}`
+    const cached = outputDetailCacheRef.current.get(cacheKey)
+    const offset = cached?.nextOffset ?? rows.length
+    if (!cached?.truncated && offset >= (cached?.fileCount ?? outputFileCount)) return
+    setLoadingMoreOutputs(true)
+    try {
+      const data = await apiJson<Record<string, unknown>>(outputVersionPath(project, version), {
+        query: { limit: OUTPUT_PAGE, offset, ...(splitFilter ? { split: splitFilter } : {}) },
+      })
+      const pageRows = normalizeDatasetRows(data, { project, version })
+      const fileCount = typeof data.file_count === 'number' ? data.file_count : offset + pageRows.length
+      const truncated = Boolean(data.truncated)
+      const nextRows = [...(cached?.rows ?? rows), ...pageRows]
+      const entry: OutputDetailCache = {
+        rows: nextRows,
+        stats: cached?.stats ?? stats,
+        fileCount,
+        truncated,
+        nextOffset: offset + pageRows.length,
+        datasetFiles: cached?.datasetFiles ?? outputDatasetFiles,
+        provenance: cached?.provenance ?? outputProvenance,
+      }
+      outputDetailCacheRef.current.set(cacheKey, entry)
+      setRows(nextRows)
+      setOutputFileCount(fileCount)
+      setOutputTruncated(truncated)
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    } finally {
+      setLoadingMoreOutputs(false)
+    }
+  }
   // Preview inline via FileViewer (audio player, image, JSON tree, text — with Download)
   // instead of the previous window.open(blobUrl) into a bare, unbranded new tab, which was
   // the only place in the app that punted a file preview like that (Runs → Run outputs
   // already used FileViewer for the equivalent action).
   const openFile = (path: string, kind: 'files' | 'input-files') => {
-    setPreviewFile({ path, kind })
+    // Output rows are `<project>/<version>/…`; /outputs/file resolves against the
+    // workspace root, so it needs the datasets/output prefix to find them.
+    const resolved =
+      kind === 'files' && !path.startsWith('workspace/') ? `${OUTPUT_FILE_PREFIX}${path.replace(/^\/+/, '')}` : path
+    setPreviewFile({ path: resolved, kind })
   }
 
   /** Open the upload panel (multi-file / folder / archive, any allowlisted type). */
@@ -783,10 +993,43 @@ export default function DataView() {
         { method: 'DELETE' },
       )
       pushToast(`Deleted ${project}/${version}`, 'success')
+      invalidateOutputDetail(`${project}/${version}`)
       setVersion('')
       setRows([])
       setStats(null)
       await loadSources()
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  const publishArtifact = async () => {
+    const fsPath = selectedOutputMeta?.fs_path
+    const target = (activeProject || '').trim()
+    if (!fsPath || !target || !version) {
+      pushToast('Open a workspace, then publish this legacy artifact into it', 'info')
+      return
+    }
+    try {
+      const out = await apiJson<{ project: string; version: string; file_count?: number }>(
+        '/data/outputs/publish-artifact',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            fs_path: fsPath,
+            source_version: version,
+            target_project: target,
+          }),
+        },
+      )
+      pushToast(
+        `Published to ${out.project}/${out.version}` +
+          (out.file_count != null ? ` (${out.file_count} files)` : ''),
+        'success',
+      )
+      invalidateOutputDetail(`${out.project}/${out.version}`)
+      await loadSources()
+      pickOutputSource(out.project, out.version)
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
@@ -813,6 +1056,9 @@ export default function DataView() {
       })
       const mergeResult = formatMergeToast(res)
       pushToast(mergeResult.message, mergeResult.tone)
+      if (mergeTargetProject.trim() && mergeTargetVersion.trim()) {
+        invalidateOutputDetail(`${mergeTargetProject.trim()}/${mergeTargetVersion.trim()}`)
+      }
       await loadSources()
       if (mergeTargetProject.trim()) {
         openProjects({ project: mergeTargetProject.trim() })
@@ -924,7 +1170,12 @@ export default function DataView() {
         body: JSON.stringify({ inputs: [target] }),
       })
       setLinkedInputs(Array.isArray(next?.inputs) ? next.inputs.map(String) : [])
-      pushToast(use ? `“${target}” is now used by ${activeProject}` : `Removed “${target}” from ${activeProject}`, 'success')
+      pushToast(
+        use
+          ? `“${target}” pinned for ${activeProject} — open Editor and pick it under Linked on the ingest path field`
+          : `Removed “${target}” from ${activeProject}`,
+        'success',
+      )
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
@@ -968,10 +1219,38 @@ export default function DataView() {
       ),
     [outputs, listFilter],
   )
+  /** Whole-version split sizes from /stats (the loaded page may be partial). */
+  const outputSummary = React.useMemo(() => {
+    if (mode !== 'outputs' || !stats || typeof stats !== 'object') return null
+    const s = stats as Record<string, unknown>
+    if (s.kind === 'artifact_dataset') return null
+    const splits = s.splits && typeof s.splits === 'object' ? (s.splits as Record<string, Record<string, number>>) : {}
+    const totals = new Map<string, number>()
+    const classes = new Set<string>()
+    for (const [split, byLabel] of Object.entries(splits)) {
+      let n = 0
+      for (const [lab, c] of Object.entries(byLabel ?? {})) {
+        n += typeof c === 'number' ? c : 0
+        classes.add(lab)
+      }
+      totals.set(split, n)
+    }
+    const total = typeof s.total === 'number' ? s.total : null
+    return { totals, classes: classes.size, total }
+  }, [mode, stats])
+  /** Whole-version file count — `outputFileCount` narrows to the chosen split. */
+  const versionFileCount = splitFilter ? (outputSummary?.total ?? outputFileCount) : outputFileCount
+  const splitTotals = outputSummary?.totals ?? new Map<string, number>()
+  /** Split chips: whole-version splits from /stats, else those seen in loaded rows. */
+  const splitOptions = React.useMemo(() => {
+    const names = new Set<string>(splitTotals.keys())
+    for (const r of rows) if (typeof r.split === 'string' && r.split) names.add(r.split)
+    return [...names].sort((a, b) => splitRank(a) - splitRank(b) || a.localeCompare(b))
+  }, [rows, splitTotals])
   const filteredRows = React.useMemo(
     () =>
       rows.filter((r) =>
-        matchesQuery(`${String(r.path ?? '')} ${String(r.split ?? r.label ?? '')}`, listFilter),
+        matchesQuery(`${String(r.path ?? '')} ${String(r.split ?? '')} ${String(r.label ?? '')}`, listFilter),
       ),
     [rows, listFilter],
   )
@@ -994,7 +1273,9 @@ export default function DataView() {
       if (sortKey === 'modified') {
         return (time(a.modified_at) - time(b.modified_at)) * dir
       }
-      // Natural order: nohash_2 before nohash_10.
+      // train → val → test before names; natural order: nohash_2 before nohash_10.
+      const bySplit = splitRank(a.split) - splitRank(b.split)
+      if (bySplit) return bySplit * dir
       return naturalCompare(String(a.path ?? ''), String(b.path ?? '')) * dir
     })
   }, [filteredRows, sortKey, sortDir])
@@ -1012,6 +1293,9 @@ export default function DataView() {
     [filteredRows],
   )
   const anySizes = filteredRows.some((r) => typeof r.size_bytes === 'number')
+  const versionPrefix = project && version ? `${project}/${version}/` : ''
+  const relativeToVersion = (path: string) =>
+    versionPrefix && path.startsWith(versionPrefix) ? path.slice(versionPrefix.length) : path
 
   const switchUxMode = (next: 'browse' | 'manage') => {
     setError(null)
@@ -1073,10 +1357,31 @@ export default function DataView() {
     const src = listFilter.trim() ? filteredOutputs : outputs
     return src.flatMap((o) =>
       o.versions
-        .filter((v) => !listFilter.trim() || matchesQuery(`${o.project}/${v}`, listFilter))
-        .map((v) => ({ project: o.project, version: v })),
+        .filter((v) => {
+          const title =
+            o.kind === 'input_snapshot'
+              ? `Frozen · ${o.label || o.project}/${v}`
+              : o.kind === 'artifact_dataset'
+                ? `Legacy · ${o.label || o.project}/${v}`
+                : `${o.project}/${v}`
+          return !listFilter.trim() || matchesQuery(title, listFilter) || matchesQuery(`${o.project}/${v}`, listFilter)
+        })
+        .map((v) => ({
+          project: o.project,
+          version: v,
+          kind: o.kind,
+          label: o.label,
+          fs_path: o.fs_path,
+        })),
     )
   }, [outputs, filteredOutputs, listFilter])
+
+  const selectedOutputMeta = React.useMemo(
+    () => outputs.find((o) => o.project === project) ?? null,
+    [outputs, project],
+  )
+  const isArtifactSelection = selectedOutputMeta?.kind === 'artifact_dataset'
+  const isFreezeSelection = selectedOutputMeta?.kind === 'input_snapshot' || isSnapshotProject(project)
 
   const searchField = (
     <label className="relative block w-full">
@@ -1261,7 +1566,7 @@ export default function DataView() {
             <button
               type="button"
               className="btn-primary"
-              title={`Add “${label}” to ${activeProject}’s datasets in use, so the Editor offers it first`}
+              title={`Add “${label}” to ${activeProject}’s datasets in use (Home bookmark). Set the ingest path in the Editor to use it in a run — pinning alone does not rewrite the graph.`}
               onClick={() => void toggleLinkedInput(label, true)}
             >
               Use in {activeProject}
@@ -1387,7 +1692,15 @@ export default function DataView() {
               Browse shared library
             </button>
           ) : null}
-          <button type="button" className="btn-secondary" onClick={() => void loadSources()}>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              if (project && version) invalidateOutputDetail(`${project}/${version}`)
+              setDetailEpoch((n) => n + 1)
+              void loadSources()
+            }}
+          >
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
           </button>
         </div>
@@ -1473,31 +1786,87 @@ export default function DataView() {
                     }}
                     className="field-control w-full text-sm"
                   >
-                    {versions.map((v) => (
-                      <option key={v} value={v}>
-                        {v}
-                      </option>
-                    ))}
+                    {versions.length === 0 ? (
+                      <option value="">No prepared versions yet</option>
+                    ) : (
+                      versions.map((v) => (
+                        <option key={v} value={v}>
+                          {v}
+                        </option>
+                      ))
+                    )}
                   </select>
-                  <ul className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200/70">
-                    {outputSourceRows.slice(0, 80).map(({ project: p, version: v }) => (
-                      <li key={`${p}/${v}`}>
-                        <button
-                          type="button"
-                          className={clsx(
-                            'ide-row w-full px-3 py-2',
-                            p === project && v === version && 'is-active font-medium',
-                          )}
-                          onClick={() => pickOutputSource(p, v)}
-                        >
-                          <EmptyDatabase className="h-3.5 w-3.5 shrink-0 text-ink-400" />
-                          <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-800">
-                            {p}/{v}
-                          </span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+                  {project && versions.length === 0 && !isArtifactSelection ? (
+                    <p className="text-[11px] leading-snug text-ink-500">
+                      No prepared versions for this workspace yet — run a prepare pipeline (or Merge) so
+                      files land under Datasets → Outputs.
+                    </p>
+                  ) : null}
+                  {(() => {
+                    const home = (activeProject || '').trim()
+                    const isHome = (r: (typeof outputSourceRows)[number]) =>
+                      !!home && r.project === home && !r.kind
+                    const mine = home ? outputSourceRows.filter(isHome) : outputSourceRows
+                    const others = home ? outputSourceRows.filter((r) => !isHome(r)) : []
+                    const selectedElsewhere = others.some((r) => r.project === project && r.version === version)
+                    const renderRows = (list: typeof outputSourceRows) => (
+                      <ul className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200/70">
+                        {list.slice(0, LIST_CAP).map(({ project: p, version: v, kind, label }) => {
+                          const name =
+                            kind === 'input_snapshot'
+                              ? label || p.replace(/^_inputs\//, '')
+                              : kind === 'artifact_dataset'
+                                ? (label || p).split('/').pop() || p
+                                : p
+                          const tag = kind === 'input_snapshot' ? 'Frozen' : kind === 'artifact_dataset' ? 'Legacy' : null
+                          return (
+                            <li key={`${p}/${v}`}>
+                              <button
+                                type="button"
+                                className={clsx(
+                                  'ide-row w-full px-3 py-2',
+                                  p === project && v === version && 'is-active font-medium',
+                                )}
+                                title={`${tag ? `${tag} · ` : ''}${label || p}/${v}`}
+                                onClick={() => pickOutputSource(p, v)}
+                              >
+                                <EmptyDatabase className="h-3.5 w-3.5 shrink-0 text-ink-400" />
+                                {tag ? (
+                                  <span className="shrink-0 rounded bg-ink-100 px-1 text-[10px] font-medium uppercase tracking-wide text-ink-500">
+                                    {tag}
+                                  </span>
+                                ) : null}
+                                <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-800">
+                                  {name}
+                                </span>
+                                <span className="shrink-0 font-mono text-[12px] text-ink-600">{v}</span>
+                              </button>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    )
+                    return (
+                      <>
+                        {mine.length > 0 ? (
+                          renderRows(mine)
+                        ) : home ? (
+                          <p className="text-[11px] text-ink-500">No prepared versions in {home} yet.</p>
+                        ) : null}
+                        {others.length > 0 ? (
+                          <details
+                            open={libraryOpen || selectedElsewhere || !!listFilter.trim() || mine.length === 0}
+                            onToggle={(e) => setLibraryOpen((e.currentTarget as HTMLDetailsElement).open)}
+                          >
+                            <summary className="cursor-pointer select-none py-1 text-[12px] font-medium text-ink-600 hover:text-ink-900">
+                              Also in the library ({others.length})
+                            </summary>
+                            <div className="mt-1">{renderRows(others)}</div>
+                          </details>
+                        ) : null}
+                      </>
+                    )
+                  })()}
                 </div>
               ) : null}
 
@@ -1531,7 +1900,7 @@ export default function DataView() {
                     </button>
                   ) : null}
                   <ul className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200/70">
-                    {filteredInputs.slice(0, 80).map((i) => (
+                    {filteredInputs.slice(0, LIST_CAP).map((i) => (
                       <li key={i.label}>
                         <button
                           type="button"
@@ -1564,18 +1933,26 @@ export default function DataView() {
                 <div className="space-y-3">
                   <section className="surface-card space-y-2 p-3">
                     <h3 className="text-sm font-semibold">URL ingest</h3>
-                    <textarea
-                      value={urls}
-                      onChange={(e) => setUrls(e.target.value)}
-                      rows={4}
-                      className="field-control w-full text-sm"
-                      placeholder="one URL per line"
-                    />
-                    <input
-                      value={ingestLabel}
-                      onChange={(e) => setIngestLabel(e.target.value)}
-                      className="field-control w-full text-sm"
-                    />
+                    <label className="block space-y-1">
+                      <span className="text-[12px] font-medium text-ink-600">URLs to download</span>
+                      <textarea
+                        value={urls}
+                        onChange={(e) => setUrls(e.target.value)}
+                        rows={4}
+                        className="field-control w-full text-sm"
+                        placeholder="one URL per line"
+                        aria-label="URLs to download, one per line"
+                      />
+                    </label>
+                    <label className="block space-y-1">
+                      <span className="text-[12px] font-medium text-ink-600">Target input label</span>
+                      <input
+                        value={ingestLabel}
+                        onChange={(e) => setIngestLabel(e.target.value)}
+                        className="field-control w-full text-sm"
+                        aria-label="Target input label"
+                      />
+                    </label>
                     <button type="button" className="btn-primary" onClick={() => void startUrlIngest()}>
                       Start URL ingest
                     </button>
@@ -1667,24 +2044,36 @@ export default function DataView() {
                   <p className="text-sm text-ink-500">
                     Comma-separated workspace:version pairs combined into a new version of the target workspace.
                   </p>
-                  <input
-                    value={mergeSources}
-                    onChange={(e) => setMergeSources(e.target.value)}
-                    className="field-control w-full text-sm"
-                    placeholder="workspace:version, other:v2"
-                  />
-                  <input
-                    value={mergeTargetProject}
-                    onChange={(e) => setMergeTargetProject(e.target.value)}
-                    className="field-control w-full text-sm"
-                    placeholder="target workspace"
-                  />
-                  <input
-                    value={mergeTargetVersion}
-                    onChange={(e) => setMergeTargetVersion(e.target.value)}
-                    className="field-control w-full text-sm"
-                    placeholder="target version"
-                  />
+                  <label className="block space-y-1">
+                    <span className="text-[12px] font-medium text-ink-600">Source versions</span>
+                    <input
+                      value={mergeSources}
+                      onChange={(e) => setMergeSources(e.target.value)}
+                      className="field-control w-full text-sm"
+                      placeholder="workspace:version, other:v2"
+                      aria-label="Source versions (comma-separated workspace:version pairs)"
+                    />
+                  </label>
+                  <label className="block space-y-1">
+                    <span className="text-[12px] font-medium text-ink-600">Target workspace</span>
+                    <input
+                      value={mergeTargetProject}
+                      onChange={(e) => setMergeTargetProject(e.target.value)}
+                      className="field-control w-full text-sm"
+                      placeholder="target workspace"
+                      aria-label="Target workspace"
+                    />
+                  </label>
+                  <label className="block space-y-1">
+                    <span className="text-[12px] font-medium text-ink-600">Target version</span>
+                    <input
+                      value={mergeTargetVersion}
+                      onChange={(e) => setMergeTargetVersion(e.target.value)}
+                      className="field-control w-full text-sm"
+                      placeholder="target version"
+                      aria-label="Target version (for example v1)"
+                    />
+                  </label>
                   <label
                     className="flex items-center gap-1.5 text-[12px] text-ink-600"
                     title="Versions are immutable: merging into an existing version is refused unless this is on, and never allowed when runs or packages reference it"
@@ -1835,7 +2224,61 @@ export default function DataView() {
                         </details>
                       ) : null}
 
-                      {stats != null && <KeyValue data={stats} />}
+                      {mode === 'outputs' && outputSummary && !isArtifactSelection ? (
+                        <section
+                          className="surface-card flex flex-wrap items-baseline gap-x-4 gap-y-1 p-3 text-[12px]"
+                          aria-label="Version summary"
+                        >
+                          <span>
+                            <span className="font-medium text-ink-800">{versionFileCount.toLocaleString()}</span>
+                            {` file${versionFileCount === 1 ? '' : 's'}`}
+                            {outputSummary.classes > 0 ? (
+                              <>
+                                {' · '}
+                                <span className="font-medium text-ink-800">{outputSummary.classes}</span>
+                                {` class${outputSummary.classes === 1 ? '' : 'es'}`}
+                              </>
+                            ) : null}
+                          </span>
+                          {splitTotals.size > 0 ? (
+                            <span className="text-ink-500">
+                              {splitOptions
+                                .filter((s) => splitTotals.has(s))
+                                .map((s) => `${s} ${(splitTotals.get(s) ?? 0).toLocaleString()}`)
+                                .join(' · ')}
+                            </span>
+                          ) : null}
+                          {outputProvenance ? <span className="text-ink-500">{outputProvenance}</span> : null}
+                        </section>
+                      ) : null}
+                      {isArtifactSelection && mode === 'outputs' ? (
+                        <div className="surface-card flex flex-wrap items-center gap-2 px-3 py-2 text-[12px] text-ink-700">
+                          <span className="min-w-0 flex-1">
+                            Legacy artifact tree (template hand-off). Publish into{' '}
+                            <span className="font-mono">{activeProject || 'a workspace'}</span> so it
+                            appears as a normal Outputs version.
+                          </span>
+                          <button
+                            type="button"
+                            className="btn-primary"
+                            disabled={!activeProject}
+                            title={
+                              activeProject
+                                ? `Copy into datasets/output/${activeProject}/`
+                                : 'Open a workspace first'
+                            }
+                            onClick={() => void publishArtifact()}
+                          >
+                            Publish to workspace
+                          </button>
+                        </div>
+                      ) : null}
+                      {isFreezeSelection && mode === 'outputs' && !isArtifactSelection ? (
+                        <p className="text-[11px] text-ink-500">
+                          Frozen input snapshot — immutable copy of an Inputs label (not a workspace
+                          export).
+                        </p>
+                      ) : null}
                       {mode === 'inputs' && inputStats && label ? (
                         <InputStatsCard stats={inputStats} open={inputStatsOpen} onToggle={() => setInputStatsOpen((v) => !v)} />
                       ) : null}
@@ -1868,7 +2311,7 @@ export default function DataView() {
               compact
               icon={EmptyFolderOpen}
               title={
-                listFilter.trim()
+                listFilter.trim() || splitFilter
                   ? 'No matches'
                   : mode === 'inputs' && !label
                     ? accessibleInputs.length
@@ -1876,13 +2319,19 @@ export default function DataView() {
                       : blockedInputs.length
                         ? 'No browseable labels'
                         : 'Pick an input label'
-                    : 'No rows'
+                    : mode === 'outputs' && !version
+                      ? 'No version selected'
+                      : 'No rows'
               }
               description={
-                listFilter.trim()
-                  ? 'Nothing matches this filter. Clear it to see the full list.'
+                listFilter.trim() || splitFilter
+                  ? outputTruncated
+                    ? 'Nothing matches in the files loaded so far. Clear the filter, or load more files.'
+                    : 'Nothing matches this filter. Clear it to see the full list.'
                   : mode === 'outputs'
-                    ? 'This version has no files yet. Run a pipeline or merge datasets to populate it.'
+                    ? !version
+                      ? 'This workspace has no prepared versions yet — run a prepare pipeline (or Merge), or pick a version from “Also in the library”.'
+                      : 'This version has no files yet. Run a pipeline or merge datasets to populate it.'
                     : !label
                       ? accessibleInputs.length
                         ? 'Choose a label from the list to browse shared input files.'
@@ -1892,10 +2341,29 @@ export default function DataView() {
                       : 'This label has no files yet. Upload or ingest to add some.'
               }
               action={
-                listFilter.trim() ? (
-                  <button type="button" className="btn-primary" onClick={() => setListFilter('')}>
-                    Clear filter
-                  </button>
+                listFilter.trim() || splitFilter ? (
+                  <div className="flex flex-wrap justify-center gap-2">
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => {
+                        setListFilter('')
+                        setSplitFilter('')
+                      }}
+                    >
+                      Clear filter
+                    </button>
+                    {mode === 'outputs' && outputTruncated ? (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        disabled={loadingMoreOutputs}
+                        onClick={() => void loadMoreOutputs()}
+                      >
+                        {loadingMoreOutputs ? 'Loading…' : `Load more (${OUTPUT_PAGE})`}
+                      </button>
+                    ) : null}
+                  </div>
                 ) : mode === 'inputs' && label ? (
                   <button type="button" className="btn-primary" onClick={upload}>
                     Upload files
@@ -1909,12 +2377,68 @@ export default function DataView() {
             />
           ) : (
             <div className="space-y-2">
+              {mode === 'outputs' && (splitOptions.length > 1 || outputDatasetFiles.length > 0) ? (
+                <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
+                  {splitOptions.length > 1 ? (
+                    <>
+                      {[['', 'All'] as const, ...splitOptions.map((s) => [s, s] as const)].map(([value, text]) => {
+                        const n = value ? splitTotals.get(value) : versionFileCount
+                        return (
+                          <button
+                            key={value || 'all'}
+                            type="button"
+                            aria-pressed={splitFilter === value}
+                            className={clsx(
+                              'rounded-full px-2.5 py-0.5 ring-1',
+                              splitFilter === value
+                                ? 'bg-accent-50 font-medium text-accent-900 ring-accent-200'
+                                : 'text-ink-600 ring-ink-200 hover:bg-ink-50',
+                            )}
+                            onClick={() => setSplitFilter(value)}
+                          >
+                            {text}
+                            {n != null ? <span className="ml-1 tabular-nums text-ink-400">{n.toLocaleString()}</span> : null}
+                          </button>
+                        )
+                      })}
+                    </>
+                  ) : null}
+                  {outputDatasetFiles.length > 0 ? (
+                    <details className="ml-auto text-ink-500">
+                      <summary className="cursor-pointer select-none hover:text-ink-800">
+                        Dataset files ({outputDatasetFiles.length})
+                      </summary>
+                      <ul className="mt-1 flex flex-wrap gap-1.5">
+                        {outputDatasetFiles.map((f) => {
+                          const p = String(f.path ?? '')
+                          return (
+                            <li key={p}>
+                              <button
+                                type="button"
+                                className="rounded bg-ink-50 px-1.5 py-0.5 font-mono text-[11px] text-ink-700 ring-1 ring-ink-100 hover:text-accent-800"
+                                title={`${p} — click to preview`}
+                                onClick={() => openFile(p, 'files')}
+                              >
+                                {relativeToVersion(p)}
+                              </button>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    </details>
+                  ) : null}
+                </div>
+              ) : null}
               {/* Summary of the whole filtered set. The page previously said nothing
                   about how much data a label holds — you got a wall of filenames. */}
               <div className="flex flex-wrap items-baseline justify-between gap-2 text-[12px] text-ink-500">
                 <span>
-                  <span className="font-medium text-ink-800">{filteredRows.length}</span>
+                  <span className="font-medium text-ink-800">{filteredRows.length.toLocaleString()}</span>
                   {` file${filteredRows.length === 1 ? '' : 's'}`}
+                  {mode === 'outputs' && outputFileCount > filteredRows.length && !listFilter.trim()
+                    ? ` of ${outputFileCount.toLocaleString()}`
+                    : ''}
+                  {splitFilter ? ` in ${splitFilter}` : ''}
                   {listFilter.trim() ? ` matching “${listFilter.trim()}”` : ''}
                   {anySizes ? (
                     <>
@@ -1924,18 +2448,30 @@ export default function DataView() {
                     </>
                   ) : null}
                 </span>
-                {listTruncated ? (
-                  <span>
-                    Showing {displayRows.length} of {sortedRows.length} —{' '}
+                <span className="flex flex-wrap items-center gap-2">
+                  {mode === 'outputs' && outputTruncated && !listFilter.trim() ? (
                     <button
                       type="button"
-                      className="font-medium text-accent-800 hover:underline"
-                      onClick={() => setListCap(sortedRows.length)}
+                      className="font-medium text-accent-800 hover:underline disabled:opacity-50"
+                      disabled={loadingMoreOutputs}
+                      onClick={() => void loadMoreOutputs()}
                     >
-                      show all
+                      {loadingMoreOutputs ? 'Loading…' : `Load more (${OUTPUT_PAGE})`}
                     </button>
-                  </span>
-                ) : null}
+                  ) : null}
+                  {listTruncated ? (
+                    <span>
+                      Showing {displayRows.length} of {sortedRows.length} —{' '}
+                      <button
+                        type="button"
+                        className="font-medium text-accent-800 hover:underline"
+                        onClick={() => setListCap(sortedRows.length)}
+                      >
+                        show all
+                      </button>
+                    </span>
+                  ) : null}
+                </span>
               </div>
               {/* No `overflow-hidden` here, however tempting for clipping the table
                   to the rounded corners: an ancestor with overflow hidden/clip
@@ -2008,9 +2544,11 @@ export default function DataView() {
                          copy button and the tooltip. */
                       const rowLabel = String(r.label ?? '')
                       const display =
-                        rowLabel && path.startsWith(`${rowLabel}/`)
-                          ? path.slice(rowLabel.length + 1)
-                          : path
+                        mode === 'outputs'
+                          ? relativeToVersion(path)
+                          : rowLabel && path.startsWith(`${rowLabel}/`)
+                            ? path.slice(rowLabel.length + 1)
+                            : path
                       const size = typeof r.size_bytes === 'number' ? r.size_bytes : null
                       const modified = typeof r.modified_at === 'string' ? r.modified_at : null
                       const kind = mode === 'outputs' ? 'files' : 'input-files'
@@ -2136,7 +2674,10 @@ function InputStatsCard({ stats, open, onToggle }: { stats: InputStats; open: bo
         <span className="text-ink-500">{kinds.map(([k, n]) => `${n} ${k}`).join(' · ')}</span>
         {a.duration_s ? (
           <span className="text-ink-500" title={a.sampled ? `Estimated from ${a.probed} of ${a.count} audio files` : undefined}>
-            ≈ {formatDuration(a.estimated_total_duration_s ?? 0)} audio · clips {a.duration_s.min}–{a.duration_s.max} s
+            ≈ {formatDuration(a.estimated_total_duration_s ?? 0)} audio · clips{' '}
+            {a.duration_s.min === a.duration_s.max
+              ? `${formatClipSeconds(a.duration_s.min)} s each`
+              : `${formatClipSeconds(a.duration_s.min)}–${formatClipSeconds(a.duration_s.max)} s`}
           </span>
         ) : null}
         {rates.length ? (

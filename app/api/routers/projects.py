@@ -422,7 +422,11 @@ def clone_project(name: str, body: CloneProjectBody, request: Request):
 
 @router.get("/{name}/links")
 def get_project_links(name: str):
-    """GET /projects/{name}/links — linked input labels and output version refs."""
+    """GET /projects/{name}/links — linked input labels (+ output refs, API-only).
+
+    The console pins **inputs** only; ``outputs`` in ``links.json`` is retained
+    for API / MCP callers and is not surfaced in Home or Datasets.
+    """
     return _handle(_pm.get_links, name)
 
 

@@ -45,7 +45,7 @@ class DatasetArtifact(PortDataType):
         labels:        sorted list of class label strings
         input_shape:   tuple describing feature dimensions (e.g. (101, 40, 1))
         n_classes:     number of unique classes
-        version:       optional version tag (set by dataset_versioner)
+        version:       optional version tag (set by exporters / dataset_versions)
         content_hash:  optional SHA256 hash of dataset contents
         manifest_path: optional path to manifest CSV
         metadata:      arbitrary key/value annotations

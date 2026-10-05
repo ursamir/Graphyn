@@ -122,9 +122,9 @@ Use `Pipeline` and `PipelineNode` from `app.core.sdk`; call pipeline.run(). See 
 
 - `venv/bin/python -m app.mcp.server`
 
-Console groups (global shell): **Projects** · **Build** (Templates, Agent inbox) · **Library** (Datasets, Plugins, Models, Artifacts) · **Deploy** (Ship, Worker fleet) · **Admin** (Credentials, Ops, Access). With a workspace open: **Home · Editor · Runs · Models · Ship · Datasets** (Runs includes History, Live, outputs, lineage, compare).
+Console groups (global shell): **Projects** · **Build** (Templates, Agent inbox) · **Library** (Datasets, Plugins, Models) · **Deploy** (Ship, Worker fleet) · **Admin** (Credentials, Ops, Access). With a workspace open: **Home · Editor · Runs · Models · Ship · Datasets** (Runs includes History, Live, outputs, lineage, compare).
 
-**Data vs Projects:** Data is files in/out (`workspace/datasets/`). Projects is the dataset workspace over the same output folder (versions/snapshots/lineage). Loop: Upload in Data → Build/ingest in Builder → Runs/Artifacts → manage in Projects → compare in Experiments / package in Edge.
+**Datasets (library) vs Home pins vs runs:** Shared **Inputs** live under `workspace/datasets/input/<label>/` (upload, import, freeze) — global raw data. Home **Datasets in use** pins those labels for a workspace (bookmark only). **Prepared** datasets from exporters land in `workspace/datasets/output/<workspace>/vN/` (Datasets → **Outputs**). Stamp a prepare template into a workspace so Step 1 writes Outputs there; Step 2 ingests `…/<workspace>/latest`. Editor path picker offers Linked inputs, workspace output versions, and recent run paths. Loop: Upload Inputs → pin on Home → prepare pipeline → Outputs version → pick in Editor → train/reuse.
 
 ---
 

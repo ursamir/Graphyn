@@ -25,7 +25,6 @@ import {
 import { apiJson } from '../../api/client'
 import { unwrapList } from '../../api/unwrapList'
 import { useAppStore } from '../../store/appStore'
-import type { GraphIR } from '../../types/graph'
 import {
   ConfirmButton,
   EmptyState,
@@ -261,7 +260,7 @@ export default function ProjectsView() {
       last_error?: string
     }>
   >([])
-  const [links, setLinks] = React.useState<{ inputs: string[]; outputs: Array<{ version: string }> }>({ inputs: [], outputs: [] })
+  const [links, setLinks] = React.useState<{ inputs: string[] }>({ inputs: [] })
   const [inputLabels, setInputLabels] = React.useState<string[]>([])
   const [linkPick, setLinkPick] = React.useState('')
   const [pipelinesHintDismissed, setPipelinesHintDismissed] = React.useState(() => {
@@ -376,9 +375,11 @@ export default function ProjectsView() {
         const [runs, linkData, inputs, pipes, sched] = await Promise.all([
           apiJson<unknown>('/runs', {
             query: { limit: HOME_RUNS_LIMIT, offset: 0, project: name },
-          }),
-          apiJson<{ inputs?: string[]; outputs?: Array<{ version: string }> }>(`/projects/${encodeURIComponent(name)}/links`).catch(() => ({ inputs: [], outputs: [] })),
-          apiJson<Array<{ label?: string } | string>>('/data/inputs').catch(() => []),
+          }).catch(() => []),
+          apiJson<{ inputs?: string[] }>(`/projects/${encodeURIComponent(name)}/links`).catch(() => ({ inputs: [] })),
+          apiJson<unknown>('/data/inputs')
+            .then((raw) => unwrapList(raw) as Array<{ label?: string } | string>)
+            .catch(() => []),
           apiJson<
             Array<{
               name: string
@@ -425,11 +426,18 @@ export default function ProjectsView() {
         }
         setLinks({
           inputs: Array.isArray(linkData?.inputs) ? linkData.inputs : [],
-          outputs: Array.isArray(linkData?.outputs) ? linkData.outputs : [],
         })
         const labels = (Array.isArray(inputs) ? inputs : [])
-          .map((x) => (typeof x === 'string' ? x : String(x?.label ?? '')))
-          .filter(Boolean)
+          .map((x) => {
+            if (typeof x === 'string') return { label: x, accessible: true as boolean | undefined }
+            const label = String(x?.label ?? '').trim()
+            if (!label) return null
+            const accessible = (x as { accessible?: boolean }).accessible
+            return { label, accessible }
+          })
+          .filter((x): x is { label: string; accessible: boolean | undefined } => Boolean(x))
+          .filter((x) => x.accessible !== false)
+          .map((x) => x.label)
         setInputLabels(labels)
         setLinkPick(labels.find((l) => !(linkData?.inputs || []).includes(l)) || labels[0] || '')
       } catch {
@@ -437,7 +445,7 @@ export default function ProjectsView() {
         setRecentRuns([])
         setProjectPipelines([])
         setSchedules([])
-        setLinks({ inputs: [], outputs: [] })
+        setLinks({ inputs: [] })
       }
     } catch (err) {
       if (stale()) return
@@ -448,7 +456,7 @@ export default function ProjectsView() {
       setRecentRuns([])
       setProjectPipelines([])
       setSchedules([])
-      setLinks({ inputs: [], outputs: [] })
+      setLinks({ inputs: [] })
     } finally {
       if (!stale()) {
         setOpening(false)
@@ -492,18 +500,10 @@ export default function ProjectsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject])
 
-  const openProjectPipeline = async (pipelineName: string, env?: string) => {
+  /** The Editor loads it by name, so its toolbar keeps the pipeline + Draft/staging/prod link. */
+  const openProjectPipeline = (pipelineName: string, env?: 'staging' | 'prod') => {
     if (!selected) return
-    try {
-      const graph = await apiJson<GraphIR>(
-        `/projects/${encodeURIComponent(selected)}/pipelines/${encodeURIComponent(pipelineName)}`,
-        env ? { query: { env } } : undefined,
-      )
-      useAppStore.getState().loadGraphIntoBuilder(graph)
-      pushToast(`Opened ${pipelineName}${env ? ` (${env})` : ''} in Editor`, 'success')
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
-    }
+    useAppStore.getState().openPipelineInEditor(pipelineName, env)
   }
 
   const publishPipeline = async (pipelineName: string, setEnv?: 'staging' | 'prod') => {
@@ -728,12 +728,15 @@ export default function ProjectsView() {
   const linkInput = async () => {
     if (!selected || !linkPick.trim()) return
     try {
-      const next = await apiJson<{ inputs: string[]; outputs: Array<{ version: string }> }>(
+      const next = await apiJson<{ inputs?: string[] }>(
         `/projects/${encodeURIComponent(selected)}/links`,
         { method: 'POST', body: JSON.stringify({ inputs: [linkPick.trim()] }) },
       )
-      setLinks({ inputs: next.inputs ?? [], outputs: next.outputs ?? [] })
-      pushToast(`Added dataset folder "${linkPick.trim()}"`, 'success')
+      setLinks({ inputs: Array.isArray(next.inputs) ? next.inputs : [] })
+      pushToast(
+        `Pinned “${linkPick.trim()}” — set the ingest path in the Editor (Linked picker) to use it in a run`,
+        'success',
+      )
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
@@ -742,11 +745,11 @@ export default function ProjectsView() {
   const unlinkInput = async (label: string) => {
     if (!selected) return
     try {
-      const next = await apiJson<{ inputs: string[]; outputs: Array<{ version: string }> }>(
+      const next = await apiJson<{ inputs?: string[] }>(
         `/projects/${encodeURIComponent(selected)}/links`,
         { method: 'DELETE', body: JSON.stringify({ inputs: [label] }) },
       )
-      setLinks({ inputs: next.inputs ?? [], outputs: next.outputs ?? [] })
+      setLinks({ inputs: Array.isArray(next.inputs) ? next.inputs : [] })
       pushToast(`Removed "${label}"`, 'success')
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
@@ -2258,7 +2261,7 @@ export default function ProjectsView() {
             <div className="mb-2 flex items-center justify-between gap-2">
               <h2
                 className={SECTION_TITLE}
-                title="Choose which dataset folders this workspace uses, so the Editor offers them first. Runs don’t add folders here automatically."
+                title="Pin dataset folders for this workspace (bookmarks for Datasets scoping). Pinning does not change pipeline ingest paths — set those in the Editor, or pick a linked folder from the path field."
               >
                 Datasets in use
               </h2>
@@ -2276,8 +2279,9 @@ export default function ProjectsView() {
                 value={linkPick}
                 onChange={(e) => setLinkPick(e.target.value)}
                 aria-label="Add a dataset folder"
+                disabled={homeLoading}
               >
-                <option value="">Select a dataset folder…</option>
+                <option value="">{homeLoading ? 'Loading datasets…' : 'Select a dataset folder…'}</option>
                 {inputLabels.map((label) => (
                   <option key={label} value={label} disabled={links.inputs.includes(label)}>
                     {label}
@@ -2295,7 +2299,8 @@ export default function ProjectsView() {
             </div>
             {links.inputs.length === 0 && (
               <p className="mt-2 text-[12px] text-ink-500">
-                No dataset folders chosen yet — pick one above, or upload data in Datasets first.
+                No folders pinned yet — pick one above (accessible labels only), or upload in Datasets first.
+                Pinning bookmarks the folder; set the ingest path in the Editor to use it in a run.
               </p>
             )}
             {links.inputs.length > 0 && (
@@ -2341,7 +2346,7 @@ export default function ProjectsView() {
               <button
                 type="button"
                 className="inline-flex items-center gap-1 text-accent-800 hover:underline"
-                title="Choose the dataset folders this workspace uses, so the Editor offers them first"
+                title="Pin dataset folders for this workspace (Editor path picker can use them). Pinning alone does not rewrite pipeline graphs."
                 onClick={() => {
                   setShowInputsCard(true)
                   window.setTimeout(() => jumpToCard('inputs'), 0)
@@ -2491,11 +2496,15 @@ export default function ProjectsView() {
                 <div className="mt-2 grid gap-3 text-[12px] sm:grid-cols-2">
                   <div>
                     <div className="font-medium text-rose-900">Removed</div>
-                    <ul className="mt-1 list-disc space-y-0.5 pl-4 text-rose-900/90">
-                      {deleteScope.removed.map((line) => (
-                        <li key={line}>{line}</li>
-                      ))}
-                    </ul>
+                    {homeLoading ? (
+                      <div className="mt-1 h-3 w-2/3 animate-pulse rounded bg-rose-100" aria-label="Counting workspace contents" />
+                    ) : (
+                      <ul className="mt-1 list-disc space-y-0.5 pl-4 text-rose-900/90">
+                        {deleteScope.removed.map((line) => (
+                          <li key={line}>{line}</li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                   <div>
                     <div className="font-medium text-ink-800">Kept</div>
@@ -2521,7 +2530,7 @@ export default function ProjectsView() {
                   <button
                     type="button"
                     className="btn-danger mb-px"
-                    disabled={deleteConfirm.trim() !== selected}
+                    disabled={homeLoading || deleteConfirm.trim() !== selected}
                     onClick={() => void remove()}
                   >
                     Delete workspace

@@ -59,6 +59,7 @@ export function normalizeDatasetRows(
     if (typeof f.modified_at === 'string') out.modified_at = f.modified_at
     if (typeof f.label === 'string') out.label = f.label
     if (typeof f.split === 'string') out.split = f.split
+    if (typeof f.kind === 'string') out.kind = f.kind
     return out
   })
 }

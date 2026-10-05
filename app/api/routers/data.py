@@ -12,7 +12,7 @@ Owns:             Route definitions for GET /data/capabilities,
                   POST /data/inputs/{label}/snapshot, POST /data/inputs/upload,
                   GET /data/outputs, GET/DELETE /data/outputs/{project}/{version},
                   GET /data/outputs/{project}/{version}/stats|zip,
-                  POST /data/merge.
+                  POST /data/outputs/publish-artifact, POST /data/merge.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain dataset storage logic — delegate to
                   app.core.mlops.dataset_inputs / dataset_versions and config
@@ -36,6 +36,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Upload
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+from app.core.config import artifacts_dir as _artifacts_dir
 from app.core.config import datasets_input_dir as _datasets_input_dir
 from app.core.config import datasets_output_dir as _datasets_output_dir
 from app.core.mlops.dataset_inputs import (
@@ -52,7 +53,9 @@ from app.core.mlops.dataset_inputs import (
     label_counts,
     label_file_rows,
     label_stats,
+    list_artifact_datasets,
     list_input_snapshots,
+    publish_artifact_dataset,
     snapshot_input_label,
 )
 
@@ -515,7 +518,8 @@ def list_output_datasets(
     Version dirs must match ProjectManager ``_VERSION_RE`` (e.g. v1, v1.0.0).
     ``snapshots/`` and other non-version directories are excluded. Frozen
     input labels are listed as ``{project: "_inputs/<label>", kind:
-    "input_snapshot"}`` after the workspaces.
+    "input_snapshot"}``. Legacy ``artifacts/<slug>/dataset/<name>`` trees are
+    soft-listed as ``kind: "artifact_dataset"`` (``fs_path`` for publish/pick).
     Envelope by default (API-PAGE-001 P1). Pass ``?envelope=0`` for bare array.
     """
     from app.api.pagination import maybe_envelope, parse_envelope_flag
@@ -535,6 +539,7 @@ def list_output_datasets(
             )
             result.append({"project": project, "versions": versions})
         result.extend(list_input_snapshots(output_root))
+    result.extend(list_artifact_datasets(_artifacts_dir()))
     total = len(result)
     page = result[offset : offset + limit]
     return maybe_envelope(
@@ -544,6 +549,71 @@ def list_output_datasets(
         limit=limit,
         offset=offset,
     )
+
+
+class PublishArtifactBody(BaseModel):
+    """Copy a legacy artifact dataset version into Library Outputs."""
+
+    fs_path: str
+    version: str | None = None
+    target_project: str
+    source_version: str | None = None
+
+
+@router.post("/outputs/publish-artifact", summary="Publish artifact dataset into Library Outputs")
+def publish_artifact_to_outputs(body: PublishArtifactBody, request: Request):
+    """Copy ``workspace/artifacts/.../dataset/.../vN`` into ``datasets/output/<ws>/vN``.
+
+    Soft-listed artifact rows (``kind: artifact_dataset``) use this so prepared
+    data becomes visible under Datasets → Outputs for the active workspace.
+    """
+    from app.core.config import project_dir
+    from app.core.paths.workspace_paths import ARTIFACTS_PREFIX
+
+    fs = (body.fs_path or "").strip().replace("\\", "/").rstrip("/")
+    if not fs.startswith(f"{ARTIFACTS_PREFIX}/") or "/dataset/" not in fs:
+        raise HTTPException(status_code=400, detail="fs_path must be under workspace/artifacts/.../dataset/...")
+    proj = (body.target_project or "").strip()
+    if not proj or proj.startswith("_") or "/" in proj or ".." in proj:
+        raise HTTPException(status_code=400, detail="Invalid target_project")
+    root = project_dir().resolve()
+    src_base = (root / fs[len("workspace/") :] if fs.startswith("workspace/") else root / fs).resolve()
+    try:
+        src_base.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Path outside workspace") from exc
+    ver = (body.source_version or "").strip()
+    if ver:
+        src = src_base / ver
+    else:
+        # newest non-empty version
+        from app.core.execution.dataset_refs import newest_version_dir
+
+        newest = newest_version_dir(src_base)
+        if not newest:
+            raise HTTPException(status_code=404, detail="No version folders under artifact dataset")
+        src = src_base / newest
+    if not src.is_dir():
+        raise HTTPException(status_code=404, detail="Source version not found")
+    target = _safe_child(_output_root(), proj)
+    try:
+        out = publish_artifact_dataset(
+            source_dir=src,
+            target_project_dir=target,
+            version=body.version,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    _audit(
+        request,
+        "dataset.publish_artifact",
+        "dataset_version",
+        f"{out['project']}/{out['version']}",
+        {"from": str(src), "content_hash": out.get("content_hash"), "file_count": out.get("file_count")},
+    )
+    return out
 
 
 def _version_dir(project: str, version: str) -> Path:
@@ -558,26 +628,66 @@ def _version_dir(project: str, version: str) -> Path:
 
 @router.get("/outputs/{project:path}/{version}/stats", summary="Get dataset statistics")
 def get_dataset_stats(project: str, version: str):
-    """Return split counts and per-label distribution for a dataset."""
+    """Return split counts and per-label distribution for a dataset.
+
+    Prefers ``labels.csv`` (audio exporter layout). When absent, derives a
+    best-effort split/label histogram from ``manifest.json`` paths
+    (``train|val|test/<label>/…``) so non-wav / non-exporter versions still
+    answer without scavenging the tree.
+    """
+    from app.core.mlops.dataset_versions import read_manifest
+
     dataset_path = _version_dir(project, version)
     if not dataset_path.exists():
         raise HTTPException(status_code=404, detail="Dataset not found")
 
     labels_file = dataset_path / "labels.csv"
-    if not labels_file.exists():
-        raise HTTPException(status_code=404, detail="labels.csv not found")
+    if labels_file.exists():
+        splits: dict[str, dict[str, int]] = {}
+        total = 0
+        with open(labels_file, newline="") as f:
+            for row in csv.DictReader(f):
+                split = row.get("split", "unknown")
+                label = row.get("label", "unknown")
+                splits.setdefault(split, {})
+                splits[split][label] = splits[split].get(label, 0) + 1
+                total += 1
+        return {
+            "project": project,
+            "version": version,
+            "total": total,
+            "splits": splits,
+            "source": "labels.csv",
+        }
 
-    splits: dict[str, dict[str, int]] = {}
+    man = read_manifest(dataset_path, ensure=True, enforce_sha256=False)
+    splits = {}
     total = 0
-    with open(labels_file, newline="") as f:
-        for row in csv.DictReader(f):
-            split = row.get("split", "unknown")
-            label = row.get("label", "unknown")
+    for item in man.get("files") if isinstance(man.get("files"), list) else []:
+        if isinstance(item, str):
+            rel = item
+        elif isinstance(item, dict):
+            rel = str(item.get("path") or "")
+        else:
+            continue
+        if not rel or rel.endswith("manifest.json"):
+            continue
+        parts = rel.replace("\\", "/").split("/")
+        if len(parts) >= 3 and parts[0] in {"train", "val", "test", "dev"}:
+            split, label = parts[0], parts[1]
             splits.setdefault(split, {})
             splits[split][label] = splits[split].get(label, 0) + 1
-            total += 1
-
-    return {"project": project, "version": version, "total": total, "splits": splits}
+        total += 1
+    if total == 0:
+        fc = man.get("file_count")
+        total = int(fc) if isinstance(fc, (int, float)) else 0
+    return {
+        "project": project,
+        "version": version,
+        "total": total,
+        "splits": splits,
+        "source": "manifest",
+    }
 
 
 @router.get("/outputs/{project:path}/{version}/zip", summary="Download a dataset version as a zip")
@@ -602,12 +712,29 @@ def download_output_zip(project: str, version: str, request: Request):
 
 
 @router.get("/outputs/{project:path}/{version}", summary="Get an output dataset")
-def get_output_dataset(project: str, version: str):
-    """Return dataset version detail with files + content_hash (DATA-VER-002).
+def get_output_dataset(
+    project: str,
+    version: str,
+    limit: int = Query(200, ge=1, le=1000, description="Max file rows to return (browse default)"),
+    offset: int = Query(0, ge=0, description="File-row offset for pagination"),
+    include_hash: bool = Query(
+        False,
+        description="Include per-file sha256 (legacy/integrity). Default false for lean browse.",
+    ),
+    include_samples: bool = Query(
+        False,
+        description="Include legacy samples[] (duplicates path info). Default false.",
+    ),
+    split: Optional[str] = Query(
+        None,
+        description="Only files in this split (train/val/test…); file_count is then the split's total",
+    ),
+):
+    """Return dataset version detail for browse or integrity tooling (DATA-VER-002).
 
-    Response is an OBJECT (not an array): ``{project, version, files:
-    [{name, path, size, sha256}], file_count, content_hash, created_at,
-    samples: [{path, split, label}]}``.
+    Default is a **lean** page: ``files`` with path/size/kind/split/label, no
+    per-file sha256, empty ``samples``. Pass ``include_hash=1`` for hashes;
+    ``include_samples=1`` for the legacy samples array.
     """
     from app.core.mlops.dataset_versions import read_manifest
 
@@ -615,8 +742,20 @@ def get_output_dataset(project: str, version: str):
     if not dataset_path.exists():
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    man = read_manifest(dataset_path, ensure=True, enforce_sha256=True)
-    files = _file_rows(man.get("files"))
+    man = read_manifest(dataset_path, ensure=True, enforce_sha256=False)
+    all_files = _file_rows(man.get("files"), include_hash=include_hash)
+    dataset_files = [r for r in all_files if r["path"] in _DATASET_META_FILES]
+    data_files = [r for r in all_files if r["path"] not in _DATASET_META_FILES]
+    data_files = _enrich_file_rows_split_label(data_files, dataset_path)
+    if split:
+        data_files = [r for r in data_files if r.get("split") == split]
+    data_files.sort(key=lambda r: (_SPLIT_ORDER.get(str(r.get("split") or ""), 99), r["path"]))
+    total = len(data_files)
+    page = data_files[offset : offset + limit]
+    truncated = offset + len(page) < total
+    _stat_rows(page, dataset_path)
+    _stat_rows(dataset_files, dataset_path)
+
     created_at = man.get("created_at") if isinstance(man.get("created_at"), str) else None
     if created_at is None:
         try:
@@ -626,7 +765,36 @@ def get_output_dataset(project: str, version: str):
         except OSError:
             created_at = None
 
-    samples = []
+    samples: list[dict[str, Any]] = []
+    if include_samples:
+        samples = _build_samples(project, version, dataset_path, man)
+
+    out: dict[str, Any] = {
+        "project": project,
+        "version": version,
+        "files": page,
+        "file_count": total,
+        "dataset_files": dataset_files,
+        "content_hash": man.get("content_hash") or man.get("sha256"),
+        "created_at": created_at,
+        "samples": samples,
+        "limit": limit,
+        "offset": offset,
+        "truncated": truncated,
+    }
+    if isinstance(man.get("source"), dict):
+        out["source"] = man["source"]
+    return out
+
+
+def _build_samples(
+    project: str,
+    version: str,
+    dataset_path: Path,
+    man: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Legacy samples[] (path + split + label) — opt-in only (duplicates files)."""
+    samples: list[dict[str, Any]] = []
     labels_file = dataset_path / "labels.csv"
     if labels_file.exists():
         with open(labels_file, newline="") as f:
@@ -641,41 +809,85 @@ def get_output_dataset(project: str, version: str):
                     "split": split,
                     "label": label,
                 })
-    else:
-        for split in ["train", "val", "test"]:
-            split_path = dataset_path / split
-            if not split_path.exists():
-                continue
-            for label in os.listdir(split_path):
-                label_path = split_path / label
-                if not label_path.is_dir():
-                    continue
-                for f in os.listdir(label_path):
-                    if f.lower().endswith(".wav"):
-                        samples.append({
-                            "path": f"{project}/{version}/{split}/{label}/{f}",
-                            "split": split,
-                            "label": label,
-                        })
+        return samples
 
-    out = {
-        "project": project,
-        "version": version,
-        "files": files,
-        "file_count": len(files),
-        "content_hash": man.get("content_hash") or man.get("sha256"),
-        "created_at": created_at,
-        "samples": samples,
-    }
-    if isinstance(man.get("source"), dict):
-        out["source"] = man["source"]
+    for item in man.get("files") if isinstance(man.get("files"), list) else []:
+        if isinstance(item, str):
+            rel = item
+        elif isinstance(item, dict):
+            rel = str(item.get("path") or "")
+        else:
+            continue
+        rel = rel.replace("\\", "/")
+        if not rel or rel.endswith("manifest.json") or rel.endswith("labels.csv"):
+            continue
+        parts = rel.split("/")
+        if len(parts) >= 3 and parts[0] in {"train", "val", "test", "dev"}:
+            samples.append({
+                "path": f"{project}/{version}/{rel}",
+                "split": parts[0],
+                "label": parts[1],
+            })
+        if len(samples) >= 5000:
+            break
+    return samples
+
+
+#: Version-root bookkeeping written by exporters / the manifest writer — not samples.
+_DATASET_META_FILES = frozenset({"labels.csv", "lineage.json", "manifest.json", "metadata.json"})
+#: Browse page order: unsplit files, then train → val → dev → test, then other splits.
+_SPLIT_ORDER = {"": 0, "train": 1, "val": 2, "dev": 3, "test": 4}
+
+
+def _stat_rows(rows: list[dict], dataset_path: Path) -> None:
+    """Fill ``modified_at`` (and a missing ``size``) from the filesystem — one page only."""
+    for r in rows:
+        rel = str(r["path"]).replace("\\", "/")
+        if rel.startswith("/") or ".." in rel.split("/"):
+            continue
+        try:
+            st = (dataset_path / rel).stat()
+        except OSError:
+            continue
+        r["modified_at"] = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()
+        if r.get("size") is None:
+            r["size"] = st.st_size
+
+
+def _enrich_file_rows_split_label(rows: list[dict], dataset_path: Path) -> list[dict]:
+    """Attach split/label from labels.csv or path shape (train|val|test/<label>/…)."""
+    by_rel: dict[str, tuple[str, str]] = {}
+    labels_file = dataset_path / "labels.csv"
+    if labels_file.exists():
+        try:
+            with open(labels_file, newline="") as f:
+                for row in csv.DictReader(f):
+                    rel = str(row.get("path") or "").replace("\\", "/")
+                    split = row.get("split")
+                    label = row.get("label")
+                    if rel and split and label:
+                        by_rel[rel] = (str(split), str(label))
+        except OSError:
+            pass
+    out: list[dict] = []
+    for row in rows:
+        r = dict(row)
+        path = str(r.get("path") or "").replace("\\", "/")
+        if path in by_rel:
+            r["split"], r["label"] = by_rel[path]
+        else:
+            parts = path.split("/")
+            if len(parts) >= 3 and parts[0] in {"train", "val", "test", "dev"}:
+                r["split"], r["label"] = parts[0], parts[1]
+        out.append(r)
     return out
 
 
-def _file_rows(raw) -> list[dict]:
-    """Normalize manifest ``files`` to ``[{name, path, size, sha256, kind}]`` rows.
+def _file_rows(raw, *, include_hash: bool = True) -> list[dict]:
+    """Normalize manifest ``files`` to browse/integrity rows.
 
     Always a list (never a dict/None) so clients can iterate safely.
+    When ``include_hash`` is false, ``sha256`` is stripped from each row.
     """
     rows: list[dict] = []
     if isinstance(raw, dict):
@@ -694,6 +906,8 @@ def _file_rows(raw) -> list[dict]:
         size = item.get("size")
         row["size"] = int(size) if isinstance(size, (int, float)) else None
         row.setdefault("kind", file_kind(path))
+        if not include_hash:
+            row.pop("sha256", None)
         rows.append(row)
     return rows
 

@@ -45,10 +45,11 @@ CLI shards: 6 runs, yes [append=false] → no, up, down, go, stop [append=true])
     → audio_quality_gate_3 (SNR ≥ 5 dB + clipping/silence/bandwidth; duration off)
     → audio_quality_gate_4 (duration 0.2–1.0 s only)
     → augmentation_pipeline_5 (pitch ±2 st + time-stretch 0.9–1.1, 2 copies → 3×)
-    → audio_exporter_6 (workspace/artifacts/speech-commands/dataset/speech_commands/v1/{split}/{label}, 70/15/15)
+    → audio_exporter_6 (workspace/datasets/output/audio_export/vN/{split}/{label}, 70/15/15;
+      stamped into a workspace → datasets/output/<workspace>/vN)
 
 Phase 2 — train (template Step 2)
-  dataset_ingest_0 (…/dataset/speech_commands/v1, recursive)
+  dataset_ingest_0 (workspace/datasets/output/audio_export/latest → stamped <workspace>/latest)
     → feature_frontend_0 (MFCC 40, n_fft 512, hop 160, fmax 8 kHz, per-clip normalise)
     → dataset_builder_0 (fixed_length 101 → X: N×101×40×1; splits from /train|val|test/ path)
         ├→ model_builder_0.input (DS-CNN 64 filters × 4 blocks, dropout 0.25, Adam 1e-3, ≈22.5 K params)

@@ -6,7 +6,8 @@ Responsibility:   FastAPI application factory. Wires auth, CORS, routers,
 Owns:             App instance, auth dependency (_auth_dep — accepts
                   GRAPHYN_API_TOKEN or any GRAPHYN_API_TOKENS mapped token),
                   request identity middleware (token → audit actor ContextVar),
-                  CORS middleware, router inclusion, static file mounts.
+                  CORS middleware, GZipMiddleware (large JSON), router inclusion,
+                  static file mounts.
 Public Surface:   app (FastAPI instance) — imported by uvicorn entry point.
 Must NOT:         Contain business endpoint logic — /api/v1 routes live in
                   app/api/routers/. Unauthenticated landing/health may live here.
@@ -38,6 +39,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
@@ -302,6 +304,8 @@ app.add_middleware(
     # spec when allow_credentials=True and causes browsers to reject responses.
     allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Request-Id", "Accept", "X-Actor", "Idempotency-Key"],
 )
+# Compress large JSON (Outputs listings, run journals). Clients send Accept-Encoding: gzip.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 

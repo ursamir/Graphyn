@@ -3,8 +3,8 @@
   "metadata": {
     "name": "speech_commands_e2e_train_ml",
     "seed": 42,
-    "title": "Speech commands E2E · Step 2 · Train model",
-    "description": "Step 2 of 2 — run Step 1 (Prepare dataset) first. Turns the prepared yes/no/up/down/go/stop dataset into MFCC features, trains a DS-CNN keyword-spotting model (up to 50 epochs, stops early when validation accuracy stalls), evaluates it on the held-out test clips and exports an INT8 TFLite model with its labels for deployment.",
+    "title": "Speech commands E2E \u00b7 Step 2 \u00b7 Train model",
+    "description": "Step 2 of 2 \u2014 run Step 1 (Prepare dataset) first. Turns the prepared yes/no/up/down/go/stop dataset into MFCC features, trains a DS-CNN keyword-spotting model (up to 50 epochs, stops early when validation accuracy stalls), evaluates it on the held-out test clips and exports an INT8 TFLite model with its labels for deployment.",
     "created_at": null,
     "tags": [
       "audio",
@@ -23,11 +23,11 @@
       "id": "dataset_ingest_0",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "workspace/artifacts/speech-commands/dataset/speech_commands/latest",
+        "path": "workspace/datasets/output/audio_export/latest",
         "recursive": true,
         "source_type": "filesystem"
       },
-      "label": "Load prepared dataset · from Step 1",
+      "label": "Load prepared dataset \u00b7 from Step 1",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -42,7 +42,7 @@
         "fmax": 8000.0,
         "normalize": true
       },
-      "label": "MFCC features · 40 × 101 frames",
+      "label": "MFCC features \u00b7 40 \u00d7 101 frames",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -68,7 +68,7 @@
         "backend": "keras",
         "output_path": "workspace/artifacts/speech-commands/model_builder"
       },
-      "label": "Model builder · DS-CNN (64 filters × 4 blocks)",
+      "label": "Model builder \u00b7 DS-CNN (64 filters \u00d7 4 blocks)",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -83,7 +83,7 @@
         "output_path": "workspace/artifacts/speech-commands/trainer",
         "patience": 15
       },
-      "label": "Trainer · up to 50 epochs",
+      "label": "Trainer \u00b7 up to 50 epochs",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -95,7 +95,7 @@
         "plot_confusion_matrix": true,
         "plot_training_curves": true
       },
-      "label": "Evaluator · held-out test clips",
+      "label": "Evaluator \u00b7 held-out test clips",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -108,7 +108,7 @@
         "output_path": "workspace/artifacts/speech-commands/tflite",
         "representative_samples": 100
       },
-      "label": "Edge optimizer · TFLite INT8",
+      "label": "Edge optimizer \u00b7 TFLite INT8",
       "capability_metadata": null,
       "event_trigger": null
     }

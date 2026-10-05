@@ -123,7 +123,7 @@ Editor **Save to project**; Overview lists and reopens them. Global templates re
 | Persist project on runs | Builder / Templates→Builder stamp `metadata.project` (+ optional `version_tag`); `POST /pipelines/run[-async]` writes `project` / `version_tag` into run `meta.json` (and orchestrator re-stamps from graph / node configs). |
 | Hard `GET /runs?project=` | Exact match on `meta.project`, with soft upgrade: if missing, infer from journal `graph.json` metadata / dataset node `config.project`. |
 | Experiments | `GET /experiments?project=` filters run rows by the same resolved project field. |
-| Project-linked datasets | `GET/POST/DELETE /projects/{name}/links` persists `{ inputs: string[], outputs?: {version}[] }` in `links.json` (mirrored on `project.json`). Project home: Link from Data picker + unlink; Browse files still opens Data with project context. |
+| Project-linked datasets | `GET/POST/DELETE /projects/{name}/links` persists `{ inputs: string[], outputs?: {version}[] }` in `links.json`. **Console UI manages input pins only** (`links.outputs` remains API-only). Pins are bookmarks for Home / Datasets scoping — set ingest path in the Editor (Linked picker) to use a pin in a run. |
 | Templates → project → Builder → Run | Active project required (Phase 1 gate); stamp on graph; **persist under `pipelines/`**; run writes `meta.project`; project home recent runs uses `GET /runs?project=`. |
 | Project pipelines | `GET/PUT/DELETE /projects/{name}/pipelines[/{pipeline}]` — Graph IR system of record for the workspace. |
 

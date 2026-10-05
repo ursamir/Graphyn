@@ -11,6 +11,9 @@ export type ParsedPath = {
   runId?: string
   panel?: RunPanel
   modelName?: string
+  /** `/workspaces/:id/editor/pipelines/:name[/:env]` — saved pipeline to open. */
+  editorPipeline?: string
+  editorEnv?: string
   proposalId?: string
   runsTab?: 'history' | 'live' | 'compare'
   shipTab?: 'package' | 'devices'
@@ -67,7 +70,17 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
     if (!b) return { view: 'projects' }
     const W = decodeURIComponent(b)
     if (!c) return { view: 'projects', workspaceId: W }
-    if (c === 'editor') return { view: 'builder', workspaceId: W }
+    if (c === 'editor') {
+      if (d === 'pipelines' && e) {
+        return {
+          view: 'builder',
+          workspaceId: W,
+          editorPipeline: decodeURIComponent(e),
+          editorEnv: parts[5] ? decodeURIComponent(parts[5]) : undefined,
+        }
+      }
+      return { view: 'builder', workspaceId: W }
+    }
     if (c === 'runs') {
       if (d === 'live') return { view: 'runs', workspaceId: W, runsTab: 'live' }
       if (d === 'compare') {
