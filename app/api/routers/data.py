@@ -397,6 +397,9 @@ def delete_input_dataset(label: str, request: Request):
     except Exception:
         pass
     shutil.rmtree(label_path)
+    from app.core.mlops.dataset_inputs import invalidate_label_inventory
+
+    invalidate_label_inventory(label_path)
     _audit(request, "dataset.label_delete", "dataset_input", label, before)
     return {"deleted": label, **before}
 
@@ -567,52 +570,87 @@ def publish_artifact_to_outputs(body: PublishArtifactBody, request: Request):
     Soft-listed artifact rows (``kind: artifact_dataset``) use this so prepared
     data becomes visible under Datasets → Outputs for the active workspace.
     """
-    from app.core.config import project_dir
+    from app.core.mlops.dataset_versions import next_free_version, version_has_content
     from app.core.paths.workspace_paths import ARTIFACTS_PREFIX
 
     fs = (body.fs_path or "").strip().replace("\\", "/").rstrip("/")
-    if not fs.startswith(f"{ARTIFACTS_PREFIX}/") or "/dataset/" not in fs:
-        raise HTTPException(status_code=400, detail="fs_path must be under workspace/artifacts/.../dataset/...")
+    prefix = f"{ARTIFACTS_PREFIX}/"
+    # Exact shape workspace/artifacts/<slug>/dataset/<name>: each segment is
+    # validated and jailed by _safe_child (no "..", no absolute, no symlink escape).
+    parts = fs[len(prefix) :].split("/") if fs.startswith(prefix) else []
+    if len(parts) != 3 or parts[1] != "dataset":
+        raise HTTPException(
+            status_code=400,
+            detail="fs_path must look like workspace/artifacts/<slug>/dataset/<name>",
+        )
     proj = (body.target_project or "").strip()
     if not proj or proj.startswith("_") or "/" in proj or ".." in proj:
         raise HTTPException(status_code=400, detail="Invalid target_project")
-    root = project_dir().resolve()
-    src_base = (root / fs[len("workspace/") :] if fs.startswith("workspace/") else root / fs).resolve()
-    try:
-        src_base.relative_to(root)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Path outside workspace") from exc
+    if body.version is not None and body.version.strip() and not _VERSION_RE.match(body.version.strip()):
+        raise HTTPException(status_code=400, detail="Invalid version (expected vN / vN.N.N)")
+    src_base = _safe_child(_artifacts_dir(), *parts)
     ver = (body.source_version or "").strip()
-    if ver:
-        src = src_base / ver
-    else:
-        # newest non-empty version
+    if not ver:
         from app.core.execution.dataset_refs import newest_version_dir
 
-        newest = newest_version_dir(src_base)
-        if not newest:
+        ver = newest_version_dir(src_base) or ""
+        if not ver:
             raise HTTPException(status_code=404, detail="No version folders under artifact dataset")
-        src = src_base / newest
+    if not _VERSION_RE.match(ver):
+        raise HTTPException(status_code=400, detail="Invalid source_version (expected vN / vN.N.N)")
+    src = _safe_child(_artifacts_dir(), *parts, ver)
     if not src.is_dir():
         raise HTTPException(status_code=404, detail="Source version not found")
-    target = _safe_child(_output_root(), proj)
+    output_root = _output_root()
+    target = _safe_child(output_root, proj)
+    want = (body.version or "").strip()
+    if want and version_has_content(_safe_child(output_root, proj, want)):
+        suggestion = next_free_version(target, want)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "conflict",
+                "code": "version_exists",
+                "message": (
+                    f"{proj}/{want} already exists and dataset versions are immutable — "
+                    f"publish into {suggestion} or omit version"
+                ),
+                "suggested_version": suggestion,
+            },
+        )
+    source_label = f"{fs}/{ver}"
     try:
         out = publish_artifact_dataset(
             source_dir=src,
             target_project_dir=target,
-            version=body.version,
+            version=want or None,
+            source_label=source_label,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="Source version not found") from exc
+    except (OSError, shutil.Error) as exc:
+        _audit(
+            request,
+            "dataset.publish_artifact",
+            "dataset_version",
+            f"{proj}/{want or '?'}",
+            {"from": source_label, "error": type(exc).__name__},
+            result="failure",
+        )
+        raise HTTPException(status_code=500, detail="Publish failed while copying files") from exc
+    _ensure_project_json(target, proj)
     _audit(
         request,
         "dataset.publish_artifact",
         "dataset_version",
         f"{out['project']}/{out['version']}",
-        {"from": str(src), "content_hash": out.get("content_hash"), "file_count": out.get("file_count")},
+        {"from": source_label, "content_hash": out.get("content_hash"), "file_count": out.get("file_count")},
     )
+    out["path"] = f"workspace/datasets/output/{out['project']}/{out['version']}"
     return out
 
 

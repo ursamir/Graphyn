@@ -1744,17 +1744,22 @@ Control-plane surfaces for `GRAPHYN_BACKEND=distributed`. See [DISTRIBUTED_EXECU
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/api/v1/workers/register` | Register / refresh a worker |
+| POST | `/api/v1/workers/register` | Register / refresh a worker. Admin fields (`allowed_plugins`, `plugin_hashes`, `trusted`, `max_claimed`, `usage_*`) in the body are ignored — existing values are kept |
 | POST | `/api/v1/workers/{id}/heartbeat` | Heartbeat + resource snapshot; **503** when lease renew fails |
-| GET | `/api/v1/workers` | List workers |
+| GET | `/api/v1/workers` | List workers (`plugin_hashes` only for operators) |
+| GET | `/api/v1/workers/remote-node-types` | Node types advertised by workers |
+| PATCH | `/api/v1/workers/{id}` | Operator only: set `allowed_plugins` / `plugin_hashes` / `trusted` / `max_claimed` |
 | DELETE | `/api/v1/workers/{id}` | Deregister |
 | POST | `/api/v1/jobs/claim` | Claim next eligible job |
 | POST | `/api/v1/jobs/{id}/complete` | Report job result (lease-fenced) |
-| POST | `/api/v1/jobs/{id}/events` | Append job log events |
+| POST | `/api/v1/jobs/{id}/events` | Append job log events. Workers: claimant only; **409** unless the job is claimed / running |
 | POST | `/api/v1/jobs/{id}/cancel` | Cancel a job |
-| GET | `/api/v1/jobs/{id}` | Get job status |
+| GET | `/api/v1/jobs/{id}` | Get job status. Workers: claimant only (**403** otherwise) |
 | POST | `/api/v1/artifacts/blob` | Upload artifact blob |
-| GET | `/api/v1/artifacts/blob/{key}` | Download artifact blob |
+| GET | `/api/v1/artifacts/blob/{key}` | Download artifact blob. Workers: input / `blob_grants` keys of a job they hold, or their own job's output keys; or a valid `exp`+`sig` |
+| POST | `/api/v1/artifacts/blob/sign` | Mint a signed blob URL (TTL capped at 3600 s; needs `GRAPHYN_BLOB_SIGNING_KEY`) |
+
+**Worker identity scope.** A worker token or mTLS worker identity can only reach the routes above that a worker needs (register, heartbeat, claim, job GET / events / complete, blob PUT / GET / sign). Every other `/api/` route returns **403**. With `GRAPHYN_MTLS_ENABLED=1`, worker protocol mutations without a client certificate return **403** (`mTLS is enabled: worker routes require a client certificate`).
 
 Durable registry/queue: `workspace/distributed/*.json` (or Redis when `GRAPHYN_REDIS_URL` is set). Orthogonal to `run_control` active-run registry.
 

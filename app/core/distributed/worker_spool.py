@@ -5,7 +5,7 @@ Responsibility:   Offline store-and-forward for worker → control traffic when
                   the control plane is unreachable: spool completes, events,
                   and optional blob files; flush on reconnect with
                   lease_generation fencing.
-Owns:             WorkerSpool, spool_enabled(), default_spool_dir().
+Owns:             WorkerSpool, spool_enabled(), default_spool_dir(worker_id).
 Public Surface:   WorkerSpool and helpers above.
 Must NOT:         Import app.api / app.domain.
 Dependencies:     stdlib, app.core.config (graphyn_home, lazy).
@@ -51,7 +51,8 @@ def spool_max_items() -> int:
         return _DEFAULT_MAX_ITEMS
 
 
-def default_spool_dir() -> Path:
+def default_spool_dir(worker_id: str | None = None) -> Path:
+    """Spool root; namespaced per ``worker_id`` so co-hosted workers never share items."""
     override = (os.environ.get("GRAPHYN_WORKER_SPOOL_DIR") or "").strip()
     if override:
         p = Path(override)
@@ -62,8 +63,21 @@ def default_spool_dir() -> Path:
             p = Path(graphyn_home()) / "worker_spool"
         except Exception:
             p = Path.home() / ".graphyn" / "worker_spool"
+    wid = "".join(c for c in str(worker_id or "") if c.isalnum() or c in "._-")
+    if wid:
+        p = p / wid
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    """tmp + fsync + ``os.replace`` so a crash never leaves a torn item."""
+    tmp = path.with_name(path.name + f".{uuid.uuid4().hex[:8]}.tmp")
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
 
 
 def is_network_error(exc: BaseException) -> bool:
@@ -108,8 +122,8 @@ class WorkerSpool:
     generation) are dropped with an audit line in ``dropped.jsonl``.
     """
 
-    def __init__(self, root: Path | None = None) -> None:
-        self.root = Path(root) if root is not None else default_spool_dir()
+    def __init__(self, root: Path | None = None, *, worker_id: str | None = None) -> None:
+        self.root = Path(root) if root is not None else default_spool_dir(worker_id)
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / "blobs").mkdir(exist_ok=True)
         (self.root / "items").mkdir(exist_ok=True)
@@ -187,7 +201,7 @@ class WorkerSpool:
             "lease_generation": result.get("lease_generation"),
             "job_id": result.get("job_id"),
         }
-        path.write_text(json.dumps(payload), encoding="utf-8")
+        _atomic_write(path, json.dumps(payload).encode("utf-8"))
         self._enforce_caps()
         return path
 
@@ -201,7 +215,7 @@ class WorkerSpool:
             "job_id": job_id,
             "events": events,
         }
-        path.write_text(json.dumps(payload), encoding="utf-8")
+        _atomic_write(path, json.dumps(payload).encode("utf-8"))
         self._enforce_caps()
         return path
 
@@ -217,7 +231,7 @@ class WorkerSpool:
         seq = self._next_seq()
         blob_rel = f"blobs/{seq}.bin"
         blob_path = self.root / blob_rel
-        blob_path.write_bytes(data)
+        _atomic_write(blob_path, data)
         path = self._item_path(seq, "blob")
         payload = {
             "kind": "blob",
@@ -231,9 +245,18 @@ class WorkerSpool:
             "sha256": __import__("hashlib").sha256(data).hexdigest(),
             "nbytes": len(data),
         }
-        path.write_text(json.dumps(payload), encoding="utf-8")
+        _atomic_write(path, json.dumps(payload).encode("utf-8"))
         self._enforce_caps()
         return path
+
+    def spooled_job_ids(self) -> list[str]:
+        """Job ids with a spooled complete/blob — still owned by this instance."""
+        ids = {
+            str(item.get("job_id"))
+            for item in self.pending()
+            if item.get("kind") in ("complete", "blob") and item.get("job_id")
+        }
+        return sorted(ids)
 
     def pending(self) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []

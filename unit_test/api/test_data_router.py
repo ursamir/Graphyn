@@ -491,3 +491,74 @@ class TestDownloadInputFile:
                 params={"path": "../etc/passwd"},
             )
         assert resp.status_code == 400
+
+
+class TestPublishArtifact:
+    """POST /data/outputs/publish-artifact must stay inside workspace/artifacts."""
+
+    def _setup(self, tmp_path):
+        arts = tmp_path / "artifacts"
+        src = arts / "slug" / "dataset" / "ds" / "v1"
+        (src / "train" / "yes").mkdir(parents=True)
+        (src / "train" / "yes" / "a.wav").write_bytes(b"RIFF")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("top secret")
+        patcher, output_root = _patch_output(tmp_path)
+        arts_patch = patch("app.api.routers.data._artifacts_dir", return_value=arts)
+        return patcher, arts_patch, output_root
+
+    def _post(self, api_client, **body):
+        payload = {"fs_path": "workspace/artifacts/slug/dataset/ds", "target_project": "p", **body}
+        return api_client.post("/api/v1/data/outputs/publish-artifact", json=payload)
+
+    def test_publishes_into_outputs(self, api_client, tmp_path):
+        p, a, output_root = self._setup(tmp_path)
+        with p, a:
+            resp = self._post(api_client, source_version="v1")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["version"] == "v1"
+        assert body["path"] == "workspace/datasets/output/p/v1"
+        assert str(tmp_path) not in resp.text
+        assert (output_root / "p" / "v1" / "train" / "yes" / "a.wav").is_file()
+
+    def test_source_version_traversal_rejected(self, api_client, tmp_path):
+        p, a, output_root = self._setup(tmp_path)
+        with p, a:
+            for bad in ("../../../../outside", "/etc", str(tmp_path / "outside"), "."):
+                resp = self._post(api_client, source_version=bad)
+                assert resp.status_code == 400, (bad, resp.text)
+        assert not (output_root / "p").exists() or not any((output_root / "p").rglob("secret.txt"))
+
+    def test_fs_path_traversal_rejected(self, api_client, tmp_path):
+        p, a, _ = self._setup(tmp_path)
+        with p, a:
+            for bad in (
+                "workspace/artifacts/slug/dataset/../../../outside",
+                "workspace/artifacts/slug/dataset/ds/extra",
+                "workspace/artifacts/slug/notdataset/ds",
+                "/etc/dataset/x",
+            ):
+                resp = api_client.post(
+                    "/api/v1/data/outputs/publish-artifact",
+                    json={"fs_path": bad, "target_project": "p", "source_version": "v1"},
+                )
+                assert resp.status_code == 400, (bad, resp.text)
+
+    def test_existing_version_conflicts(self, api_client, tmp_path):
+        p, a, output_root = self._setup(tmp_path)
+        (output_root / "p" / "v1").mkdir(parents=True)
+        (output_root / "p" / "v1" / "x.wav").write_bytes(b"x")
+        with p, a:
+            resp = self._post(api_client, source_version="v1", version="v1")
+        assert resp.status_code == 409
+
+    def test_symlinks_in_source_not_followed(self, api_client, tmp_path):
+        p, a, output_root = self._setup(tmp_path)
+        src = tmp_path / "artifacts" / "slug" / "dataset" / "ds" / "v1"
+        (src / "leak.txt").symlink_to(tmp_path / "outside" / "secret.txt")
+        with p, a:
+            resp = self._post(api_client, source_version="v1")
+        assert resp.status_code == 200, resp.text
+        assert not (output_root / "p" / "v1" / "leak.txt").exists()

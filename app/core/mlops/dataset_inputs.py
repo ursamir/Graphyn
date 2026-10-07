@@ -231,36 +231,60 @@ def count_files_budgeted(
         for fn in filenames:
             if fn.startswith(".") or fn in _SKIP_NAMES:
                 continue
+            if total >= max_files:
+                # One more visible file than the budget → the count is a floor.
+                truncated = True
+                return {"file_count": total, "audio_count": audio, "truncated": truncated}
             total += 1
             if fn.lower().endswith(AUDIO_EXTENSIONS):
                 audio += 1
-            if total >= max_files:
-                truncated = True
-                return {"file_count": total, "audio_count": audio, "truncated": truncated}
     return {"file_count": total, "audio_count": audio, "truncated": truncated}
 
 
-def _dir_mtime_signature(root: Path, *, max_dirs: int = 5_000) -> str:
-    """Cheap tree fingerprint: directory mtimes + file counts (not per-file hashes)."""
-    parts: list[str] = []
-    n = 0
+def _inventory_ttl_s() -> float:
+    try:
+        return max(0.0, float(os.environ.get("GRAPHYN_INPUT_INVENTORY_TTL_S", "300") or "300"))
+    except ValueError:
+        return 300.0
+
+
+def _dir_mtime_signature(root: Path) -> str:
+    """Shallow fingerprint: the label dir + its immediate sub-folders' mtimes.
+
+    Input labels are ``<label>/<class>/files`` (or flat), so adding / removing a
+    file bumps one of these mtimes. This touches only two directory levels —
+    never every file — which is what makes the cache cheaper than recounting.
+    Edits deeper than ``<label>/<class>/`` are picked up by the TTL
+    (``GRAPHYN_INPUT_INVENTORY_TTL_S``, default 300 s); API writers also call
+    :func:`invalidate_label_inventory`.
+    """
     root = Path(root)
     if not root.is_dir():
         return ""
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
-        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in _SKIP_NAMES]
-        visible = [f for f in filenames if not f.startswith(".") and f not in _SKIP_NAMES]
+
+    def _mt(p: Path) -> int:
         try:
-            st = Path(dirpath).stat()
-            mtime_ns = getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))
+            st = p.stat()
+            return getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))
         except OSError:
-            mtime_ns = 0
-        rel = Path(dirpath).relative_to(root).as_posix() if Path(dirpath) != root else "."
-        parts.append(f"{rel}:{mtime_ns}:{len(visible)}")
-        n += 1
-        if n >= max_dirs:
-            parts.append(f"…truncated:{n}")
-            break
+            return 0
+
+    parts = [f".:{_mt(root)}"]
+    try:
+        with os.scandir(root) as it:
+            for entry in it:
+                name = entry.name
+                if name.startswith(".") or name in _SKIP_NAMES:
+                    continue
+                try:
+                    is_dir = entry.is_dir(follow_symlinks=True)
+                except OSError:
+                    continue
+                if is_dir:
+                    parts.append(f"{name}:{_mt(Path(entry.path))}")
+    except OSError:
+        return ""
+    parts.sort()
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:32]
 
 
@@ -316,33 +340,50 @@ def _write_label_inventory(label_path: Path, payload: dict[str, Any]) -> None:
             pass
 
 
-def label_counts(label_path: Path, *, max_files: int = 50_000) -> dict[str, int]:
-    """Cheap per-label counts (no per-file stat): ``{file_count, audio_count}``.
+def label_counts(label_path: Path, *, max_files: int = 50_000) -> dict[str, Any]:
+    """Cheap per-label counts: ``{file_count, audio_count, truncated}``.
 
-    Caps the walk at *max_files* so huge trees cannot hang list endpoints.
+    Caps the walk at *max_files* so huge trees cannot hang list endpoints;
+    ``truncated: true`` means the counts are a floor, not exact.
     Caches results under ``datasets/input/.graphyn_inventories/<label>.json``
-    keyed by a directory mtime signature so large trees are not re-walked on
-    every ``GET /data/inputs``.
+    keyed by a shallow mtime signature (see :func:`_dir_mtime_signature`) plus
+    a TTL, so large trees are not re-walked on every ``GET /data/inputs``.
     """
     label_path = Path(label_path)
     sig = _dir_mtime_signature(label_path)
     cached = _read_label_inventory(label_path)
+    fresh = False
+    if cached:
+        try:
+            age = time.time() - float(cached.get("counted_at_epoch") or 0)
+            fresh = 0 <= age <= _inventory_ttl_s()
+        except (TypeError, ValueError):
+            fresh = False
     if (
         cached
+        and fresh
         and cached.get("signature") == sig
         and cached.get("max_files") == max_files
         and isinstance(cached.get("file_count"), int)
         and isinstance(cached.get("audio_count"), int)
     ):
-        return {"file_count": int(cached["file_count"]), "audio_count": int(cached["audio_count"])}
+        return {
+            "file_count": int(cached["file_count"]),
+            "audio_count": int(cached["audio_count"]),
+            "truncated": bool(cached.get("truncated")),
+        }
 
     counted = count_files_budgeted(label_path, max_files=max_files)
-    out = {"file_count": int(counted["file_count"]), "audio_count": int(counted["audio_count"])}
+    out = {
+        "file_count": int(counted["file_count"]),
+        "audio_count": int(counted["audio_count"]),
+        "truncated": bool(counted.get("truncated")),
+    }
     _write_label_inventory(
         label_path,
         {
             **out,
-            "truncated": bool(counted.get("truncated")),
+            "counted_at_epoch": time.time(),
             "max_files": max_files,
             "signature": sig,
             "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -901,21 +942,35 @@ def list_artifact_datasets(artifacts_root: Path) -> list[dict[str, Any]]:
 
     root = Path(artifacts_root)
     out: list[dict[str, Any]] = []
+
+    def _children(p: Path) -> list[Path]:
+        # One unreadable folder must not turn the whole Outputs listing into a 500.
+        try:
+            return sorted(p.iterdir())
+        except OSError:
+            return []
+
+    def _non_empty(p: Path) -> bool:
+        try:
+            return any(p.iterdir())
+        except OSError:
+            return False
+
     if not root.is_dir():
         return out
-    for slug in sorted(root.iterdir()):
+    for slug in _children(root):
         if not slug.is_dir() or slug.name.startswith("."):
             continue
         ds_root = slug / "dataset"
         if not ds_root.is_dir():
             continue
-        for name in sorted(ds_root.iterdir()):
+        for name in _children(ds_root):
             if not name.is_dir() or name.name.startswith("."):
                 continue
             versions = sorted(
                 v.name
-                for v in name.iterdir()
-                if v.is_dir() and VERSION_RE.match(v.name) and any(v.iterdir())
+                for v in _children(name)
+                if v.is_dir() and VERSION_RE.match(v.name) and _non_empty(v)
             )
             if not versions:
                 continue
@@ -937,8 +992,15 @@ def publish_artifact_dataset(
     source_dir: Path,
     target_project_dir: Path,
     version: str | None = None,
+    source_label: str | None = None,
 ) -> dict[str, Any]:
-    """Copy an artifact dataset version tree into ``datasets/output/<project>/vN``."""
+    """Copy an artifact dataset version tree into ``datasets/output/<project>/vN``.
+
+    Symlinks are dropped (never followed — a link inside the tree must not pull
+    in files from outside it). An explicit *version* that already exists raises
+    ``FileExistsError`` (versions are immutable); with no version the next free
+    one is used.
+    """
     from app.core.mlops.dataset_versions import (
         VERSION_RE,
         compute_manifest,
@@ -958,15 +1020,21 @@ def publish_artifact_dataset(
         ver = next_free_version(target_project_dir)
     dest = target_project_dir / ver
     if dest.exists():
+        if version:
+            raise FileExistsError(f"Version {ver} already exists")
         ver = next_free_version(target_project_dir)
         dest = target_project_dir / ver
+
+    def _skip_links(dirpath: str, names: list[str]) -> list[str]:
+        return [n for n in names if os.path.islink(os.path.join(dirpath, n))]
+
     staging = target_project_dir / f".publish-{uuid.uuid4().hex}"
     try:
-        shutil.copytree(src, staging, dirs_exist_ok=False)
+        shutil.copytree(src, staging, symlinks=False, ignore=_skip_links, dirs_exist_ok=False)
         man = compute_manifest(staging)
         man["source"] = {
             "kind": "artifact_publish",
-            "from": str(src).replace("\\", "/"),
+            "from": (source_label or src.name).replace("\\", "/"),
         }
         man["created_at"] = datetime.now(timezone.utc).isoformat()
         write_manifest(staging, man)

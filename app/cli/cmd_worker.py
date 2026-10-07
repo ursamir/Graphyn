@@ -1,7 +1,10 @@
 # app/cli/cmd_worker.py
 """
 Bounded Context:  CLI Interface
-Responsibility:   worker start subcommand and its HTTP client.
+Responsibility:   worker start subcommand and its HTTP client (uses a saved
+                  ``worker join`` enrollment and rotates its credential;
+                  streams ``emit_node_progress`` to the control plane via
+                  ``POST /jobs/{id}/events``).
 Owns:             cmd_worker_start
 Public Surface:   cmd_worker_start
 Must NOT:         Contain pipeline execution logic. Must not import app.api.
@@ -133,14 +136,38 @@ def cmd_worker_start(args):
     import urllib.error
     import urllib.request
 
-    control_url = (args.control_url or os.environ.get("GRAPHYN_CONTROL_URL") or "").rstrip("/")
+    from app.cli.cmd_worker_join import apply_enrollment_mtls_env, load_enrollment, rotate_if_due
+
     in_process = bool(getattr(args, "in_process", False))
-    worker_id = _resolve_worker_id(args.worker_id, http_mode=not in_process)
+    enrollment = None if (in_process or getattr(args, "no_enrollment", False)) else load_enrollment()
+    control_url = (
+        args.control_url
+        or os.environ.get("GRAPHYN_CONTROL_URL")
+        or (enrollment or {}).get("control_url")
+        or ""
+    ).rstrip("/")
     labels = [x.strip() for x in (args.labels or "").split(",") if x.strip()]
     pools = []
     if args.pool:
         pools = [args.pool]
-    token = os.environ.get("GRAPHYN_API_TOKEN", "")
+    from app.core.distributed.transfer import worker_bearer_token
+
+    if enrollment:
+        worker_id = enrollment["worker_id"]
+        if args.worker_id and args.worker_id != worker_id:
+            print(
+                f"[worker] enrolled as {worker_id!r}; ignoring --worker-id/GRAPHYN_WORKER_ID {args.worker_id!r}",
+                file=sys.stderr,
+            )
+        token = enrollment["token"]
+        # Pool / labels are owned by the control plane for joined workers.
+        labels = list(enrollment.get("labels") or labels)
+        pools = [enrollment["pool"]] if enrollment.get("pool") else pools
+        apply_enrollment_mtls_env(enrollment, control_url)
+        print(f"[worker] using join enrollment {enrollment.get('credential_id')} as {worker_id}", file=sys.stderr)
+    else:
+        worker_id = _resolve_worker_id(args.worker_id, http_mode=not in_process)
+        token = worker_bearer_token()
     heartbeat_s = float(getattr(args, "heartbeat", 15) or 15)
     once = bool(getattr(args, "once", False))
 
@@ -170,10 +197,9 @@ def cmd_worker_start(args):
     if _ssl_ctx is not None:
         print("[worker] mTLS client cert enabled for control plane", file=sys.stderr)
         if control_url.startswith("http://"):
-            print(
-                "[worker] WARNING: control_url is http:// but mTLS is enabled; "
-                "prefer https://graphyn-api:8001/api/v1",
-                file=sys.stderr,
+            raise SystemExit(
+                "[worker] mTLS is enabled but control_url is http:// — the client "
+                "certificate would never be presented. Use https://…/api/v1."
             )
 
     def _http_json(method: str, path: str, payload=None):
@@ -261,14 +287,14 @@ def cmd_worker_start(args):
             file=sys.stderr,
         )
 
-    def _hydrate_inputs(input_refs: dict, *, node_write_dir=None) -> dict:
+    def _hydrate_inputs(input_refs: dict, *, node_write_dir=None, job_id: str = "") -> dict:
         """Resolve input_refs to in-memory port values (local store or HTTP).
 
         Path-bearing platform artifacts arrive with an ArtifactRef manifest:
         companion blobs are fetched (local or HTTP) and hydrated under
         ``<node_write_dir>/_inputs/<port>/…`` (siblings preserved). Falls back
-        to ``artifacts/distributed_materialized/_inputs/<port>/`` when no write
-        dir is known (Mode B — no shared FS).
+        to ``artifacts/distributed_materialized/<job_id>/_inputs/<port>/`` when
+        no write dir is known (Mode B — no shared FS).
         """
         from pathlib import Path as _Path
         from app.core.distributed.transfer import (
@@ -279,7 +305,14 @@ def cmd_worker_start(args):
             load_port_value,
         )
 
-        base_write = _Path(node_write_dir) if node_write_dir else default_materialize_root()
+        from app.core.distributed.transfer import safe_job_segment
+
+        base_write = (
+            _Path(node_write_dir)
+            if node_write_dir
+            # Per-job fallback: a shared root lets jobs overwrite each other's inputs.
+            else default_materialize_root() / safe_job_segment(job_id or "job")
+        )
 
         def _fetch_companion(uri: str, expected_sha256: str | None = None) -> bytes:
             data = None
@@ -417,11 +450,14 @@ def cmd_worker_start(args):
                 )
         return refs, digests
 
-    def _execute_job(job: dict, *, cancel_check=None) -> tuple:
+    def _execute_job(job: dict, *, cancel_check=None, progress_sink=None) -> tuple:
         """Hydrate inputs, run NodeExecutor, return (outputs, output_refs, output_sha256).
 
         ``cancel_check`` — optional callable polled during execute / isolated
         subprocess wait so mid-flight cancel can terminate the process group.
+        ``progress_sink`` — optional ``emit_node_progress`` sink (Mode B: posts
+        ``node_progress`` to ``/jobs/{id}/events`` so the control journal matches
+        local Mode A training logs).
         """
         from app.core.distributed.models import NodeJob as _NodeJob
         from app.core.execution.node_executor import NodeExecutor
@@ -463,10 +499,14 @@ def cmd_worker_start(args):
                     break
         except Exception:
             node_write_dir = None
-        inputs = _hydrate_inputs(node_job.input_refs or {}, node_write_dir=node_write_dir)
+        inputs = _hydrate_inputs(
+            node_job.input_refs or {}, node_write_dir=node_write_dir, job_id=str(node_job.job_id)
+        )
         executor = NodeExecutor(node, run_id=node_job.run_id)
         if cancel_check is not None:
             executor.set_cancel_check(cancel_check)
+        if progress_sink is not None:
+            executor.set_progress_sink(str(node_job.node_id or ""), progress_sink)
         executor.setup()
         try:
             if cancel_check is not None and cancel_check():
@@ -565,10 +605,20 @@ def cmd_worker_start(args):
                     raise RuntimeError("cancelled by control plane")
                 jid = job.job_id
                 _lease.start()
-                outputs, output_refs, output_sha256 = _execute_job(
-                    job.model_dump(mode="json"),
-                    cancel_check=lambda: get_job_queue().is_cancelled(jid),
+                from app.core.distributed.worker_progress import JobProgressPublisher
+
+                progress = JobProgressPublisher(
+                    jid,
+                    lambda jid_, evs: get_job_queue().append_events(jid_, evs),
                 )
+                try:
+                    outputs, output_refs, output_sha256 = _execute_job(
+                        job.model_dump(mode="json"),
+                        cancel_check=lambda: get_job_queue().is_cancelled(jid),
+                        progress_sink=progress.sink,
+                    )
+                finally:
+                    progress.close()
                 if get_job_queue().is_cancelled(job.job_id):
                     raise RuntimeError("cancelled by control plane")
                 # Embed outputs only when tiny (debug); control hydrates via refs.
@@ -659,9 +709,28 @@ def cmd_worker_start(args):
         _active: set = set()  # job ids this instance is running right now
         _active_lock = _threading.Lock()
 
+        def _spools() -> list:
+            """Per-worker spool, plus the pre-namespacing shared root if it still has items."""
+            from app.core.distributed.worker_spool import WorkerSpool, default_spool_dir, spool_enabled
+
+            if not spool_enabled():
+                return []
+            out = [WorkerSpool(worker_id=worker_id)]
+            legacy = default_spool_dir()
+            if any((legacy / "items").glob("*.json")):
+                out.append(WorkerSpool(root=legacy))
+            return out
+
         def _active_ids() -> list:
+            """Running jobs + jobs whose complete is spooled (must not be released)."""
             with _active_lock:
-                return sorted(_active)
+                ids = set(_active)
+            for sp in _spools():
+                try:
+                    ids.update(sp.spooled_job_ids())
+                except Exception:
+                    pass
+            return sorted(ids)
 
         def _register() -> None:
             """(Re-)register; lists running jobs so the control plane keeps them."""
@@ -703,7 +772,7 @@ def cmd_worker_start(args):
                 )
 
                 if spool_enabled() and is_network_error(exc):
-                    spool = WorkerSpool()
+                    spool = WorkerSpool(worker_id=worker_id)
                     spool.enqueue_complete(dict(result))
                     print(
                         f"[worker] control unreachable — spooled complete for {job_id}",
@@ -713,14 +782,6 @@ def cmd_worker_start(args):
                 raise
 
         def _flush_spool() -> None:
-            from app.core.distributed.worker_spool import WorkerSpool, spool_enabled
-
-            if not spool_enabled():
-                return
-            spool = WorkerSpool()
-            if not spool.pending():
-                return
-
             _wid = worker_id
 
             def _put_blob(data, *, key=None, worker_id=None):
@@ -740,22 +801,31 @@ def cmd_worker_start(args):
             def _do_events(job_id, events):
                 _http_json("POST", f"/jobs/{job_id}/events", {"events": events})
 
-            stats = spool.flush(
-                put_blob=_put_blob,
-                complete=_do_complete,
-                post_events=_do_events,
-                is_fenced=lambda exc: getattr(exc, "code", None) == 409
-                or ("409" in str(exc) and "lease" in str(exc).lower()),
-            )
-            if stats["flushed"] or stats["dropped"]:
-                print(
-                    f"[worker] spool flush: flushed={stats['flushed']} "
-                    f"dropped={stats['dropped']} remaining={stats['remaining']}",
-                    file=sys.stderr,
+            for spool in _spools():
+                if not spool.pending():
+                    continue
+                stats = spool.flush(
+                    put_blob=_put_blob,
+                    complete=_do_complete,
+                    post_events=_do_events,
+                    is_fenced=lambda exc: getattr(exc, "code", None) == 409
+                    or ("409" in str(exc) and "lease" in str(exc).lower()),
                 )
+                if stats["flushed"] or stats["dropped"]:
+                    print(
+                        f"[worker] spool flush: flushed={stats['flushed']} "
+                        f"dropped={stats['dropped']} remaining={stats['remaining']}",
+                        file=sys.stderr,
+                    )
 
         print(f"[worker] registering with {control_url} as {worker_id}")
         try:
+            # Flush first: spooled completes are fenced by lease_generation and
+            # must land before register can requeue anything.
+            try:
+                _flush_spool()
+            except Exception as flush_exc:
+                print(f"[worker] spool flush before register deferred: {flush_exc}", file=sys.stderr)
             _register()
             _flush_spool()
         except Exception as exc:
@@ -768,12 +838,29 @@ def cmd_worker_start(args):
                 )
             else:
                 raise
+        def _rotate_enrollment() -> None:
+            nonlocal enrollment, token, _ssl_ctx
+            if not enrollment:
+                return
+            try:
+                new = rotate_if_due(enrollment, control_url, ssl_ctx=_ssl_ctx)
+            except Exception as rot_exc:
+                print(f"[worker] credential rotation failed (will retry): {rot_exc}", file=sys.stderr)
+                return
+            if new:
+                enrollment = new
+                token = new["token"]
+                if _ssl_ctx is not None:
+                    _ssl_ctx = _ssl_context()
+                print(f"[worker] rotated credential → {new.get('credential_id')}", file=sys.stderr)
+
         while True:
             try:
                 try:
                     _flush_spool()
                 except Exception as flush_exc:
                     print(f"[worker] spool flush deferred: {flush_exc}", file=sys.stderr)
+                _rotate_enrollment()
                 _heartbeat("idle")
                 try:
                     claimed = _http_json("POST", "/jobs/claim", {"worker_id": worker_id})
@@ -923,11 +1010,21 @@ def cmd_worker_start(args):
                     )
                     _watch.start()
                     _lease.start()
+                    from app.core.distributed.worker_progress import JobProgressPublisher
+
+                    def _post_progress(jid_: str, evs: list) -> None:
+                        _http_json("POST", f"/jobs/{jid_}/events", {"events": evs})
+
+                    progress = JobProgressPublisher(str(job["job_id"]), _post_progress)
                     try:
-                        outputs, output_refs, output_sha256 = _execute_job(
-                            job,
-                            cancel_check=lambda: _cancel_flag.is_set(),
-                        )
+                        try:
+                            outputs, output_refs, output_sha256 = _execute_job(
+                                job,
+                                cancel_check=lambda: _cancel_flag.is_set(),
+                                progress_sink=progress.sink,
+                            )
+                        finally:
+                            progress.close()
                     finally:
                         _watch_stop.set()
                         _lease_stop.set()

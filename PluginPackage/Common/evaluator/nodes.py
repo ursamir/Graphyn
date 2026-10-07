@@ -283,34 +283,22 @@ class EvaluatorNode(Node):
     # ── helpers ───────────────────────────────────────────────────────────────
 
     def _resolve_role_path(self, artifact: ModelArtifact, role: str) -> str:
-        """Local path for *role* from hydrated refs, else legacy metrics/fields."""
-        for ref in getattr(artifact, "refs", None) or []:
-            r = getattr(ref, "role", None)
-            if r != role:
-                continue
-            # After hydrate, path fields are rewritten; prefer metrics hand-off
-            # keys and model_path that materialize_refs_onto set.
-            break
+        """Local path for *role* from hydrated metrics / model_path (refs rewrite these)."""
         metrics = artifact.metrics or {}
         if role == "keras_model":
             for key in ("keras_model_path",):
                 val = str(metrics.get(key) or "").strip()
                 if val and Path(val).exists():
                     return val
-            # refs may point at relative layout already written next to model_path
+            # Only model_path itself (or inside its own dir) — never a sibling
+            # ``model.keras`` in a shared parent, which may belong to another run.
             mp = str(getattr(artifact, "model_path", "") or "")
             if mp:
-                sibling = Path(mp)
-                # saved_model dir sibling model.keras, or model_path itself .keras
-                if sibling.is_file() and sibling.suffix.lower() == ".keras":
-                    return str(sibling)
-                cand = sibling.parent / "model.keras"
-                if cand.is_file():
-                    return str(cand)
-                if sibling.is_dir():
-                    cand2 = sibling / "model.keras"
-                    if cand2.is_file():
-                        return str(cand2)
+                p = Path(mp)
+                if p.is_file() and p.suffix.lower() == ".keras":
+                    return str(p)
+                if p.is_dir() and (p / "model.keras").is_file():
+                    return str(p / "model.keras")
             for ref in getattr(artifact, "refs", None) or []:
                 if getattr(ref, "role", None) == "keras_model":
                     sp = str(getattr(ref, "source_path", "") or "")

@@ -21,7 +21,7 @@ from app.core.runs.run_cleanup import (
 
 
 @pytest.fixture(autouse=True)
-def patch_threads():
+def patch_threads(real_threads):
     """Real threads needed for the concurrent-register test."""
     yield
 

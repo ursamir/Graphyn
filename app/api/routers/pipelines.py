@@ -56,6 +56,17 @@ def _stamp_graph_project(graph, payload: dict):
     return stamp_graph_project(graph, payload)
 
 
+def _require_run_project_access(project_fields: dict) -> None:
+    """Body-scoped RBAC: a user may only run graphs stamped with a project they can run in."""
+    from app.core.trust.identity import current_identity
+    from app.core.trust.rbac import check_project_permission
+
+    project = str((project_fields or {}).get("project") or "").strip() or None
+    msg = check_project_permission(current_identity(), project, "runs.execute")
+    if msg:
+        raise HTTPException(status_code=403, detail=msg)
+
+
 def _is_ir_payload(payload: dict) -> bool:
     """Detect IR JSON format by presence of schema_version (top-level or under graph)."""
     if not isinstance(payload, dict):
@@ -355,6 +366,7 @@ def run_pipeline_stream(request: Request, payload: dict = Body(...)):
     try:
         graph, deprecation_header = _build_graph_from_payload(payload)
         graph, project_fields = _stamp_graph_project(graph, payload)
+        _require_run_project_access(project_fields)
         graph, input_overrides, inputs_meta = _prepare_run_inputs(graph, payload)
         _refuse_invalid_graph(graph)
     except HTTPException:
@@ -539,6 +551,7 @@ def run_pipeline_async(request: Request, payload: dict = Body(...)):
         try:
             graph, deprecation_header = _build_graph_from_payload(payload)
             graph, project_fields = _stamp_graph_project(graph, payload)
+            _require_run_project_access(project_fields)
             graph, input_overrides, inputs_meta = _prepare_run_inputs(graph, payload)
             _refuse_invalid_graph(graph)
         except HTTPException:

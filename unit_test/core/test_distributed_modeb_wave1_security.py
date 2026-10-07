@@ -17,7 +17,7 @@ from app.core.distributed.registry import (
 
 
 @pytest.fixture(autouse=True)
-def patch_threads():
+def patch_threads(real_threads):
     yield
 
 

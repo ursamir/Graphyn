@@ -72,6 +72,15 @@ def parse_pool_max_claimed(raw: str | None = None) -> dict[str, int]:
     return out
 
 
+def job_effective_pools(job: Any) -> set[str]:
+    """Pools a claimed job counts against: ``job.pool`` ∪ ``claim_pools`` (set at claim)."""
+    get = (lambda k: job.get(k)) if isinstance(job, dict) else (lambda k: getattr(job, k, None))
+    pools = {str(p) for p in (get("claim_pools") or []) if p}
+    if get("pool"):
+        pools.add(str(get("pool")))
+    return pools
+
+
 def count_active_claims(
     *,
     worker_id: str | None = None,
@@ -99,12 +108,8 @@ def count_active_claims(
             )
             if claimed_by != worker_id:
                 continue
-        if pool is not None:
-            job_pool = getattr(job, "pool", None) or (
-                job.get("pool") if isinstance(job, dict) else None
-            )
-            if str(job_pool or "") != str(pool):
-                continue
+        if pool is not None and str(pool) not in job_effective_pools(job):
+            continue
         n += 1
     return n
 
@@ -160,14 +165,7 @@ def assert_claim_quota(worker: Any, job: Any | None = None, *, jobs: list[Any] |
         try:
             from app.core.distributed.queue import get_job_queue
 
-            q = get_job_queue()
-            if hasattr(q, "all_jobs"):
-                jobs = q.all_jobs()
-            elif hasattr(q, "list_jobs"):
-                jobs = q.list_jobs()
-            else:
-                # Peek private cache (tests / memory store).
-                jobs = list(getattr(q, "_jobs", {}).values())
+            jobs = get_job_queue().active_jobs()
         except Exception:
             jobs = []
     if worker_at_quota(worker, jobs=jobs):
@@ -203,28 +201,13 @@ def record_usage(
     try:
         from app.core.distributed.registry import get_worker_registry
 
-        reg = get_worker_registry()
-        info = reg.get(worker_id)
-        if info is None:
-            return None
-        updates: dict[str, Any] = {}
-        if claims:
-            updates["usage_claims"] = int(getattr(info, "usage_claims", 0) or 0) + int(claims)
-        if completes:
-            updates["usage_completes"] = int(getattr(info, "usage_completes", 0) or 0) + int(
-                completes
-            )
-        if bytes_in:
-            updates["usage_bytes_in"] = int(getattr(info, "usage_bytes_in", 0) or 0) + int(
-                bytes_in
-            )
-        if bytes_out:
-            updates["usage_bytes_out"] = int(getattr(info, "usage_bytes_out", 0) or 0) + int(
-                bytes_out
-            )
-        if not updates:
-            return info
-        return reg.patch(worker_id, **updates)
+        return get_worker_registry().increment_usage(
+            worker_id,
+            usage_claims=claims,
+            usage_completes=completes,
+            usage_bytes_in=bytes_in,
+            usage_bytes_out=bytes_out,
+        )
     except Exception as exc:
         log.warning("record_usage(%s) failed: %s", worker_id, exc)
         return None

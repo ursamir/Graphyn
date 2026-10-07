@@ -5,6 +5,15 @@
 import type { AppView } from '../store/appStore'
 import type { RunPanel } from './paths'
 
+/** `decodeURIComponent` that returns the raw segment on malformed `%` escapes instead of throwing. */
+export function safeDecode(seg: string): string {
+  try {
+    return decodeURIComponent(seg)
+  } catch {
+    return seg
+  }
+}
+
 export type ParsedPath = {
   view: AppView
   workspaceId?: string
@@ -68,15 +77,15 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
 
   if (a === 'workspaces') {
     if (!b) return { view: 'projects' }
-    const W = decodeURIComponent(b)
+    const W = safeDecode(b)
     if (!c) return { view: 'projects', workspaceId: W }
     if (c === 'editor') {
       if (d === 'pipelines' && e) {
         return {
           view: 'builder',
           workspaceId: W,
-          editorPipeline: decodeURIComponent(e),
-          editorEnv: parts[5] ? decodeURIComponent(parts[5]) : undefined,
+          editorPipeline: safeDecode(e),
+          editorEnv: parts[5] ? safeDecode(parts[5]) : undefined,
         }
       }
       return { view: 'builder', workspaceId: W }
@@ -86,12 +95,12 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
       if (d === 'compare') {
         const ids = (qs.get('ids') || '')
           .split(',')
-          .map((x) => decodeURIComponent(x.trim()))
+          .map((x) => safeDecode(x.trim()))
           .filter(Boolean)
         return { view: 'experiments', workspaceId: W, runsTab: 'compare', compareIds: ids }
       }
       if (d) {
-        const runId = decodeURIComponent(d)
+        const runId = safeDecode(d)
         const panel = e && PANEL_SET.has(e as RunPanel) ? (e as RunPanel) : undefined
         return { view: 'runs', workspaceId: W, runId, panel, runsTab: 'history' }
       }
@@ -101,7 +110,7 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
       return {
         view: 'models' as AppView,
         workspaceId: W,
-        modelName: d ? decodeURIComponent(d) : undefined,
+        modelName: d ? safeDecode(d) : undefined,
       }
     }
     if (c === 'datasets') return { view: 'data', workspaceId: W }
@@ -122,7 +131,7 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
 
   if (a === 'templates') return { view: 'templates' }
   if (a === 'agent' && b === 'inbox') {
-    return { view: 'proposals', proposalId: c ? decodeURIComponent(c) : undefined }
+    return { view: 'proposals', proposalId: c ? safeDecode(c) : undefined }
   }
   if (a === 'library') {
     // Datasets library catalog (shared Inputs/Outputs) may remain as secondary CTA.
@@ -288,7 +297,7 @@ export function resolveRouteAlias(pathname: string, workspaceId?: string | null)
 
   if (parts[0] === 'workspaces') {
     if (raw.length < 3) return null
-    const id = decodeURIComponent(raw[1])
+    const id = safeDecode(raw[1])
     const seg = parts[2]
     if (REAL_WORKSPACE_SEGMENTS.has(seg)) return null
     if (seg in WORKSPACE_ALIAS) {

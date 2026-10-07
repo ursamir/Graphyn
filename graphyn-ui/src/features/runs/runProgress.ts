@@ -145,6 +145,30 @@ export function finishedNodeIds(rows: unknown[]): Set<string> {
 export type CollapsedRow<T> =
   | { kind: 'row'; row: T }
   | { kind: 'progress'; row: T; progress: NodeProgress; history: NodeProgress[]; count: number }
+  | { kind: 'waiting'; row: T; text: string; count: number }
+
+/** Mode B control-plane heartbeat while a remote job is claimed / running. */
+export function isWorkerWaitingLine(text: string): boolean {
+  return /^Waiting for worker on node\b/i.test(String(text || '').trim())
+}
+
+/** Collapse key: same node + job prefix share one live Waiting line. */
+export function waitingLineKey(text: string): string {
+  const t = String(text || '').trim()
+  const m = t.match(/^Waiting for worker on node\s+(\S+)(?:\s+\(job=([^)]+)\))?/i)
+  return m ? `wait:${m[1]}:${(m[2] || '').replace(/…$/, '')}` : `wait:${t}`
+}
+
+/** Growing ellipsis for a collapsed Waiting line: `.` → `..` → `...` → `....`. */
+export function waitingDots(count: number): string {
+  const n = ((Math.max(1, count) - 1) % 4) + 1
+  return '.'.repeat(n)
+}
+
+export function formatWaitingLine(text: string, count: number): string {
+  const base = String(text || '').replace(/\s*\.+\s*$/, '').trimEnd()
+  return `${base} ${waitingDots(count)}`
+}
 
 /**
  * Pretty-view collapse: every node's progress events become ONE entry (at the
@@ -167,6 +191,38 @@ export function collapseProgressRows<T>(rows: T[], rawOf: (row: T) => unknown): 
     } else {
       const prev = out[at] as Extract<CollapsedRow<T>, { kind: 'progress' }>
       out[at] = { kind: 'progress', row, progress: p, history: [...prev.history, p], count: prev.count + 1 }
+    }
+  }
+  return out
+}
+
+/**
+ * Collapse Mode B "Waiting for worker…" heartbeats (even when interleaved with
+ * progress) into one live line per node/job — Pretty view only.
+ */
+export function collapseWaitingRows<T>(
+  rows: CollapsedRow<T>[],
+  textOf: (row: T) => string,
+): CollapsedRow<T>[] {
+  const out: CollapsedRow<T>[] = []
+  const slot = new Map<string, number>()
+  for (const entry of rows) {
+    if (entry.kind !== 'row') {
+      out.push(entry)
+      continue
+    }
+    const text = textOf(entry.row)
+    if (!isWorkerWaitingLine(text)) {
+      out.push(entry)
+      continue
+    }
+    const key = waitingLineKey(text)
+    const at = slot.get(key)
+    if (at == null) {
+      slot.set(key, out.length)
+      out.push({ kind: 'waiting', row: entry.row, text, count: 1 })
+    } else {
+      out[at] = { kind: 'waiting', row: entry.row, text, count: (out[at] as Extract<CollapsedRow<T>, { kind: 'waiting' }>).count + 1 }
     }
   }
   return out

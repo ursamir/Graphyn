@@ -167,9 +167,17 @@ export default function TemplatesView() {
   /* Tab is URL-addressable (?tab=marketplace) so the Marketplace catalog can be
      linked, bookmarked and restored by the browser back button. */
   const [filter, setFilterState] = React.useState<TabFilter>(tabFromUrl)
+  const mountedRef = React.useRef(true)
+  React.useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
   const setFilter = React.useCallback((next: TabFilter) => {
     setFilterState(next)
-    replacePathSearch({ tab: next === 'all' ? undefined : next })
+    // After an await the user may have navigated away — never rewrite another view's query.
+    if (mountedRef.current) replacePathSearch({ tab: next === 'all' ? undefined : next })
   }, [])
   React.useEffect(
     () =>
@@ -351,7 +359,7 @@ export default function TemplatesView() {
       { query: { version } },
     )
     if (!data.graph) throw new Error('Template has no graph payload')
-    const stamped = stampProjectOnGraph(data.graph, project)
+    const stamped = stampProjectOnGraph(data.graph, project, undefined, { legacyIngest: true })
     setActiveProject(project)
     setBuilderDataset({ project })
     // Opening a template must not create/overwrite a saved workspace pipeline —

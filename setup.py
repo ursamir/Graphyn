@@ -29,6 +29,8 @@ _INSTALL_REQUIRES = [
     # Platform HTTP + plugin version math (direct imports)
     "httpx>=0.27.0,<1",
     "packaging>=23.0",
+    # AES-GCM blob encrypt-at-rest (app/core/distributed/blob_crypto.py)
+    "cryptography>=41",
     # Audio / numeric stack used by domain + first-party plugins on the host
     # (numpy lower bound kept for 3.10; upper open so 3.13 wheels resolve)
     "numpy>=1.26.4,<3",

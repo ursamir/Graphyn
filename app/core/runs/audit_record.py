@@ -1466,6 +1466,58 @@ def _run_input_fingerprints(meta: dict[str, Any]) -> dict[str, Any] | None:
     return row or None
 
 
+def _accountability(run_dir: Path, run_id: str, meta: dict[str, Any]) -> dict[str, Any]:
+    """built_by (published pipeline version) / run_by / approved_by / executed_by."""
+    ref = meta.get("pipeline_ref") if isinstance(meta.get("pipeline_ref"), dict) else None
+    built_by = None
+    if ref:
+        built_by = {k: ref.get(k) for k in ("project", "name", "env", "version", "label", "match")}
+        built_by.update(_published_by(ref))
+    approvals: list[dict[str, Any]] = []
+    try:
+        from app.core.runs.gates import list_gates
+
+        for g in list_gates(run_dir, run_id):
+            d = g.get("decision")
+            if d or g.get("status") in ("approved", "rejected", "unattended", "expired"):
+                approvals.append({"node_id": g.get("node_id"), "gate_id": g.get("gate_id"), "status": g.get("status"),
+                                  "approver_roles": g.get("approver_roles"), **(d or {})})
+    except Exception:
+        log.debug("gate lineage failed", exc_info=True)
+    executed = meta.get("distributed_node_lineage") if isinstance(meta.get("distributed_node_lineage"), dict) else {}
+    workers = meta.get("distributed_node_workers") if isinstance(meta.get("distributed_node_workers"), dict) else {}
+    executed_by = {str(n): dict(executed.get(n) or {"worker_id": w}) for n, w in workers.items()}
+    for n, row in executed.items():
+        executed_by.setdefault(str(n), dict(row))
+    return {
+        "built_by": built_by,
+        "run_by": {
+            "actor": str(meta.get("actor") or "system"),
+            "actor_verified": bool(meta.get("actor_verified")),
+            "principal": meta.get("principal") if isinstance(meta.get("principal"), dict) else None,
+            "trigger": str(meta.get("trigger") or "api"),
+        },
+        "approved_by": approvals,
+        "executed_by": executed_by,
+    }
+
+
+def _published_by(ref: dict[str, Any]) -> dict[str, Any]:
+    if not ref.get("version") or not ref.get("project") or not ref.get("name"):
+        return {}
+    pdir = _project_pipelines_dir(str(ref["project"]))
+    if pdir is None:
+        return {}
+    try:
+        from app.core.pipelines.pipeline_environments import versions_dir
+
+        data = _read_json(versions_dir(pdir, str(ref["name"])) / f"{ref['version']}.graph.json")
+    except Exception:
+        return {}
+    pub = data.get("_publish") if isinstance(data, dict) and isinstance(data.get("_publish"), dict) else {}
+    return {"published_by": pub.get("actor"), "published_at": pub.get("published_at")} if pub else {}
+
+
 def build_record(
     run_dir: Path,
     *,
@@ -1578,6 +1630,8 @@ def build_record(
         "error_type": meta.get("error_type") if status == "failed" else None,
         "failed_node_id": meta.get("failed_node_id") if status == "failed" else None,
         "node_count": meta.get("num_nodes"),
+        # Accountability: who built / ran / approved / executed this run.
+        "accountability": _accountability(run_dir, run_id, meta),
     }
     return record
 

@@ -48,8 +48,9 @@ def test_parse_token_map_formats(tmp_path, monkeypatch):
 
 def test_me_unmapped_and_mapped(api_client, aud_env, monkeypatch):
     me = _get(api_client, "/api/v1/me")
-    assert me == {"actor": "unidentified", "actor_verified": False, "token_mapped": False,
-                  "claimed_actor": None, "auth_configured": False, "token_map_configured": False}
+    assert me.items() >= {"actor": "unidentified", "actor_verified": False, "token_mapped": False,
+                          "claimed_actor": None, "auth_configured": False,
+                          "token_map_configured": False, "auth_method": "none"}.items()
     assert _get(api_client, "/api/v1/me", headers={"X-Actor": "eve"})["actor"] == "eve"
 
     monkeypatch.setenv("GRAPHYN_API_TOKEN", "single")

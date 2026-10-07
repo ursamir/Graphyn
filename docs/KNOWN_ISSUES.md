@@ -6,6 +6,31 @@
 
 ## Resolved recently
 
+### (resolved 2026-10-07) REVIEW-F10-MODEB — F10 + Mode B enterprise + ArtifactRef A+C review findings
+
+Found in a deep review of commits `81decad` (F10) and `d4b87c7` (Mode B enterprise, ArtifactRef A+C, Editor fixes). Regression tests: `unit_test/core/test_distributed_review_fixes.py`.
+
+- **Worker identity:** worker tokens are confined to the worker protocol allowlist (`worker_scope_allows`) on the REST API, and MCP rejects them (`forbidden`). Unbound worker tokens fail closed unless an mTLS id is present or `GRAPHYN_WORKER_UNBOUND_TOKENS=1`. The `X-Graphyn-Mtls-Worker-Id` test header never counts as verified and is ignored when `GRAPHYN_ENV` is production, prod or staging. With mTLS enabled, worker mutations without a client certificate get 403.
+- **Register:** self-registration can no longer set admin fields (`allowed_plugins`, `plugin_hashes`, `trusted`, `max_claimed`, `usage_*`). A new worker is trusted only when trust is not required. `plugin_hashes` is hidden from non-operators.
+- **Blobs:** a worker may GET only its job's input blobs, explicit `blob_grants`, or its own output keys. Signing uses only `GRAPHYN_BLOB_SIGNING_KEY` (no API-token fallback). Signed URL TTL is capped at 3600 s. Workers refuse absolute blob URLs outside the control origin, so the bearer token is never sent to a foreign host.
+- **Jobs:** job events and `GET /jobs/{id}` are restricted to the claiming worker, and events return 409 unless the job is claimed or running. Events carry a monotonic `_seq`, and the control plane deduplicates by `_seq` after the event cap.
+- **Quotas:** quota checks use the effective pool (`job.pool` plus `claim_pools`), and usage counters update atomically (`registry.increment_usage`).
+- **Validation:** VAL-PLACE findings now also apply to remote-only node types.
+- **Worker spool:** each worker gets its own spool directory, writes are atomic, spooled job ids stay in `active_job_ids`, and the spool is flushed before register.
+- **mTLS serving:** `mtls_serve` forces `h11` with SSL. A worker refuses an `http://` control URL while mTLS is on. The new overlay is `docker-compose.modeb-mtls.yml`.
+- **Blob encryption:** the GBE2 envelope is AES-256-GCM with an HKDF-derived key and a key id; rotation uses `GRAPHYN_BLOB_ENCRYPTION_OLD_KEYS`. GBE1 blobs are still readable.
+- **ArtifactRef:** directory packing is deterministic and content hashes cover the real file bytes. Hydration is digest-checked and extracts to a temp dir before `os.replace`. Empty files and hardlinks are handled, and unsafe tar member names are rejected.
+  - Model, deployment and TFLite serializers write v2 manifests with a `path_map`, so roles round-trip.
+  - `run_outputs` and `run_summary` read the role manifests. Every interface calls `register_builtin_serializers()`.
+  - Removed the stale sibling `model.keras` probes and the deployment fallback to the labels dir. Added the missing `csv_table` ArtifactRef import.
+- **Editor (UI):** the last-run poller starts only after a stream handoff, reports followed runs, stops on `missing` and backs off on `unknown`. A stream error triggers one reconcile.
+  - `openPipelineInEditor` is workspace-scoped.
+  - Run-time stamping no longer rewrites a user-picked legacy `workspace/artifacts/<slug>/dataset/...` ingest path; only template loads migrate it, and the inspector flags it.
+- **Datasets (UI):** "Load more" is keyed to the current selection, and the "All" split chip is always reachable with a count from the unfiltered listing. The "Also in the library" panel can be collapsed.
+  - Templates no longer rewrite another view's URL after an await.
+  - Malformed `%` escapes in a URL no longer throw.
+- **Workers (UI):** the ACL form validates `max_claimed`, explains a 403, does not invent a Trusted badge when `trusted` is not reported, and the drawer follows polling.
+
 ### (resolved 2026-10-01) UI-REVIEW-BACKEND — orphan schedules, run-output attribution, cancel events
 
 Found in a live console review. These are source fixes; a running API container needs a rebuild to pick them up.
@@ -204,6 +229,10 @@ From [Audit runtime failures](ebaf6289-81f1-4bde-bd4a-b03a942034ff). Durable `ca
 ### TEST-SUITE-1 — Full pytest suite residuals (2026-09-16)
 
 **Progress:** The 2026-09 correctness pass landed. The suite moved from 92 failed and 49 errors toward green. Remaining failures are mostly ML model-download, optional-dependency smoke tests, and environment-only items. The CI gate is the full `unit_test/` suite (`scripts/ci_smoke.sh`, Python 3.12).
+**Known residuals (2026-10-07, also failing before the F10 review fixes):**
+- `unit_test/api/test_backend_review_round2.py::test_outputs_truncate_in_natural_order` , `unit_test/api/test_ui_review_backend_fixes.py::test_outputs_with_meta_and_node_paging` and `unit_test/api/test_outputs_inventory.py::test_listing_uses_artifact_inventory_not_labels_csv` — fixtures predate the index-only run-output listing (they write files without an ArtifactStore inventory).
+- `unit_test/core/plugins/test_dep_isolation.py::test_isolated_process_uses_worker_not_host` — environment-dependent isolated-venv probe.
+- `unit_test/plugins/*` (mlops / proposed nodes) and `test_example_templates` need installed plugins; skip under `GRAPHYN_SKIP_PLUGIN_LOAD=1`.
 
 ### DEEP-REVIEW-P0 — Verification loop + critical defects (2026-09-16) — **CLOSED**
 
@@ -268,6 +297,13 @@ From [Audit runtime failures](ebaf6289-81f1-4bde-bd4a-b03a942034ff). Durable `ca
 **Files:** `app/core/distributed/models.py` (`WorkerInfo`, `NodeJob`, `JobResult` use `extra="forbid"`)  
 **Detail:** New fields (`NodeJob.finished_at`, `NodeJob.result_consumed_at`, `JobResult.output_sha256`, heartbeat `active_job_ids`) are rejected by older workers/control planes with a validation error.  
 **Workaround:** Upgrade the control plane and every worker together (same commit). Drain workers before upgrading.
+**2026-10-07:** `NodeJob.blob_grants` / `NodeJob.claim_pools` and the GBE2 blob envelope add to the skew: upgrade together. GBE1 blobs stay readable; GBE2 needs the new code to decrypt.
+
+### MODEB-SPOOL-PARTIAL-1 — Worker spool replays only `complete`
+
+**Files:** `app/core/distributed/worker_spool.py`, `app/cli/cmd_worker.py`
+**Detail:** `WorkerSpool.enqueue_blob` / `enqueue_events` exist but the worker only spools `complete` results during a control-plane outage. Output blobs are uploaded before `complete`, so a blob upload failure still fails the job, and job events emitted while disconnected are dropped.
+**Workaround:** Keep control-plane outages shorter than the lease TTL; the job is reclaimed and rerun otherwise.
 
 ### PLUGIN-GIT-REDIRECT-1 — `git clone` plugin installs no longer follow HTTP redirects
 

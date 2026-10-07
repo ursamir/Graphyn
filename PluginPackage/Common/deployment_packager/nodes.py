@@ -817,8 +817,6 @@ def _resolve_deployment_path(artifact: DeploymentArtifact) -> str:
     ap = str(getattr(artifact, "artifact_path", "") or "").strip()
     if ap and Path(ap).exists():
         return ap
-    meta = getattr(artifact, "metadata", None) or {}
-    lp = str(meta.get("labels_path") or "").strip()
     for ref in getattr(artifact, "refs", None) or []:
         role = getattr(ref, "role", None)
         if role not in {"deployment_bundle", "tflite"}:
@@ -826,13 +824,8 @@ def _resolve_deployment_path(artifact: DeploymentArtifact) -> str:
         sp = str(getattr(ref, "source_path", "") or "").strip()
         if sp and Path(sp).exists():
             return sp
-    if lp:
-        sibling_tflite = Path(lp).parent / "model.tflite"
-        if sibling_tflite.is_file():
-            return str(sibling_tflite)
-        parent = Path(lp).parent
-        if parent.is_dir() and any(parent.iterdir()):
-            return str(parent)
+    # No guessing from labels_path's directory: in a shared materialize root it
+    # can hold another run's model / unrelated files.
     return ap
 
 

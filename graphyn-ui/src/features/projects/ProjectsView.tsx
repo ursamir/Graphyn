@@ -33,6 +33,7 @@ import {
   StatusBadge,
 } from '../../components/ui'
 import { paths } from '../../routes/paths'
+import { safeDecode } from '../../routes/parsePath'
 import { goView, guardedNavigatePath, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 import { formatRelativeTime, shortRunId } from '../../lib/format'
 import { runDisplayName } from '../../lib/runDisplay'
@@ -141,7 +142,7 @@ function parseProjectsLocation(): { project?: string } {
   const parts = pathname.replace(/\/+$/, '').split('/').filter(Boolean)
   let project: string | undefined
   if (parts[0] === 'workspaces' && parts[1]) {
-    project = decodeURIComponent(parts[1])
+    project = safeDecode(parts[1])
   } else {
     project = (params.get('project') || '').trim() || undefined
   }

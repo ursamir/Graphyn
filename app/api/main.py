@@ -6,7 +6,7 @@ Responsibility:   FastAPI application factory. Wires auth, CORS, routers,
 Owns:             App instance, auth dependency (_auth_dep — accepts
                   GRAPHYN_API_TOKEN or any GRAPHYN_API_TOKENS mapped token),
                   request identity middleware (token → audit actor ContextVar),
-                  CORS middleware, GZipMiddleware (large JSON), router inclusion,
+                  CORS middleware, SelectiveGZipMiddleware (large JSON only), router inclusion,
                   static file mounts.
 Public Surface:   app (FastAPI instance) — imported by uvicorn entry point.
 Must NOT:         Contain business endpoint logic — /api/v1 routes live in
@@ -31,6 +31,7 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -39,7 +40,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.gzip import GZipMiddleware
+from app.api.gzip_selective import SelectiveGZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
@@ -63,6 +64,7 @@ from app.api.routers.proposals import router as proposals_router
 from app.api.routers.models import router as models_router
 from app.api.routers.ship import router as ship_router
 from app.api.routers.identity import router as identity_router
+from app.api.routers.auth import router as auth_router, public_router as auth_public_router
 from app.api.routers.hooks import public_router as hooks_public_router
 from app.api.routers.hooks import router as hooks_router
 from app.api.routers.gates import router as gates_router
@@ -85,18 +87,8 @@ print("graphyn-api: process starting", flush=True, file=sys.stderr)
 # Register the AudioSampleHandler so that artifact_store, pipeline_cache, and
 # checkpoint can serialize/deserialize AudioSample objects without importing
 # domain models themselves (ARCH-2 fix).
-from app.models.audio_artifact_serializer import register_audio_serializer as _reg_audio
-_reg_audio()
-from app.models.dataset_artifact_serializer import register_dataset_serializer as _reg_dataset
-_reg_dataset()
-from app.models.feature_array_serializer import register_feature_array_serializer as _reg_features
-_reg_features()
-from app.core.artifacts.file_tree import register_file_tree_serializer as _reg_file_tree
-from app.models.model_artifact_serializer import register_model_artifact_serializer as _reg_model
-from app.models.deployment_artifact_serializer import register_deployment_artifact_serializer as _reg_deploy
-_reg_file_tree()
-_reg_model()
-_reg_deploy()
+from app.models.serializers import register_builtin_serializers as _reg_serializers
+_reg_serializers()
 
 from app.core.nodes import initialize_registry as _init_registry
 
@@ -187,6 +179,8 @@ _PUBLIC_API_PATHS = frozenset(
         "/api/v1/system/health",
         "/api/v1/system/readiness",
         "/api/v1/system/auth-status",
+        "/api/v1/auth/login",
+        "/api/v1/workers/join",
     }
 )
 
@@ -263,6 +257,37 @@ from app.api.errors import get_or_set_request_id, register_exception_handlers
 register_exception_handlers(app)
 
 
+def _mtls_test_header_enabled() -> bool:
+    if (os.environ.get("GRAPHYN_ENV") or "").strip().lower() in ("production", "prod", "staging"):
+        return False
+    return (os.environ.get("GRAPHYN_MTLS_TEST_HEADER") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+_WORKER_MUTATION_RE = re.compile(
+    r"^/api/v1/(workers/register|workers/[^/]+/heartbeat|jobs/claim|jobs/[^/]+/(complete|events))/?$"
+)
+
+
+def _is_worker_protocol_mutation(method: str, path: str) -> bool:
+    if method.upper() == "POST" and path.rstrip("/") == "/api/v1/artifacts/blob":
+        return True
+    return method.upper() == "POST" and bool(_WORKER_MUTATION_RE.match(path))
+
+
+def _worker_revoked(ident: dict) -> bool:
+    try:
+        from app.core.trust.users import get_user_store
+
+        store = get_user_store()
+        return any(
+            store.worker_revoked(w)
+            for w in {ident.get("worker_id"), ident.get("mtls_worker_id")}
+            if w
+        )
+    except Exception:
+        return False
+
+
 @app.middleware("http")
 async def _identity_middleware(request: Request, call_next):
     """Bind the caller's token-derived (+ optional mTLS) identity for audit.
@@ -276,55 +301,75 @@ async def _identity_middleware(request: Request, call_next):
     is refused (403). Cert-only callers are treated as that worker.
     """
     from app.api.actor import resolve_identity
-    from app.core.trust.identity import reset_request_identity, set_request_identity
+    from app.core.distributed.mtls import mtls_enabled, peercert_from_scope, worker_id_from_peercert
+    from app.core.trust.identity import (
+        reset_request_identity,
+        set_request_identity,
+        worker_scope_allows,
+    )
 
     try:
         ident = resolve_identity(request)
     except Exception:
         ident = None
-    try:
-        from app.core.distributed.mtls import (
-            mtls_enabled,
-            peercert_from_scope,
-            worker_id_from_peercert,
+    path = request.url.path
+    method = request.method
+    if mtls_enabled():
+        cert = peercert_from_scope(getattr(request, "scope", None))
+        wid = worker_id_from_peercert(cert)
+        from_test_header = False
+        if not wid and _mtls_test_header_enabled():
+            # Lab/TestClient only — refused in production/staging, never "verified".
+            wid = (request.headers.get("x-graphyn-mtls-worker-id") or "").strip() or None
+            from_test_header = bool(wid)
+        if wid:
+            ident = dict(ident or {})
+            token_wid = (ident.get("worker_id") or "").strip() or None
+            if ident.get("kind") == "worker" and token_wid and token_wid != wid:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "mTLS cert worker_id does not match token binding"},
+                )
+            mapped_operator = bool(ident.get("token_mapped")) and ident.get("kind") != "worker"
+            ident["mtls_worker_id"] = wid
+            ident["mtls_verified"] = not from_test_header
+            # A named operator token keeps operator rights even over the mTLS
+            # port; only unmapped / worker callers become the cert's worker.
+            if not token_wid and not mapped_operator:
+                ident["kind"] = "worker"
+                ident["worker_id"] = wid
+                if not ident.get("actor") or ident.get("actor") == "unidentified":
+                    ident["actor"] = f"mtls:{wid}"
+                ident["actor_verified"] = not from_test_header
+                ident["token_mapped"] = True
+        elif _is_worker_protocol_mutation(method, path):
+            # mTLS on but the peer presented no usable cert identity: fail closed.
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "mTLS is enabled: worker routes require a client certificate"},
+            )
+    is_worker_ident = bool(ident) and str(ident.get("kind") or "") == "worker"
+    if is_worker_ident and _worker_revoked(ident):
+        return JSONResponse(status_code=403, content={"detail": "Worker has been revoked"})
+    if path.startswith("/api/") and is_worker_ident and not worker_scope_allows(method, path):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Worker-scoped credentials may only call the job / blob protocol routes"},
         )
+    if path.startswith("/api/") and not _is_public_api_path(path):
+        from app.core.trust.rbac import authorize
 
-        if mtls_enabled():
-            cert = peercert_from_scope(getattr(request, "scope", None))
-            wid = worker_id_from_peercert(cert)
-            if not wid and (os.environ.get("GRAPHYN_MTLS_TEST_HEADER") or "").strip() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            ):
-                # Lab/TestClient only — never enable in production compose.
-                wid = (request.headers.get("x-graphyn-mtls-worker-id") or "").strip() or None
-            if wid:
-                ident = dict(ident or {})
-                token_wid = (ident.get("worker_id") or "").strip() or None
-                if (
-                    ident.get("kind") == "worker"
-                    and token_wid
-                    and token_wid != wid
-                ):
-                    return JSONResponse(
-                        status_code=403,
-                        content={
-                            "detail": "mTLS cert worker_id does not match token binding",
-                        },
-                    )
-                ident["mtls_worker_id"] = wid
-                ident["mtls_verified"] = True
-                if not token_wid:
-                    ident["kind"] = "worker"
-                    ident["worker_id"] = wid
-                    if not ident.get("actor") or ident.get("actor") == "unidentified":
-                        ident["actor"] = f"mtls:{wid}"
-                    ident["actor_verified"] = True
-                    ident["token_mapped"] = True
-    except Exception as exc:
-        _logger.debug("mTLS identity merge skipped: %s", exc)
+        denied = authorize(ident, method, path, request.url.query or "")
+        if denied is not None:
+            status, msg = denied
+            from app.api.errors import error_body, get_or_set_request_id
+
+            rid = get_or_set_request_id(request)
+            return JSONResponse(
+                status_code=status,
+                content=error_body(code="forbidden", message=msg, request_id=rid, status_code=status, legacy_detail=msg),
+                headers={"X-Request-Id": rid},
+            )
     token = set_request_identity(ident)
     try:
         return await call_next(request)
@@ -356,7 +401,8 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Request-Id", "Accept", "X-Actor", "Idempotency-Key", "X-Graphyn-Worker-Id"],
 )
 # Compress large JSON (Outputs listings, run journals). Clients send Accept-Encoding: gzip.
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+# Selective: NDJSON run streams, zips and media are passed through untouched.
+app.add_middleware(SelectiveGZipMiddleware, minimum_size=1000, compresslevel=6)
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 
@@ -381,11 +427,13 @@ app.include_router(proposals_router,   prefix="/api/v1", dependencies=_deps)
 app.include_router(models_router,      prefix="/api/v1", dependencies=_deps)
 app.include_router(ship_router,        prefix="/api/v1", dependencies=_deps)
 app.include_router(identity_router,    prefix="/api/v1", dependencies=_deps)
+app.include_router(auth_router,        prefix="/api/v1", dependencies=_deps)
 app.include_router(hooks_router,       prefix="/api/v1", dependencies=_deps)
 app.include_router(gates_router,       prefix="/api/v1", dependencies=_deps)
 # Inbound webhooks authenticate themselves (HMAC signature or bearer token —
 # see app/api/routers/hooks.py); they must NOT carry the global bearer dep.
 app.include_router(hooks_public_router, prefix="/api/v1")
+app.include_router(auth_public_router, prefix="/api/v1")
 
 
 @app.get("/")

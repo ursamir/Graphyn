@@ -4,7 +4,8 @@ Bounded Context:  BC5 — Execution Runtime (Mode B WAVE-2)
 Responsibility:   Lab-grade mutual TLS between workers and the control plane:
                   CA/cert generation, SSL contexts, peercert → worker_id mapping,
                   uvicorn peercert scope patch, env knobs.
-Owns:             mtls_enabled(), generate_modeb_mtls_certs(), ssl contexts,
+Owns:             mtls_enabled(), generate_modeb_mtls_certs(), sign_worker_csr()
+                  (join enrollment), ssl contexts,
                   worker_id_from_peercert(), install_uvicorn_peercert_patch(),
                   uvicorn_ssl_kwargs(), client_ssl_context().
 Public Surface:   Functions above + MTLS env helpers.
@@ -31,6 +32,8 @@ _ENV_KEY = "GRAPHYN_MTLS_KEY"
 _ENV_CLIENT_CERT = "GRAPHYN_MTLS_CLIENT_CERT"
 _ENV_CLIENT_KEY = "GRAPHYN_MTLS_CLIENT_KEY"
 _ENV_SERVER_NAME = "GRAPHYN_MTLS_SERVER_NAME"
+_ENV_CA_KEY = "GRAPHYN_MTLS_CA_KEY"
+_MAX_CSR_BYTES = 16 * 1024
 
 _WORKER_URI_RE = re.compile(
     r"(?:urn:graphyn:worker:|spiffe://graphyn/worker/)([A-Za-z0-9_.-]+)",
@@ -59,6 +62,89 @@ def mtls_enabled() -> bool:
 def mtls_ca_path() -> str | None:
     p = (os.environ.get(_ENV_CA) or "").strip()
     return p or None
+
+
+def mtls_ca_key_path() -> str | None:
+    """CA private key used by the control plane to sign joined workers' CSRs."""
+    p = (os.environ.get(_ENV_CA_KEY) or "").strip()
+    return p or None
+
+
+def csr_signing_available() -> bool:
+    ca, key = mtls_ca_path(), mtls_ca_key_path()
+    return bool(ca and key and Path(ca).is_file() and Path(key).is_file())
+
+
+def sign_worker_csr(csr_pem: str, worker_id: str, *, days: int = 30) -> dict[str, Any]:
+    """Sign a worker CSR with the control CA, forcing the control-assigned identity.
+
+    The CSR only contributes its public key: subject is replaced with
+    ``CN=worker_id`` and SAN with ``urn:graphyn:worker:{worker_id}`` so a
+    joining host cannot pick another worker's identity. Returns
+    ``{cert_pem, fingerprint_sha256, not_after, serial}``.
+    """
+    import secrets as _secrets
+    import tempfile
+    import time as _time
+    from datetime import datetime, timezone
+
+    if not re.match(r"^[A-Za-z0-9_.-]+$", worker_id or ""):
+        raise ValueError(f"invalid worker_id for cert: {worker_id!r}")
+    raw = str(csr_pem or "").strip()
+    if not raw.startswith("-----BEGIN CERTIFICATE REQUEST-----") or len(raw) > _MAX_CSR_BYTES:
+        raise ValueError("csr_pem must be a PEM certificate request")
+    if not csr_signing_available():
+        raise RuntimeError("CSR signing needs GRAPHYN_MTLS_CA_CERT and GRAPHYN_MTLS_CA_KEY on the control plane")
+    days = max(1, min(int(days), 825))
+    serial = "0x" + _secrets.token_hex(16)
+    with tempfile.TemporaryDirectory(prefix="graphyn-csr-") as td:
+        csr_path = Path(td) / "w.csr"
+        ext_path = Path(td) / "w.ext"
+        out_path = Path(td) / "w.pem"
+        csr_path.write_text(raw + "\n", encoding="utf-8")
+        ext_path.write_text(
+            "basicConstraints=CA:FALSE\n"
+            "keyUsage=digitalSignature,keyEncipherment\n"
+            "extendedKeyUsage=clientAuth\n"
+            f"subjectAltName=URI:urn:graphyn:worker:{worker_id},DNS:{worker_id}\n",
+            encoding="utf-8",
+        )
+        proc = _run_openssl(["req", "-in", str(csr_path), "-noout", "-verify"], check=False)
+        if proc.returncode != 0:
+            raise ValueError("CSR signature does not verify")
+        _run_openssl(
+            [
+                "x509", "-req", "-in", str(csr_path),
+                "-CA", str(mtls_ca_path()), "-CAkey", str(mtls_ca_key_path()),
+                "-set_serial", serial, "-days", str(days), "-sha256",
+                "-extfile", str(ext_path), "-subj", f"/O=Graphyn/CN={worker_id}",
+                "-out", str(out_path),
+            ]
+        )
+        cert_pem = out_path.read_text(encoding="utf-8")
+    proc = subprocess.run(
+        ["openssl", "x509", "-noout", "-fingerprint", "-sha256", "-enddate"],
+        input=cert_pem, capture_output=True, text=True, check=True,
+    )
+    fp = not_after = None
+    for line in (proc.stdout or "").splitlines():
+        if "Fingerprint=" in line:
+            fp = line.split("=", 1)[1].replace(":", "").strip().lower()
+        elif line.startswith("notAfter="):
+            try:
+                stamp = " ".join(line.split("=", 1)[1].split())  # "Oct 8 09:53:27 2026 GMT"
+                not_after = datetime.strptime(stamp, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc).timestamp()
+            except ValueError:
+                not_after = _time.time() + days * 86400
+    return {"cert_pem": cert_pem, "fingerprint_sha256": fp, "not_after": not_after, "serial": serial}
+
+
+def ca_cert_pem() -> str | None:
+    ca = mtls_ca_path()
+    try:
+        return Path(ca).read_text(encoding="utf-8") if ca else None
+    except OSError:
+        return None
 
 
 def mtls_server_cert_path() -> str | None:
@@ -310,7 +396,8 @@ def worker_id_from_peercert(peercert: dict[str, Any] | None) -> str | None:
             continue
         kind, value = str(entry[0]), str(entry[1])
         if kind.upper() == "URI":
-            m = _WORKER_URI_RE.search(value)
+            # Whole-value match: "https://x/?u=urn:graphyn:worker:evil" is not an identity.
+            m = _WORKER_URI_RE.fullmatch(value.strip())
             if m:
                 return m.group(1)
     # subject: ((('countryName', 'US'),), (('commonName', 's99-ml'),), ...)

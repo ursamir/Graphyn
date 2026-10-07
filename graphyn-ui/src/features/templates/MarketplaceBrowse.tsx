@@ -105,7 +105,7 @@ export function MarketplaceBrowse({
         body: JSON.stringify({ template_id: templateId }),
       })
       if (!res.graph) throw new Error('Materialize returned no graph')
-      const stamped = stampProjectOnGraph(res.graph, activeProject || '')
+      const stamped = stampProjectOnGraph(res.graph, activeProject || '', undefined, { legacyIngest: true })
       useAppStore.getState().loadGraphIntoBuilder(stamped)
       pushToast(`Opened marketplace template ${templateId}`, 'success')
     } catch (err) {

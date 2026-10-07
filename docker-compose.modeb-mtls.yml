@@ -1,0 +1,50 @@
+# Mode B mTLS overlay (fail closed): control serves HTTPS with required client
+# certs; the worker presents its cert (CN/SAN = worker_id).
+#
+#   ./scripts/gen_modeb_mtls_certs.sh ./certs/modeb s99-ml
+#   docker compose -f docker-compose.yml -f docker-compose.modeb.yml \
+#     -f docker-compose.modeb-mtls.yml up -d --no-deps graphyn-api graphyn-worker
+#
+# Every caller of graphyn-api:8001 then needs a client cert — including the UI's
+# nginx proxy. Keep a separate plain-HTTP operator listener (or terminate mTLS
+# at a sidecar) if the console must stay reachable. See
+# docs/DISTRIBUTED_EXECUTION.md §14.
+
+services:
+  graphyn-api:
+    command: ["python", "-m", "app.api.mtls_serve"]
+    environment:
+      GRAPHYN_MTLS_ENABLED: "1"
+      GRAPHYN_MTLS_CA_CERT: /certs/ca/ca.pem
+      GRAPHYN_MTLS_CERT: /certs/control/cert.pem
+      GRAPHYN_MTLS_KEY: /certs/control/key.pem
+    volumes:
+      - ./certs/modeb/ca/ca.pem:/certs/ca/ca.pem:ro
+      - ./certs/modeb/control:/certs/control:ro
+
+  graphyn-worker:
+    command:
+      - python
+      - -m
+      - app.cli.main
+      - worker
+      - start
+      - --control-url
+      - https://graphyn-api:8001/api/v1
+      - --worker-id
+      - s99-ml
+      - --labels
+      - gpu,ml
+      - --pool
+      - gpu-lab
+      - --heartbeat
+      - "5"
+    environment:
+      GRAPHYN_CONTROL_URL: https://graphyn-api:8001/api/v1
+      GRAPHYN_MTLS_ENABLED: "1"
+      GRAPHYN_MTLS_CA_CERT: /certs/ca/ca.pem
+      GRAPHYN_MTLS_CLIENT_CERT: /certs/worker/cert.pem
+      GRAPHYN_MTLS_CLIENT_KEY: /certs/worker/key.pem
+    volumes:
+      - ./certs/modeb/ca/ca.pem:/certs/ca/ca.pem:ro
+      - ./certs/modeb/workers/s99-ml:/certs/worker:ro

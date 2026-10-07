@@ -286,7 +286,22 @@ def auth_status():
         "token_map_configured": bool(load_token_map()),
         "env": graphyn_env(),
         "ok": (not required) or configured,
+        # Sign-in with username + password is available once a user exists.
+        "users_configured": _users_configured(),
+        "legacy_token_disabled": _legacy_disabled(),
     }
+
+
+def _users_configured() -> bool:
+    from app.core.trust.users import users_configured
+
+    return users_configured()
+
+
+def _legacy_disabled() -> bool:
+    from app.core.trust.identity import legacy_token_disabled
+
+    return legacy_token_disabled()
 
 
 # ── Schedules (always-on lite) ────────────────────────────────────────────────
@@ -332,6 +347,12 @@ def get_schedules(
 def post_schedule(body: ScheduleCreateBody, request: Request):
     """Create schedule. Honors Idempotency-Key (API-CONV-004)."""
     from app.api.idempotency import begin_idempotent, complete_idempotent, idempotency_guard
+    from app.core.trust.identity import current_identity
+    from app.core.trust.rbac import check_project_permission
+
+    denied = check_project_permission(current_identity(), body.project, "pipelines.write")
+    if denied:
+        raise HTTPException(status_code=403, detail=denied)
     from app.core.pipelines.schedules import (
         SchedulesDataError,
         create_schedule,

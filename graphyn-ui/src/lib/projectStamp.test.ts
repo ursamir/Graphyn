@@ -56,14 +56,16 @@ describe('exportDestinationHint', () => {
 })
 
 describe('prepared ingest rewrite', () => {
-  it('rewrites Library default and legacy artifact hand-off paths', () => {
+  it('rewrites the Library default always and legacy artifact paths only on template load', () => {
     expect(shouldRewritePreparedIngestPath(`${LIBRARY_EXPORT}/latest`)).toBe(true)
-    expect(shouldRewritePreparedIngestPath(`${LEGACY_ARTIFACT}/v1`)).toBe(true)
+    expect(shouldRewritePreparedIngestPath(`${LEGACY_ARTIFACT}/v1`)).toBe(false)
+    expect(shouldRewritePreparedIngestPath(`${LEGACY_ARTIFACT}/v1`, { legacyIngest: true })).toBe(true)
     expect(shouldRewritePreparedIngestPath('workspace/datasets/input/speech-commands')).toBe(false)
     expect(rewritePreparedIngestPath(`${LIBRARY_EXPORT}/latest`, 'my-test1')).toBe(
       'workspace/datasets/output/my-test1/latest',
     )
-    expect(rewritePreparedIngestPath(`${LEGACY_ARTIFACT}/v1`, 'my-test1')).toBe(
+    expect(rewritePreparedIngestPath(`${LEGACY_ARTIFACT}/v1`, 'my-test1')).toBeNull()
+    expect(rewritePreparedIngestPath(`${LEGACY_ARTIFACT}/v1`, 'my-test1', { legacyIngest: true })).toBe(
       'workspace/datasets/output/my-test1/v1',
     )
   })
@@ -101,9 +103,16 @@ describe('stampProjectOnGraph', () => {
     const train = graph([
       { id: 'ing', node_type: 'dataset_ingest', config: { path: `${LEGACY_ARTIFACT}/latest` } },
     ])
-    expect(cfg(stampProjectOnGraph(train, 'ws'), 'ing').path).toBe(
+    expect(cfg(stampProjectOnGraph(train, 'ws', undefined, { legacyIngest: true }), 'ing').path).toBe(
       'workspace/datasets/output/ws/latest',
     )
+  })
+
+  it('leaves a user-picked legacy artifact ingest path alone at run time', () => {
+    const train = graph([
+      { id: 'ing', node_type: 'dataset_ingest', config: { path: `${LEGACY_ARTIFACT}/v3` } },
+    ])
+    expect(cfg(stampProjectOnGraph(train, 'ws'), 'ing').path).toBe(`${LEGACY_ARTIFACT}/v3`)
   })
 
   it('retargets a default exporter into the project Library folder', () => {

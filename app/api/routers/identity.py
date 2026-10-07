@@ -2,7 +2,7 @@
 """
 Bounded Context:  REST API Layer
 Responsibility:   Tell the caller who the audit trail will record them as.
-Owns:             GET /me.
+Owns:             GET /me (identity + roles / permissions / memberships).
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
                   (authenticated like every /api/v1 route).
 Must NOT:         Return token values or the token map.
@@ -29,7 +29,18 @@ def get_me(request: Request):
     from app.api.actor import resolve_identity
     from app.core.trust.identity import load_token_map, token_auth_configured
 
+    from app.core.trust.rbac import ROLE_PERMISSIONS, permissions_for
+
     ident = resolve_identity(request)
+    kind = ident.get("kind")
+    if kind == "user":
+        roles = list(ident.get("roles") or [])
+        perms = sorted(permissions_for(roles))
+    elif kind == "worker":
+        roles, perms = [], []
+    else:
+        # Shared API token / unauthenticated dev: break-glass admin.
+        roles, perms = ["admin"], sorted(ROLE_PERMISSIONS["admin"])
     return {
         "actor": ident["actor"],
         "actor_verified": bool(ident["actor_verified"]),
@@ -37,4 +48,12 @@ def get_me(request: Request):
         "claimed_actor": ident.get("claimed_actor"),
         "auth_configured": token_auth_configured(),
         "token_map_configured": bool(load_token_map()),
+        "kind": kind,
+        "auth_method": ident.get("auth_method"),
+        "user_id": ident.get("user_id"),
+        "credential_id": ident.get("credential_id"),
+        "roles": roles,
+        "approver_roles": list(ident.get("approver_roles") or []),
+        "permissions": perms,
+        "memberships": dict(ident.get("memberships") or {}),
     }

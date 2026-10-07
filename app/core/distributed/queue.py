@@ -73,6 +73,24 @@ def _max_events_per_job() -> int:
         return 500
 
 
+def _stamp_event_seq(
+    existing: list[dict[str, Any]], events: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Copy ``events`` with a monotonic ``_seq`` that survives :func:`_cap_events` trims."""
+    last = -1
+    if existing:
+        tail = existing[-1]
+        if isinstance(tail, dict) and isinstance(tail.get("_seq"), int):
+            last = tail["_seq"]
+        else:
+            last = len(existing) - 1
+    out = []
+    for ev in events:
+        last += 1
+        out.append({**ev, "_seq": last} if isinstance(ev, dict) else ev)
+    return out
+
+
 def _cap_events(bucket: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Keep only the newest ``GRAPHYN_JOB_EVENTS_MAX`` events for a job."""
     cap = _max_events_per_job()
@@ -516,6 +534,34 @@ class JobQueue:
                         uris.add(ref)
         return uris, job_ids
 
+    def active_jobs(self) -> list[NodeJob]:
+        """Claimed/running jobs from the freshest view (durable store when configured)."""
+        with self._lock:
+            if self._store is not None:
+                try:
+                    self._reload_unlocked()
+                except Exception as exc:
+                    log.warning("JobQueue.active_jobs: reload failed: %s", exc)
+            return [j for j in self._jobs.values() if j.status in ("claimed", "running")]
+
+    def worker_holds_blob(self, worker_id: str, key: str, *, uri_to_key) -> bool:
+        """True when a claimed/running job of ``worker_id`` references blob ``key``."""
+        k = (key or "").lstrip("/")
+        with self._lock:
+            self._refresh_if_stale_unlocked()
+            for job in self._jobs.values():
+                if job.status not in ("claimed", "running") or job.claimed_by != worker_id:
+                    continue
+                if k in (job.blob_grants or []):
+                    return True
+                for ref in (job.input_refs or {}).values():
+                    try:
+                        if isinstance(ref, str) and uri_to_key(ref) == k:
+                            return True
+                    except Exception:
+                        continue
+        return False
+
     def _sync_from_store_unlocked(self, *, job_id: str | None = None) -> None:
         """Merge durable store snapshot into in-memory state (cross-process).
 
@@ -834,6 +880,7 @@ class JobQueue:
                 update={
                     "status": "claimed",
                     "claimed_by": worker.worker_id,
+                    "claim_pools": _claim_pools(worker, job),
                     "claimed_at": now,
                     "lease_expires_at": now
                     + timedelta(seconds=self._lease_ttl_s),
@@ -904,6 +951,7 @@ class JobQueue:
                     update={
                         "status": "claimed",
                         "claimed_by": worker.worker_id,
+                        "claim_pools": _claim_pools(worker, job),
                         "claimed_at": now,
                         "lease_expires_at": now
                         + timedelta(seconds=self._lease_ttl_s),
@@ -1533,7 +1581,7 @@ class JobQueue:
                         for k, v in (snap.get("events") or {}).items()
                     }
                     bucket = list(evmap.get(job_id) or [])
-                    bucket.extend(events)
+                    bucket.extend(_stamp_event_seq(bucket, events))
                     bucket = _cap_events(bucket)
                     evmap[job_id] = bucket
                     try:
@@ -1566,7 +1614,7 @@ class JobQueue:
             if job_id not in self._jobs:
                 raise KeyError(job_id)
             bucket = self._events.setdefault(job_id, [])
-            bucket.extend(events)
+            bucket.extend(_stamp_event_seq(bucket, events))
             bucket = _cap_events(bucket)
             self._events[job_id] = bucket
             # Events from the claiming worker also renew the lease.
@@ -1657,6 +1705,13 @@ class JobQueue:
 
 
 
+def _claim_pools(worker: WorkerInfo, job: NodeJob) -> list[str]:
+    """Effective pools for quota: the job's pool, else the claiming worker's pools."""
+    if job.pool:
+        return [str(job.pool)]
+    return sorted({str(p).strip() for p in (worker.pools or []) if str(p or "").strip()})
+
+
 def _count_active_in_jobs(
     jobs: dict[str, Any] | list[Any],
     *,
@@ -1678,8 +1733,11 @@ def _count_active_in_jobs(
             continue
         if worker_id is not None and job.claimed_by != worker_id:
             continue
-        if pool is not None and str(job.pool or "") != str(pool):
-            continue
+        if pool is not None:
+            from app.core.distributed.quotas import job_effective_pools
+
+            if str(pool) not in job_effective_pools(job):
+                continue
         n += 1
     return n
 
@@ -1707,23 +1765,26 @@ def _quota_blocks_claim(worker: WorkerInfo, job: NodeJob, jobs_raw: dict[str, An
     return False
 
 
-def _worker_trust_ok(worker: WorkerInfo) -> bool:
-    """Fail closed for untrusted workers when trust is required."""
-    if bool(getattr(worker, "trusted", True)):
-        return True
+def worker_trust_required() -> bool:
+    """``GRAPHYN_WORKER_TRUST_REQUIRED=1`` under auth: workers need operator approval."""
     import os
 
     flag = (os.environ.get("GRAPHYN_WORKER_TRUST_REQUIRED") or "").strip().lower()
     if flag not in ("1", "true", "yes", "on"):
-        return True
+        return False
     try:
         from app.core.config import auth_required
 
-        if not auth_required():
-            return True
+        return bool(auth_required())
     except Exception:
+        return False
+
+
+def _worker_trust_ok(worker: WorkerInfo) -> bool:
+    """Fail closed for untrusted workers when trust is required."""
+    if bool(getattr(worker, "trusted", True)):
         return True
-    return False
+    return not worker_trust_required()
 
 
 def _plugins_allow(worker: WorkerInfo, node_type: str) -> bool:

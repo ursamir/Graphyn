@@ -37,6 +37,7 @@ import { formatBytes } from '../../lib/fileKind'
 import {
   formatExecutionLine,
   formatLocaleDateTime,
+  formatLogClock,
   formatRelativeTime,
   formatRunMetric,
   humanizeTemplateName,
@@ -103,8 +104,10 @@ import {
 } from './runResults'
 import {
   collapseProgressRows,
+  collapseWaitingRows,
   finishedNodeIds,
   formatProgressLine,
+  formatWaitingLine,
   latestProgressByNode,
   parseProgress,
   runningNodesOf,
@@ -387,29 +390,6 @@ function waveBucketsFromNodeStats(
 const LOG_ROW_PX = 20
 const LOG_VIEWPORT_PX = 448
 
-/** Short local clock from PipelineLogger `timestamp` / `time` ISO fields. */
-function formatLogClock(raw: unknown): string {
-  if (raw == null) return ''
-  const s = String(raw).trim()
-  if (!s) return ''
-  const t = Date.parse(s)
-  if (!Number.isFinite(t)) {
-    // Already HH:MM:SS…
-    const m = s.match(/^(\d{1,2}:\d{2}:\d{2})/)
-    return m ? m[1] : ''
-  }
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    }).format(new Date(t))
-  } catch {
-    return new Date(t).toISOString().slice(11, 19)
-  }
-}
-
 function extractLogTimestamp(log: Record<string, unknown>, rawMessage: string): string {
   const direct = formatLogClock(log.timestamp ?? log.time ?? log.ts)
   if (direct) return direct
@@ -435,6 +415,8 @@ type FormattedLogRow = {
   clock: string
   /** Pretty view: collapsed node_progress (latest + history). */
   progress?: { latest: NodeProgress; history: NodeProgress[]; count: number }
+  /** Pretty view: collapsed Mode B Waiting-for-worker heartbeats. */
+  waiting?: { text: string; count: number }
 }
 
 function VirtualRunLogList({
@@ -480,7 +462,7 @@ function VirtualRunLogList({
       ) : (
         <div style={{ height: totalH, position: 'relative' }}>
           <div style={{ transform: `translateY(${offsetY}px)` }}>
-            {slice.map(({ i, ev, line, nodeHint, failed, clock, progress }) => {
+            {slice.map(({ i, ev, line, nodeHint, failed, clock, progress, waiting }) => {
               const evLabel = eventNodeLabel(ev)
               const hintLabel = evLabel
                 ? compactNodeLabel(evLabel)
@@ -493,10 +475,13 @@ function VirtualRunLogList({
                 ? line.raw || line.text
                 : progress
                   ? formatProgressLine(progress.latest, hintLabel || undefined)
-                  : relabelLine(line.text, ev, labelFor)
+                  : waiting
+                    ? formatWaitingLine(waiting.text, waiting.count)
+                    : relabelLine(line.text, ev, labelFor)
               const showHint =
                 !raw &&
                 !progress &&
+                !waiting &&
                 Boolean(hintLabel) &&
                 !text.toLowerCase().startsWith(hintLabel.toLowerCase()) &&
                 !text.toLowerCase().startsWith(humanNodeLabel(nodeHint || '').toLowerCase())
@@ -505,8 +490,9 @@ function VirtualRunLogList({
                 key={i}
                 style={{ height: LOG_ROW_PX }}
                 className={`flex min-w-0 items-baseline gap-1.5 overflow-hidden whitespace-nowrap ${
-                  failed ? 'text-rose-300' : ''
+                  failed ? 'text-rose-300' : waiting ? 'text-ink-400' : ''
                 }`}
+                title={waiting ? `${waiting.count} waiting notes` : undefined}
               >
                 {clock ? (
                   <span className="shrink-0 tabular-nums text-ink-500" title={clock}>
@@ -1725,23 +1711,37 @@ export default function RunsView() {
     }
     return { i, l, ev, line: { ...line, raw: JSON.stringify(l) }, nodeHint, failed, clock }
   })
-  // Pretty: one live line per node for node_progress (latest + history), then
-  // drop the pipeline-level error row that restates the preceding node_error.
+  // Pretty: one live line per node for node_progress (latest + history), Mode B
+  // Waiting heartbeats collapsed to one line with "....", then drop the
+  // pipeline-level error row that restates the preceding node_error.
   // Raw: every event as recorded.
   const formattedLogs: FormattedLogRow[] = rawLogView
     ? baseLogRows
     : dedupeErrorRows(
         skipConsecutiveByText(
-          collapseProgressRows(baseLogRows, (row) => row.l).map((c) =>
+          collapseWaitingRows(
+            collapseProgressRows(baseLogRows, (row) => row.l),
+            (row) => row.line.text,
+          ).map((c) =>
             c.kind === 'progress'
               ? {
                   ...c.row,
                   nodeHint: c.progress.nodeId,
                   progress: { latest: c.progress, history: c.history, count: c.count },
                 }
-              : c.row,
+              : c.kind === 'waiting'
+                ? {
+                    ...c.row,
+                    waiting: { text: c.text, count: c.count },
+                  }
+                : c.row,
           ),
-          (row) => (row.progress ? `progress:${row.progress.latest.nodeId}:${row.progress.count}` : row.line.text),
+          (row) =>
+            row.progress
+              ? `progress:${row.progress.latest.nodeId}:${row.progress.count}`
+              : row.waiting
+                ? `waiting:${row.waiting.text}:${row.waiting.count}`
+                : row.line.text,
         ),
         (row) => row.line.text,
         (row) => (row.failed ? 'error' : row.line.level),

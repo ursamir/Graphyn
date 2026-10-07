@@ -70,6 +70,12 @@ def get_audit(
     q: str | None = Query(None, description="Case-insensitive free-text search over the event (and its label)"),
     category: str | None = Query(None, description="Only these categories (comma list): run, model, admin, system, ui"),
     exclude_category: str | None = Query(None, description="Hide these categories (comma list), e.g. ui,system"),
+    actor: str | None = Query(None, description="Exact actor name (case-insensitive)"),
+    user_id: str | None = Query(None, description="Principal user id (u_…)"),
+    credential_id: str | None = Query(None, description="Principal credential / token id"),
+    worker_id: str | None = Query(None, description="Worker principal / resource / metadata worker_id"),
+    since: str | None = Query(None, description="ISO timestamp lower bound (inclusive)"),
+    until: str | None = Query(None, description="ISO timestamp upper bound (inclusive)"),
 ):
     """Newest-first append-only audit events, filtered and paged over the whole log.
 
@@ -83,6 +89,8 @@ def get_audit(
         limit=limit, offset=offset, run_id=run_id, resource_id=resource_id,
         action=action, q=q, with_total=True,
         category=category, exclude_category=exclude_category,
+        actor=actor, user_id=user_id, credential_id=credential_id, worker_id=worker_id,
+        since=since, until=until,
     )
     return {
         "events": events,
@@ -91,3 +99,80 @@ def get_audit(
         "total": total,
         "has_more": offset + len(events) < total,
     }
+
+
+_EXPORT_COLUMNS = (
+    "timestamp", "actor", "actor_verified", "actor_kind", "action", "result", "resource_type", "resource_id",
+    "principal_kind", "auth_method", "user_id", "credential_id", "worker_id", "roles", "request_id",
+    "event_id", "event_hash",
+)
+
+
+@router.get("/audit/export", summary="Export audit events for QA (JSONL or CSV)")
+def export_audit(
+    format: str = Query("jsonl", pattern="^(jsonl|csv)$"),
+    limit: int = Query(50000, ge=1, le=200000),
+    action: str | None = Query(None),
+    q: str | None = Query(None),
+    category: str | None = Query(None),
+    actor: str | None = Query(None),
+    user_id: str | None = Query(None),
+    credential_id: str | None = Query(None),
+    worker_id: str | None = Query(None),
+    since: str | None = Query(None),
+    until: str | None = Query(None),
+    run_id: str | None = Query(None),
+):
+    """Filtered audit export; the download itself is audited (``audit.export``)."""
+    import csv
+    import io
+    import json
+
+    from fastapi.responses import Response
+
+    from app.core.trust.audit import list_audit, record_audit, verify_audit_chain
+
+    events = list_audit(
+        limit=limit, max_limit=200000, action=action, q=q, category=category, actor=actor,
+        user_id=user_id, credential_id=credential_id, worker_id=worker_id, since=since, until=until,
+        run_id=run_id,
+    )
+    chain = verify_audit_chain()
+    record_audit(
+        actor="api", action="audit.export", resource_type="audit", resource_id=format,
+        meta={"count": len(events), "chain_ok": chain["ok"],
+              "filters": {k: v for k, v in {"action": action, "actor": actor, "user_id": user_id,
+                                            "worker_id": worker_id, "since": since, "until": until,
+                                            "run_id": run_id, "q": q, "category": category}.items() if v}},
+    )
+    headers = {
+        "Content-Disposition": f'attachment; filename="graphyn-audit.{format}"',
+        "X-Graphyn-Audit-Chain": "ok" if chain["ok"] else "broken",
+        "X-Graphyn-Audit-Count": str(len(events)),
+    }
+    if format == "jsonl":
+        body = "".join(json.dumps(e, ensure_ascii=False, default=str) + "\n" for e in events)
+        return Response(content=body, media_type="application/x-ndjson", headers=headers)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(_EXPORT_COLUMNS)
+    for e in events:
+        pr = e.get("principal") if isinstance(e.get("principal"), dict) else {}
+        row = {
+            **e,
+            "principal_kind": pr.get("kind"),
+            "auth_method": pr.get("auth_method"),
+            "user_id": pr.get("user_id"),
+            "credential_id": pr.get("credential_id"),
+            "worker_id": pr.get("worker_id") or pr.get("mtls_worker_id"),
+            "roles": ",".join(pr.get("roles") or []),
+        }
+        w.writerow(["" if row.get(c) is None else row.get(c) for c in _EXPORT_COLUMNS])
+    return Response(content=buf.getvalue(), media_type="text/csv", headers=headers)
+
+
+@router.get("/audit/verify", summary="Verify the audit log hash chain")
+def verify_audit():
+    from app.core.trust.audit import verify_audit_chain
+
+    return verify_audit_chain()

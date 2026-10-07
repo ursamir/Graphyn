@@ -11,7 +11,8 @@ Must NOT:         Contain execution logic — delegates entirely to
                   app.domain or app.api at module level.
 Dependencies:     BC1 (ir.models, ir.loader, graph_prepare — lazy),
                   BC5 (runtime_backend — lazy),
-                  BC6 (run_journal — lazy, provenance — lazy),
+                  BC6 (run_journal — lazy, provenance — lazy,
+                  app.models.serializers — lazy),
                   BC3 (registry_runtime — lazy via PipelineNode._validate),
                   app.core.logger (lazy), app.core.plugins.manager (lazy).
 Reason To Change: SDK public API evolves (new Pipeline methods, new
@@ -441,11 +442,16 @@ class Pipeline:
         """
         from app.core.execution.runtime_backend import get_backend  # noqa: PLC0415
         from app.core.runs.run_journal import RunManager  # noqa: PLC0415
+        from app.models.serializers import register_builtin_serializers  # noqa: PLC0415
         from app.core.execution.graph_prepare import (  # noqa: PLC0415
             persist_project_fields,
             prepare_graph,
             record_run_start,
         )
+
+        # Same artifact handlers as API / CLI / MCP (idempotent) so SDK runs
+        # persist and cache ModelArtifact & co. identically.
+        register_builtin_serializers()
 
         # Clone through IR dump/load with plain containers to avoid deepcopy
         # failures on mappingproxy values embedded by pydantic internals.

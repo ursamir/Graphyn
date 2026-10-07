@@ -318,9 +318,9 @@ class EdgeOptimizerNode(Node):
                 p = Path(mp)
                 if p.is_file() and p.suffix.lower() == ".keras":
                     return str(p)
-                for cand in (p.parent / "model.keras", p / "model.keras"):
-                    if cand.is_file():
-                        return str(cand)
+                # Not ``p.parent / "model.keras"``: a shared parent may hold another run's model.
+                if p.is_dir() and (p / "model.keras").is_file():
+                    return str(p / "model.keras")
             for ref in getattr(artifact, "refs", None) or []:
                 if getattr(ref, "role", None) == "keras_model":
                     sp = str(getattr(ref, "source_path", "") or "")

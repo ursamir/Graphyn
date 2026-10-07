@@ -154,38 +154,26 @@ class WorkerRegistry:
     def register(self, info: WorkerInfo) -> WorkerInfo:
         """Register or refresh a worker. Updates ``heartbeat_at`` to now.
 
-        Control-side ACL fields (``allowed_plugins``, ``plugin_hashes``,
-        ``trusted``) are preserved from an existing record when the incoming
-        payload leaves them unset / default — so a worker re-register cannot
-        clear an admin pin. Explicit non-default values in the payload win
-        (admin register / PATCH path).
+        Control-side admin fields (``allowed_plugins``, ``plugin_hashes``,
+        ``trusted``, ``max_claimed``, ``usage_*``) of an existing record always
+        win over the payload — register is the worker path, and only
+        :meth:`patch` (operator ``PATCH /workers/{id}``) may change them.
         """
         with self._lock:
             def _merge(existing: WorkerInfo | None, incoming: WorkerInfo) -> WorkerInfo:
                 updates: dict[str, Any] = {"heartbeat_at": _utcnow()}
                 if existing is not None:
-                    # Preserve admin ACL when worker omits them (None / default trusted).
-                    if incoming.allowed_plugins is None and existing.allowed_plugins is not None:
-                        updates["allowed_plugins"] = existing.allowed_plugins
-                    if incoming.plugin_hashes is None and existing.plugin_hashes is not None:
-                        updates["plugin_hashes"] = existing.plugin_hashes
-                    # trusted default True — only preserve False when incoming is still True
-                    # and existing was explicitly False (worker cannot self-trust).
-                    if incoming.trusted is True and existing.trusted is False:
-                        updates["trusted"] = False
-                    # Preserve admin quota + usage counters across worker re-register.
-                    if incoming.max_claimed is None and existing.max_claimed is not None:
-                        updates["max_claimed"] = existing.max_claimed
-                    for usage_f in (
+                    for admin_f in (
+                        "allowed_plugins",
+                        "plugin_hashes",
+                        "trusted",
+                        "max_claimed",
                         "usage_claims",
                         "usage_completes",
                         "usage_bytes_in",
                         "usage_bytes_out",
                     ):
-                        inc_v = getattr(incoming, usage_f, 0) or 0
-                        prev_v = getattr(existing, usage_f, 0) or 0
-                        if inc_v == 0 and prev_v:
-                            updates[usage_f] = prev_v
+                        updates[admin_f] = getattr(existing, admin_f)
                 return incoming.model_copy(update=updates)
 
             if self._store is not None:
@@ -251,6 +239,35 @@ class WorkerRegistry:
             if existing is None:
                 raise KeyError(worker_id)
             updated = existing.model_copy(update=fields)
+            self._workers[worker_id] = updated
+            return updated
+
+    def increment_usage(self, worker_id: str, **deltas: int) -> WorkerInfo | None:
+        """Atomically add ``deltas`` to ``usage_*`` counters (read-modify-write under lock)."""
+        deltas = {k: int(v) for k, v in deltas.items() if v and k.startswith("usage_")}
+
+        def _bump(existing: WorkerInfo) -> WorkerInfo:
+            return existing.model_copy(
+                update={k: int(getattr(existing, k, 0) or 0) + v for k, v in deltas.items()}
+            )
+
+        with self._lock:
+            if self._store is not None:
+                def mut(workers: dict[str, Any]):
+                    workers = dict(workers or {})
+                    payload = workers.get(worker_id)
+                    if payload is None:
+                        return workers, None
+                    updated = _bump(WorkerInfo.model_validate(payload))
+                    workers[worker_id] = updated.model_dump(mode="json")
+                    return workers, updated
+
+                return self._durable_mutate_workers(mut)
+
+            existing = self._workers.get(worker_id)
+            if existing is None:
+                return None
+            updated = _bump(existing)
             self._workers[worker_id] = updated
             return updated
 

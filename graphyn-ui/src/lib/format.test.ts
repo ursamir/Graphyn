@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { displayNodeLabel, focusMatchesNode, humanNodeLabel, instanceIdCue } from './format'
+import { displayNodeLabel, focusMatchesNode, formatLogClock, humanNodeLabel, instanceIdCue } from './format'
+
+describe('formatLogClock', () => {
+  it('formats ISO timestamps as local HH:MM:SS', () => {
+    const clock = formatLogClock('2026-10-07T10:20:30.000Z')
+    expect(clock).toMatch(/^\d{2}:\d{2}:\d{2}$/)
+  })
+  it('passes through HH:MM:SS fragments', () => {
+    expect(formatLogClock('14:32:01')).toBe('14:32:01')
+  })
+  it('returns empty for missing/invalid', () => {
+    expect(formatLogClock(null)).toBe('')
+    expect(formatLogClock('not-a-date')).toBe('')
+  })
+})
 
 describe('focusMatchesNode', () => {
   it('matches exact ids only for graph instance ids', () => {

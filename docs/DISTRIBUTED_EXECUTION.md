@@ -103,7 +103,7 @@ Examples:
 - `artifact://file/workspace/artifacts/models/run123/model.keras` (single-host / NFS)
 - `artifact://s3/bucket/key` (future)
 
-Control and workers resolve URIs through `ArtifactStore` / store drivers. Port payloads use pickle + `recast_plugin_types` (`app/core/distributed/transfer.py`). Path-bearing platform artifacts carry an explicit **`ArtifactRef` manifest** (roles such as `keras_model`, `saved_model`, `labels`, `tflite`, `deployment_bundle`): producer packs local files by role into content-addressed blobs and wires **refs only** (logical id + role + sha256 + `artifact://…` URI). Consumer hydrates under `<node_write_dir>/_inputs/<port>/…` (siblings preserved) and rewrites path fields to **local** paths for plugin execution only. Mode B is **fail-closed**: unreclaimed host paths must not cross node boundaries. File bytes travel via manifest/blobs; metadata may pickle. `ArtifactSerializerRegistry` (including `ModelArtifactHandler`) reuses the same pack helpers for on-disk run artifacts.
+Control and workers resolve URIs through `ArtifactStore` / store drivers. Port payloads use pickle + `recast_plugin_types` (`app/core/distributed/transfer.py`). Path-bearing platform artifacts carry an explicit **`ArtifactRef` manifest** (roles such as `keras_model`, `saved_model`, `labels`, `tflite`, `deployment_bundle`): producer packs local files by role into content-addressed blobs and wires **refs only** (logical id + role + sha256 + `artifact://…` URI). Consumer hydrates under `<node_write_dir>/_inputs/<port>/…` (siblings preserved) and rewrites path fields to **local** paths for plugin execution only. Mode B is **fail-closed**: unreclaimed host paths must not cross node boundaries. File bytes travel via manifest/blobs; metadata may pickle. `ArtifactSerializerRegistry` (including `ModelArtifactHandler`) reuses the same pack helpers for on-disk run artifacts. Directory packing is deterministic (sorted members, fixed mtime/uid/gid; empty files and hardlinks become regular members), so the sha256 covers the real file bytes; tar member names that escape the root are rejected on unpack. Hydration verifies the digest, extracts into a temp dir and swaps it in with `os.replace` (marker `.extracted-<sha>`), and skips the fetch for empty blobs. Pass-through refs must carry an `artifact://` URI; dataset manifests and path-valued `metrics.<key>` / `metadata.<key>` fields are packed as roles too.
 
 ### 3.3 Job protocol
 
@@ -151,6 +151,17 @@ A **node job** is the unit of remote work (extends today’s isolated plugin job
   are kept until consumed or older than `GRAPHYN_JOB_RESULT_TTL_S` (default
   3600). Per-job events are capped at `GRAPHYN_JOB_EVENTS_MAX` (default 500,
   newest kept).
+
+**Live `node_progress` (Mode B):** workers bind `NodeExecutor.set_progress_sink`
+so plugin `emit_node_progress` (epochs / loss / acc) is posted mid-job via
+`POST /jobs/{id}/events`. The control plane's wait loop
+(`_forward_job_events`) copies those into the run journal + `meta.json`
+`node_progress` (same shape as Mode A). Once any `node_progress` has been
+forwarded for that node, the periodic `Waiting for worker…` note stays
+suppressed for the rest of the job (epoch gaps often exceed 5s). The Editor /
+Runs Pretty log also collapses any remaining Waiting heartbeats into one live
+line with a growing `....` suffix. Events are best-effort and capped by
+`GRAPHYN_JOB_EVENTS_MAX`.
 - `WorkerInfo`, `NodeJob` and `JobResult` are `extra="forbid"`: a peer on an
   older commit rejects the new fields (`finished_at`, `result_consumed_at`,
   `output_sha256`, heartbeat `active_job_ids`). **Upgrade the control plane and
@@ -476,6 +487,7 @@ matching port names — keep that as a custom graph; do not replace the Common d
 | `GRAPHYN_CONTROL_URL` | Worker → control base (`…/api/v1`) |
 | `GRAPHYN_WORKER_ID` | Stable worker identity |
 | `GRAPHYN_API_TOKEN` | Shared Bearer token |
+| `GRAPHYN_WORKER_TOKEN` | Worker-side bearer; preferred over `GRAPHYN_API_TOKEN` on workers |
 | `GRAPHYN_DISTRIBUTED_JOB_TIMEOUT` | Control wait per remote job (default 120s) |
 | `GRAPHYN_DISTRIBUTED_STORE` | `disk` (default), `redis`, or `memory` — registry/queue durability |
 | `GRAPHYN_REDIS_URL` | When set, distributed store prefers Redis (same URL as run_control) |
@@ -502,18 +514,21 @@ docker compose -f docker-compose.yml -f docker-compose.modeb.yml up -d --no-deps
 * **Network:** `graphyn-modeb` connects api↔worker (`http://graphyn-api:8001/api/v1`). Volume isolation — worker has its own `GRAPHYN_HOME` / plugins / workspace; **no** shared host `./workspace` (blob transfer only). Control may re-use venvs via a volume subpath.
 * **Egress:** `GRAPHYN_HTTP_EGRESS_MODE=restricted` with an allowlist that includes `graphyn-api` (and vendor hosts as needed).
 * **GPU:** `GRAPHYN_ML_FORCE_CPU=1` / empty `CUDA_VISIBLE_DEVICES` so FaceRecognition / other GPU apps keep the card unless you intentionally pass a device.
-* **Tokens:** prefer a worker-scoped named token (`name:token:worker:s99-ml` or JSON object form) on the worker; operator token on the control/UI. Set `GRAPHYN_BLOB_SIGNING_KEY` (or reuse the API token) so workers can mint short-lived blob GET URLs.
-* **ACL:** `PATCH /api/v1/workers/{id}` sets `allowed_plugins` / `plugin_hashes` / `trusted`. Claim intersects advertisement ∩ allowlist; hash pins require matching `content_hashes`.
-* **Remote-only types:** workers advertise `plugins` / optional `node_types`; `GET /workers/remote-node-types` lists them. When `GRAPHYN_BACKEND=distributed`, validation accepts those names for VAL-UNK-TYPE (Mode A unchanged).
+* **Tokens:** give the worker a worker-scoped named token bound to its id (`name:token:worker:s99-ml` or JSON object form) via `GRAPHYN_WORKER_TOKEN`; operator token on the control/UI. Worker tokens may only call the worker protocol routes (other `/api/` routes and MCP reject them); unbound worker tokens fail closed unless mTLS supplies the id or `GRAPHYN_WORKER_UNBOUND_TOKENS=1`. `GRAPHYN_BLOB_SIGNING_KEY` lives on the control plane only (no API-token fallback); signed URLs are capped at 3600 s.
+* **ACL:** `PATCH /api/v1/workers/{id}` sets `allowed_plugins` / `plugin_hashes` / `trusted` / `max_claimed`. Self-registration never overwrites these (or `usage_*`). Claim intersects advertisement ∩ allowlist; hash pins require matching `content_hashes`.
+* **Blob scope:** at enqueue the control plane records every `sha256/…` key referenced by the job payload in `NodeJob.blob_grants`. A worker may GET input/grant blobs of a job it holds and output keys of its own job; absolute blob URLs outside the control origin are refused worker-side.
+* **Job events:** each appended event gets a monotonic `_seq`; the control plane forwards by `_seq`, so trimming at `GRAPHYN_JOB_EVENTS_MAX` never re-emits or drops new events. Events / `GET /jobs/{id}` are claimant-only for workers (409 when not claimed/running).
+* **Remote-only types:** workers advertise `plugins` / optional `node_types`; `GET /workers/remote-node-types` lists them. When `GRAPHYN_BACKEND=distributed`, validation accepts those names for VAL-UNK-TYPE (Mode A unchanged) and still runs VAL-PLACE checks on their placement.
 
 See `docs/TRUST_MODEL.md` §6 for the WAVE-1/2 env table.
 
 ### WAVE-2 (mTLS, blob encryption, quotas, spool)
 
-* **mTLS:** `./scripts/gen_modeb_mtls_certs.sh ./certs/modeb s99-ml` then set `GRAPHYN_MTLS_ENABLED=1` and cert paths; run API via `python -m app.api.mtls_serve` (compose overlay documents mounts). Worker uses `https://graphyn-api:8001/api/v1` + client cert. Default remains plain HTTP when mTLS is off (fail open only when disabled; fail closed when enabled).
-* **Blob encrypt-at-rest:** `GRAPHYN_BLOB_ENCRYPTION_KEY` (urlsafe b64 32-byte). Keys stay `sha256/<plaintext_digest>`; disk file is GBE1 envelope; GET decrypts then verifies.
-* **Quotas:** `GRAPHYN_POOL_MAX_CLAIMED` + admin `PATCH /workers/{id}` `max_claimed`. Claim returns 429 / skips when over cap. Usage (`claims`, `completes`, `bytes_in/out`) on `GET /workers`.
-* **Worker spool:** `GRAPHYN_WORKER_SPOOL=1` (default on). Pending completes/blobs under `{GRAPHYN_HOME}/worker_spool/`; flush blobs→completes on reconnect; fenced lease generations dropped to `dropped.jsonl`.
+* **mTLS:** `./scripts/gen_modeb_mtls_certs.sh ./certs/modeb s99-ml`, then `docker compose -f docker-compose.yml -f docker-compose.modeb.yml -f docker-compose.modeb-mtls.yml up -d --no-deps graphyn-api graphyn-worker` (the overlay sets `GRAPHYN_MTLS_ENABLED=1`, mounts `./certs/modeb`, runs `python -m app.api.mtls_serve` — h11 with SSL — and points the worker at `https://graphyn-api:8001/api/v1`). When enabled: worker protocol mutations without a client cert get 403, and the worker refuses an `http://` control URL. Default remains plain HTTP when mTLS is off.
+* **Blob encrypt-at-rest:** `GRAPHYN_BLOB_ENCRYPTION_KEY` (urlsafe b64 32-byte). Keys stay `sha256/<plaintext_digest>`; disk file is a GBE2 envelope (AES-256-GCM, HKDF key, key id); GET decrypts then verifies. GBE1 still decrypts; retired keys go in `GRAPHYN_BLOB_ENCRYPTION_OLD_KEYS`.
+* **Quotas:** `GRAPHYN_POOL_MAX_CLAIMED` + admin `PATCH /workers/{id}` `max_claimed`. Pool caps count a job under its effective pools (`job.pool` ∪ the worker pools stamped as `NodeJob.claim_pools` at claim). Claim returns 429 / skips when over cap. Usage (`claims`, `completes`, `bytes_in/out`) on `GET /workers`, incremented atomically under the registry lock.
+* **Worker spool:** `GRAPHYN_WORKER_SPOOL=1` (default on). Pending completes under `{GRAPHYN_HOME}/worker_spool/<worker_id>/` (atomic tmp+fsync+replace; the legacy shared root is still drained); spooled job ids stay in heartbeat `active_job_ids`; the spool flushes before re-register; fenced lease generations dropped to `dropped.jsonl`. Blob/event spooling is not wired yet — see `KNOWN_ISSUES.md` MODEB-SPOOL-PARTIAL-1.
+* **Remote outputs:** materialized ArtifactRef outputs land under `default_materialize_root()/<run>/<node>/<port>` (digest-checked, temp dir + `os.replace`).
 * **Not shipped:** TPM/SGX hardware attestation — use plugin hash pins as software attestation.
 
 

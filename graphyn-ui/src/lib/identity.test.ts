@@ -1,13 +1,27 @@
 import { describe, expect, it } from 'vitest'
-import { actorDisplay, isUnidentifiedActor, parseMe } from './identity'
+import { actorDisplay, hasPermission, isUnidentifiedActor, parseMe } from './identity'
 
 describe('parseMe', () => {
   it('maps the /me payload', () => {
     expect(
       parseMe({ actor: 'alice', actor_verified: true, token_mapped: true, claimed_actor: null, auth_configured: true, token_map_configured: true }),
-    ).toEqual({ actor: 'alice', actorVerified: true, tokenMapped: true, claimedActor: '', authConfigured: true, tokenMapConfigured: true })
+    ).toMatchObject({ actor: 'alice', actorVerified: true, tokenMapped: true, claimedActor: '', authConfigured: true, tokenMapConfigured: true, roles: [], permissions: [] })
     expect(parseMe({ actor: 'bob' })?.actorVerified).toBe(false)
     expect(parseMe(null)).toBeNull()
+  })
+
+  it('maps RBAC fields and checks permissions', () => {
+    const me = parseMe({
+      actor: 'bob', kind: 'user', auth_method: 'session', user_id: 'u_1', roles: ['viewer'],
+      permissions: ['read', 'authenticated'], memberships: { alpha: 'builder', beta: '' },
+    })!
+    expect(me.kind).toBe('user')
+    expect(me.memberships).toEqual({ alpha: 'builder' })
+    expect(hasPermission(me, 'read')).toBe(true)
+    expect(hasPermission(me, 'runs.execute')).toBe(false)
+    expect(hasPermission(me, 'runs.execute', 'alpha')).toBe(true)
+    expect(hasPermission(me, 'approve', 'alpha')).toBe(false)
+    expect(hasPermission(parseMe({ actor: 'x' }), 'admin')).toBe(true)
   })
 })
 

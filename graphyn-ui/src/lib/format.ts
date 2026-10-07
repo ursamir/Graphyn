@@ -324,6 +324,29 @@ export function skipConsecutiveByText<T>(items: T[], textOf: (item: T) => string
   return out
 }
 
+/** Short local HH:MM:SS from PipelineLogger `timestamp` / `time` / `ts`. */
+export function formatLogClock(raw: unknown): string {
+  if (raw == null) return ''
+  const s = String(raw).trim()
+  if (!s) return ''
+  const t = Date.parse(s)
+  if (!Number.isFinite(t)) {
+    // Already a clock fragment ("14:32:01") — pass through.
+    if (/^\d{1,2}:\d{2}(:\d{2})?/.test(s)) return s.length >= 8 ? s.slice(0, 8) : s
+    return ''
+  }
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(new Date(t))
+  } catch {
+    return new Date(t).toISOString().slice(11, 19)
+  }
+}
+
 export function formatCleanupToast(res: unknown): string {
   const o = res && typeof res === 'object' ? (res as Record<string, unknown>) : {}
   const runs = Number(o.runs_deleted ?? 0) || 0

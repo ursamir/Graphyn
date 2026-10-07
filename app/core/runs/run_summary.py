@@ -242,7 +242,10 @@ def _node_data(index: list[dict[str, Any]], node_id: str) -> dict[str, Any] | No
         base = resolve_workspace_path(dp)
         if base is None:
             continue
-        for cand in (base / "data.json", base):
+        from app.core.artifacts.artifact_pack import ROLE_MANIFEST_NAMES
+
+        cands = [base / "data.json", *(base / n for n in ROLE_MANIFEST_NAMES), base]
+        for cand in cands:
             if _isfile(cand):
                 data = _read_json(cand)
                 if isinstance(data, dict):

@@ -3,7 +3,9 @@
  * header, run header / record, audit, Models "Used in").
  *
  * Contract: `GET /api/v1/me` → `{actor, actor_verified, token_mapped,
- * claimed_actor|null, auth_configured, token_map_configured}`. Older API
+ * claimed_actor|null, auth_configured, token_map_configured, kind,
+ * auth_method, user_id, credential_id, roles, approver_roles, permissions,
+ * memberships}` (RBAC fields absent on older APIs). Older API
  * containers answer 404 → `fetchMe()` resolves null and callers hide the
  * verified-identity UI (the browser-local name field keeps working).
  *
@@ -34,6 +36,21 @@ export type MeInfo = {
   claimedActor: string
   authConfigured: boolean
   tokenMapConfigured: boolean
+  /** `user` (console account) | `operator` (shared / named token) | `worker`. */
+  kind: string
+  /** `session` | `api_token` | `legacy_token` | `named_token` | `none` … */
+  authMethod: string
+  userId: string
+  credentialId: string
+  roles: string[]
+  approverRoles: string[]
+  permissions: string[]
+  /** project → owner | builder | approver | viewer */
+  memberships: Record<string, string>
+}
+
+function strList(v: unknown): string[] {
+  return Array.isArray(v) ? v.map(str).filter(Boolean) : []
 }
 
 /** Parse `GET /me`; null when the body is not an object. */
@@ -47,7 +64,42 @@ export function parseMe(raw: unknown): MeInfo | null {
     claimedActor: str(r.claimed_actor),
     authConfigured: r.auth_configured === true,
     tokenMapConfigured: r.token_map_configured === true,
+    kind: str(r.kind),
+    authMethod: str(r.auth_method),
+    userId: str(r.user_id),
+    credentialId: str(r.credential_id),
+    roles: strList(r.roles),
+    approverRoles: strList(r.approver_roles),
+    permissions: strList(r.permissions),
+    memberships: Object.fromEntries(
+      Object.entries(asRec(r.memberships) ?? {}).map(([k, v]) => [k, str(v)] as const).filter(([, v]) => v),
+    ),
   }
+}
+
+/**
+ * True when `me` holds `perm` (globally or, with `project`, via membership).
+ * Older APIs without a permissions list → true (the server still enforces).
+ */
+export function hasPermission(me: MeInfo | null, perm: string, project?: string): boolean {
+  if (!me || me.permissions.length === 0) return true
+  if (me.permissions.includes('admin') || me.permissions.includes(perm)) return true
+  if (project && me.memberships[project]) {
+    const role = me.memberships[project]
+    const grants: Record<string, string[]> = {
+      owner: ['read', 'pipelines.write', 'runs.execute', 'approve', 'project.members'],
+      builder: ['read', 'pipelines.write', 'runs.execute'],
+      approver: ['read', 'approve'],
+      viewer: ['read'],
+    }
+    return (grants[role] ?? []).includes(perm)
+  }
+  return false
+}
+
+/** Signed in with a console user account (session or personal API token). */
+export function isUserAccount(me: MeInfo | null): boolean {
+  return me?.kind === 'user'
 }
 
 const GENERIC_ACTORS = new Set(['', 'unidentified', 'api', 'anonymous', 'unknown', 'none', 'null'])

@@ -187,27 +187,32 @@ Env knobs (read live; lab defaults keep Mode B working without them):
 | `GRAPHYN_API_TOKENS` / `_FILE` | empty | Named tokens; optional `kind=worker` + `worker_id` binding (see §1) |
 | `GRAPHYN_WORKER_TRUST_REQUIRED` | unset | When `1` **and** `auth_required()`, untrusted workers cannot claim |
 | `GRAPHYN_WORKER_REQUIRE_PLUGIN_ADVERTISE` | unset | When `1`, empty `plugins` advertisement cannot claim (fail closed) |
-| `GRAPHYN_BLOB_SIGNING_KEY` | falls back to `GRAPHYN_API_TOKEN` | HMAC secret for short-lived blob GET URLs |
-| `GRAPHYN_BLOB_URL_TTL_S` | `300` | Signed blob URL TTL (seconds) |
+| `GRAPHYN_BLOB_SIGNING_KEY` | unset | HMAC secret for short-lived blob GET URLs. Control plane only — no fallback to the API token; unset = signed URLs disabled |
+| `GRAPHYN_BLOB_URL_TTL_S` | `300` | Signed blob URL TTL (seconds), capped at 3600 |
+| `GRAPHYN_WORKER_TOKEN` | unset | Worker-side bearer (preferred over `GRAPHYN_API_TOKEN` on workers) |
+| `GRAPHYN_WORKER_UNBOUND_TOKENS` | unset | `1` = allow `kind=worker` tokens without a `worker_id` binding (lab only; fail closed otherwise unless mTLS supplies the id) |
 | `GRAPHYN_HTTP_EGRESS_MODE` | `trusted` | Set `restricted` on Mode B compose (api↔worker allowlist) |
 | `GRAPHYN_BLOB_ENCRYPTION_KEY` | unset | urlsafe-b64 32-byte key; encrypts blob files at rest (plaintext sha256 keys). Unset = plaintext |
+| `GRAPHYN_BLOB_ENCRYPTION_OLD_KEYS` | unset | Comma-separated retired keys, still tried for decrypt during rotation |
 | `GRAPHYN_POOL_MAX_CLAIMED` | unset | JSON `{"gpu-lab":2}` or `gpu-lab=2,cpu=4` concurrent claimed/running caps per pool |
 | `GRAPHYN_MTLS_ENABLED` | unset | `1` = require client certs (fail closed). Default HTTP when unset |
 | `GRAPHYN_MTLS_CA_CERT` / `_CERT` / `_KEY` | unset | Control CA + server cert/key PEMs |
 | `GRAPHYN_MTLS_CLIENT_CERT` / `_CLIENT_KEY` | unset | Worker client cert/key PEMs |
-| `GRAPHYN_WORKER_SPOOL` | `1` | Offline store-and-forward under `{GRAPHYN_HOME}/worker_spool/` |
+| `GRAPHYN_WORKER_SPOOL` | `1` | Offline store-and-forward under `{GRAPHYN_HOME}/worker_spool/<worker_id>/` |
 
 Controls:
 
-* **Per-worker plugin ACL** — `allowed_plugins` / `plugin_hashes` (pins) / `trusted` on `WorkerInfo`; admin `PATCH /workers/{id}`; claim intersects advertised ∩ allowlist and checks content hash pins.
-* **Blob GET** — operator token, OR worker holding the job-scoped claim, OR valid `exp`+`sig` HMAC URL (`mint_signed_blob_url` / `GET …/artifacts/blob/{key}?exp=&sig=`).
+* **Worker token scope** — a worker identity (worker token or mTLS cert) may only call the worker protocol (`worker_scope_allows`: register / heartbeat / claim / job GET+events+complete / blob PUT+GET); every other `/api/` route is 403. MCP rejects worker tokens (`forbidden`). An operator token keeps operator rights even when a client cert is presented.
+* **Per-worker plugin ACL** — `allowed_plugins` / `plugin_hashes` (pins) / `trusted` / `max_claimed` / `usage_*` on `WorkerInfo` are admin-only: `PATCH /workers/{id}` sets them, and self-registration cannot (existing values always win; a new worker is trusted only when `GRAPHYN_WORKER_TRUST_REQUIRED` is off). Claim intersects advertised ∩ allowlist and checks content hash pins. `plugin_hashes` is hidden from non-operator `GET /workers`.
+* **Job ACL** — `GET /jobs/{id}` and job events are limited to the claiming worker; events need a claimed/running job (409 otherwise).
+* **Blob GET** — operator token; OR a worker fetching an input blob / `blob_grants` key of a job it holds, or an output key of its own job; OR a valid `exp`+`sig` HMAC URL (`mint_signed_blob_url` / `GET …/artifacts/blob/{key}?exp=&sig=`). Workers refuse absolute blob URLs outside the control origin, so the bearer never leaves the control plane.
 * **Remote config** — `assert_remote_config_safe` strips/forbids inline secrets before enqueue (refs only: `*_env`, `secret_name`, `connection_id`).
 * **Event redaction** — control redacts secret-shaped keys / bearer / webhook URLs on `events` and `complete` before persistence.
 * **Audit** — `worker.register|deregister|trust`, `job.claim|complete|cancel`, `blob.put|get` (metadata only; never raw bytes).
-* **mTLS (WAVE-2)** — `scripts/gen_modeb_mtls_certs.sh` + `python -m app.api.mtls_serve`; cert CN / URI SAN `urn:graphyn:worker:{id}` binds worker identity (AND/OR worker token). HTTP remains default when disabled.
-* **Blob encrypt-at-rest (WAVE-2)** — content-address by plaintext sha256; on-disk GBE1 envelope when `GRAPHYN_BLOB_ENCRYPTION_KEY` set.
+* **mTLS (WAVE-2)** — `scripts/gen_modeb_mtls_certs.sh` + `python -m app.api.mtls_serve` (h11 with SSL) or the `docker-compose.modeb-mtls.yml` overlay; cert CN / URI SAN `urn:graphyn:worker:{id}` (full match) binds worker identity (AND/OR worker token). When enabled, worker protocol mutations without a client cert get 403 and workers refuse an `http://` control URL. The `X-Graphyn-Mtls-Worker-Id` test header never counts as a verified identity and is ignored when `GRAPHYN_ENV` is production / prod / staging. HTTP remains default when disabled.
+* **Blob encrypt-at-rest (WAVE-2)** — content-address by plaintext sha256; on-disk GBE2 envelope (`magic‖key_id‖nonce‖AES-256-GCM`, HKDF-derived key, AAD = magic + key id) when `GRAPHYN_BLOB_ENCRYPTION_KEY` set. Legacy GBE1 blobs still decrypt; rotate via `GRAPHYN_BLOB_ENCRYPTION_OLD_KEYS`.
 * **Pool / worker quotas (WAVE-2)** — `GRAPHYN_POOL_MAX_CLAIMED` + `WorkerInfo.max_claimed` (admin PATCH); usage counters on `GET /workers`.
-* **Worker spool (WAVE-2)** — when control is unreachable, complete/blob/events spool and flush on reconnect (lease_generation fencing drops stale items).
+* **Worker spool (WAVE-2)** — when control is unreachable, `complete` results spool (per-worker dir, atomic writes) and flush before re-register; spooled job ids stay in heartbeat `active_job_ids`. lease_generation fencing drops stale items. Blob/event spooling is not wired yet (`MODEB-SPOOL-PARTIAL-1`).
 
 Skipped (not shipped): TPM/SGX hardware attestation (no hardware API — plugin hash pins are the software attestation), multi-tenant org/SaaS tables.
 

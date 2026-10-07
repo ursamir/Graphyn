@@ -590,8 +590,21 @@ export default function App() {
       const status = err instanceof ApiError ? err.status : null
       setBootError(message, status)
       if (err instanceof ApiError && err.status === 401) {
-        setTokenDraft(getApiToken())
-        setSettingsOpen(true)
+        // With console accounts, a 401 means "sign in"; otherwise paste a token.
+        let usersConfigured = false
+        try {
+          const st = await apiJson<{ users_configured?: boolean }>('/system/auth-status', { skipAuth: true, retries: 0 })
+          usersConfigured = st?.users_configured === true
+        } catch {
+          /* optional */
+        }
+        if (usersConfigured && !window.location.pathname.startsWith('/login')) {
+          const here = `${window.location.pathname}${window.location.search}`
+          navigatePath(`/login?returnTo=${encodeURIComponent(here)}`)
+        } else {
+          setTokenDraft(getApiToken())
+          setSettingsOpen(true)
+        }
       }
     }
     try {

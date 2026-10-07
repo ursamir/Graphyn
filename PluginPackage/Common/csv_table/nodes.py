@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal
 from pydantic import Field
 
+from app.models.artifact_ref import ArtifactRef
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata

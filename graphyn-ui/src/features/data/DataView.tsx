@@ -41,6 +41,7 @@ import {
 } from '../../lib/format'
 import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 import { paths } from '../../routes/paths'
+import { safeDecode } from '../../routes/parsePath'
 import { naturalCompare } from '../../lib/naturalSort'
 
 interface OutputProject {
@@ -176,7 +177,7 @@ function parseDataLocation(): {
   const parts = window.location.pathname.replace(/\/+$/, '').split('/').filter(Boolean)
   let projectFromPath: string | undefined
   if (parts[0] === 'workspaces' && parts[1] && parts[2] === 'datasets') {
-    projectFromPath = decodeURIComponent(parts[1])
+    projectFromPath = safeDecode(parts[1])
   }
   const modeRaw = (params.get('mode') || '').trim()
   const mode = (['outputs', 'inputs', 'ingest', 'merge'] as const).includes(modeRaw as DataMode)
@@ -301,8 +302,14 @@ export default function DataView() {
   const [outputTruncated, setOutputTruncated] = React.useState(false)
   const [outputDatasetFiles, setOutputDatasetFiles] = React.useState<Array<Record<string, unknown>>>([])
   const [outputProvenance, setOutputProvenance] = React.useState<string | null>(null)
-  const [splitFilter, setSplitFilter] = React.useState('')
-  const [libraryOpen, setLibraryOpen] = React.useState(false)
+  /** Split filter is scoped to the selection it was picked on, so a new
+   *  version starts unfiltered in the same render (no filtered-then-unfiltered fetch pair). */
+  const splitScope = `${mode}|${project}/${version}`
+  const [splitState, setSplitState] = React.useState({ scope: '', value: '' })
+  const splitFilter = splitState.scope === splitScope ? splitState.value : ''
+  const setSplitFilter = (value: string) => setSplitState({ scope: splitScope, value })
+  /** null = follow auto-open (selection elsewhere / filter / no own versions); a user toggle wins. */
+  const [libraryOpen, setLibraryOpen] = React.useState<boolean | null>(null)
   const [loadingMoreOutputs, setLoadingMoreOutputs] = React.useState(false)
   const skippedOutputKey = React.useRef<string | null>(null)
   /** Input labels that failed with invalid-path — do not auto-reselect after clear. */
@@ -315,6 +322,7 @@ export default function DataView() {
   /** Catalogue snapshot for detail effect without re-fetching on every outputs reload. */
   const outputsRef = React.useRef(outputs)
   outputsRef.current = outputs
+  const outputsLoaded = outputs.length > 0
   /** In-memory Outputs detail pages keyed by project/version. */
   const outputDetailCacheRef = React.useRef(new Map<string, OutputDetailCache>())
   const lastDetailEpochRef = React.useRef(0)
@@ -621,6 +629,11 @@ export default function DataView() {
         }
         setError(null)
         setErrorDetail(null)
+        // Never show (or "Load more" against) the previous selection's rows.
+        setRows([])
+        setStats(null)
+        setOutputFileCount(0)
+        setOutputTruncated(false)
         try {
           const path = outputVersionPath(project, version)
           const [data, st] = await Promise.all([
@@ -716,18 +729,19 @@ export default function DataView() {
     return () => {
       cancelled = true
     }
-  }, [mode, project, version, label, splitFilter, loadSources, detailEpoch, invalidateOutputDetail])
+    // outputsLoaded: re-check the selection once the catalogue arrives (outputsRef is read, not subscribed).
+  }, [mode, project, version, label, splitFilter, loadSources, detailEpoch, invalidateOutputDetail, outputsLoaded])
 
-  React.useEffect(() => {
-    setSplitFilter('')
-  }, [mode, project, version])
-
+  const selectionKeyRef = React.useRef('')
+  selectionKeyRef.current = `${project}/${version}#${splitFilter}`
   const loadMoreOutputs = async () => {
     if (!project || !version || loadingMoreOutputs) return
     const cacheKey = `${project}/${version}#${splitFilter}`
+    // Only page a selection whose first page is loaded (cache entry = its rows).
     const cached = outputDetailCacheRef.current.get(cacheKey)
-    const offset = cached?.nextOffset ?? rows.length
-    if (!cached?.truncated && offset >= (cached?.fileCount ?? outputFileCount)) return
+    if (!cached) return
+    const offset = cached.nextOffset
+    if (!cached.truncated && offset >= cached.fileCount) return
     setLoadingMoreOutputs(true)
     try {
       const data = await apiJson<Record<string, unknown>>(outputVersionPath(project, version), {
@@ -736,17 +750,17 @@ export default function DataView() {
       const pageRows = normalizeDatasetRows(data, { project, version })
       const fileCount = typeof data.file_count === 'number' ? data.file_count : offset + pageRows.length
       const truncated = Boolean(data.truncated)
-      const nextRows = [...(cached?.rows ?? rows), ...pageRows]
+      const nextRows = [...cached.rows, ...pageRows]
       const entry: OutputDetailCache = {
+        ...cached,
         rows: nextRows,
-        stats: cached?.stats ?? stats,
         fileCount,
         truncated,
         nextOffset: offset + pageRows.length,
-        datasetFiles: cached?.datasetFiles ?? outputDatasetFiles,
-        provenance: cached?.provenance ?? outputProvenance,
       }
       outputDetailCacheRef.current.set(cacheKey, entry)
+      // Selection changed while the page was in flight: cache it, don't paint it.
+      if (selectionKeyRef.current !== cacheKey) return
       setRows(nextRows)
       setOutputFileCount(fileCount)
       setOutputTruncated(truncated)
@@ -1238,15 +1252,23 @@ export default function DataView() {
     const total = typeof s.total === 'number' ? s.total : null
     return { totals, classes: classes.size, total }
   }, [mode, stats])
-  /** Whole-version file count — `outputFileCount` narrows to the chosen split. */
-  const versionFileCount = splitFilter ? (outputSummary?.total ?? outputFileCount) : outputFileCount
+  /** Whole-version file count — `outputFileCount` narrows to the chosen split, so
+   *  under a filter use the unfiltered listing's count (same unit), else /stats. */
+  const versionFileCount: number | null = splitFilter
+    ? (outputDetailCacheRef.current.get(`${project}/${version}#`)?.fileCount ?? outputSummary?.total ?? null)
+    : outputFileCount
   const splitTotals = outputSummary?.totals ?? new Map<string, number>()
   /** Split chips: whole-version splits from /stats, else those seen in loaded rows. */
   const splitOptions = React.useMemo(() => {
     const names = new Set<string>(splitTotals.keys())
     for (const r of rows) if (typeof r.split === 'string' && r.split) names.add(r.split)
+    // Unfiltered first page (cached) knows every split even when /stats failed.
+    for (const r of outputDetailCacheRef.current.get(`${project}/${version}#`)?.rows ?? []) {
+      if (typeof r.split === 'string' && r.split) names.add(r.split)
+    }
+    if (splitFilter) names.add(splitFilter)
     return [...names].sort((a, b) => splitRank(a) - splitRank(b) || a.localeCompare(b))
-  }, [rows, splitTotals])
+  }, [rows, splitTotals, project, version, splitFilter])
   const filteredRows = React.useMemo(
     () =>
       rows.filter((r) =>
@@ -1855,8 +1877,13 @@ export default function DataView() {
                         ) : null}
                         {others.length > 0 ? (
                           <details
-                            open={libraryOpen || selectedElsewhere || !!listFilter.trim() || mine.length === 0}
-                            onToggle={(e) => setLibraryOpen((e.currentTarget as HTMLDetailsElement).open)}
+                            open={libraryOpen ?? (selectedElsewhere || !!listFilter.trim() || mine.length === 0)}
+                            onToggle={(e) => {
+                              const next = (e.currentTarget as HTMLDetailsElement).open
+                              const auto = libraryOpen ?? (selectedElsewhere || !!listFilter.trim() || mine.length === 0)
+                              // Ignore toggle events echoing the controlled `open` prop.
+                              if (next !== auto) setLibraryOpen(next)
+                            }}
                           >
                             <summary className="cursor-pointer select-none py-1 text-[12px] font-medium text-ink-600 hover:text-ink-900">
                               Also in the library ({others.length})
@@ -2230,8 +2257,8 @@ export default function DataView() {
                           aria-label="Version summary"
                         >
                           <span>
-                            <span className="font-medium text-ink-800">{versionFileCount.toLocaleString()}</span>
-                            {` file${versionFileCount === 1 ? '' : 's'}`}
+                            <span className="font-medium text-ink-800">{(versionFileCount ?? outputFileCount).toLocaleString()}</span>
+                            {` file${(versionFileCount ?? outputFileCount) === 1 ? '' : 's'}`}
                             {outputSummary.classes > 0 ? (
                               <>
                                 {' · '}
@@ -2377,9 +2404,10 @@ export default function DataView() {
             />
           ) : (
             <div className="space-y-2">
-              {mode === 'outputs' && (splitOptions.length > 1 || outputDatasetFiles.length > 0) ? (
+              {mode === 'outputs' && (splitOptions.length > 1 || splitFilter || outputDatasetFiles.length > 0) ? (
                 <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
-                  {splitOptions.length > 1 ? (
+                  {/* Keep chips while filtered: the "All" chip is the only way back. */}
+                  {splitOptions.length > 1 || splitFilter ? (
                     <>
                       {[['', 'All'] as const, ...splitOptions.map((s) => [s, s] as const)].map(([value, text]) => {
                         const n = value ? splitTotals.get(value) : versionFileCount

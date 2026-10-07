@@ -197,6 +197,15 @@ def list_runs(
     ensure_store_readable()
     # Shared lister (app.core.runs.run_listing): created_at desc + run_id tiebreak,
     # per-entry error isolation — same order as MCP list_runs / CLI runs list.
+    from app.core.trust.identity import current_identity
+    from app.core.trust.rbac import visible_projects_filter
+
+    visible = visible_projects_filter(current_identity())
+    if visible is not None and not project:
+        # Members see runs of their projects only; scan a bounded window and page after filtering.
+        wide = _list_runs(_get_runs_root(), limit=min(500, offset + limit) * 4, offset=0, include_archived=include_archived)
+        rows = [(e, m) for e, m in wide.rows if visible((m or {}).get("project"))][offset : offset + limit]
+        return [_with_results(_enrich_run_summary(meta, entry), entry, include_regression=False) for entry, meta in rows]
     page = _list_runs(
         _get_runs_root(), limit=limit, offset=offset, project=project,
         include_archived=include_archived,

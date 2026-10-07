@@ -6,6 +6,7 @@ Responsibility:   Discover human-approval gates (``hitl_approve`` nodes) of a
                   the out-of-band decision file
                   ``{decision_dir}/{run_id}__{gate_id}.decision.json``.
 Owns:             GateError, list_gates(), pending_gates(), decide_gate(),
+                  gate_approver_roles(),
                   awaiting_approval_overlay(), HITL_NODE_TYPE.
 Public Surface:   The functions above.
 Must NOT:         Import app.api / app.domain or plugin modules (the file
@@ -171,7 +172,8 @@ def _gate_view(node: dict[str, Any], run_id: str, now: datetime) -> dict[str, An
 
 def _public_decision(decision: dict[str, Any]) -> dict[str, Any]:
     return {k: decision.get(k) for k in (
-        "approved", "approver", "role", "decided_at", "actor_verified", "source", "comment_sha256",
+        "approved", "approver", "role", "decided_at", "actor_verified", "role_verified", "user_id",
+        "source", "comment_sha256",
     )}
 
 
@@ -213,6 +215,16 @@ def awaiting_approval_overlay(run_dir: Path | str, status: str) -> dict[str, Any
     }
 
 
+def gate_approver_roles(run_dir: Path | str, node_id: str) -> list[str]:
+    """``approver_roles`` configured on one gate node (empty when unknown)."""
+    try:
+        node = next((n for n in _gate_nodes(_load_graph(Path(run_dir))) if n.get("id") == node_id), None)
+    except Exception:
+        return []
+    cfg = (node or {}).get("config") if isinstance((node or {}).get("config"), dict) else {}
+    return [str(r) for r in (cfg.get("approver_roles") or [])]
+
+
 def decide_gate(
     run_dir: Path | str,
     node_id: str,
@@ -224,6 +236,9 @@ def decide_gate(
     role: str | None = None,
     source: str = "api",
     claimed_actor: str | None = None,
+    role_verified: bool = False,
+    user_id: str | None = None,
+    credential_id: str | None = None,
 ) -> dict[str, Any]:
     """Write the decision file for a pending gate (create-only, atomic).
 
@@ -268,6 +283,9 @@ def decide_gate(
         "reason": text,
         "decided_at": datetime.now(timezone.utc).isoformat(),
         "actor_verified": bool(actor_verified),
+        "role_verified": bool(role_verified),
+        "user_id": user_id,
+        "credential_id": credential_id,
         "source": source,
         "comment_sha256": comment_sha,
     }
@@ -303,6 +321,7 @@ def decide_gate(
                 "gate_id": gate["gate_id"],
                 "decision": verdict,
                 "role": role or None,
+                "role_verified": bool(role_verified),
                 "comment_sha256": comment_sha,
                 "request_id": gate["request_id"],
                 "source": source,

@@ -2,11 +2,14 @@
 """
 Bounded Context:  BC6 — Observability & Storage
 Responsibility:   Thin append-only audit event log for accountability mutations.
-Owns:             record_audit(), list_audit(), audit_path helpers, the
+Owns:             record_audit() (hash-chained: prev_hash / event_hash),
+                  verify_audit_chain(), list_audit(), audit_path helpers, the
                   action → label / category table (audit_label, audit_category).
 Public Surface:   record_audit(..., actor_verified, claimed_actor),
                   list_audit(limit, offset, resource_id, run_id, action, q,
-                  with_total, category, exclude_category),
+                  with_total, category, exclude_category, actor, user_id,
+                  credential_id, worker_id, since, until),
+                  verify_audit_chain(),
                   normalize_audit_event, audit_label, audit_category,
                   AUDIT_CATEGORIES.
 Must NOT:         Import from app.api or execution orchestrators.
@@ -21,8 +24,10 @@ claimed_actor (X-Actor / body actor when it differs), origin (http | internal).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -92,7 +97,23 @@ _ACTION_LABELS: dict[str, str] = {
     "notifications.mark_read": "Notifications marked read",
     "system.cleanup": "Workspace cleaned up",
     "ops.shutdown_drain": "Server shutdown",
-        "worker.register": "Worker registered",
+    "auth.login": "Signed in",
+    "auth.logout": "Signed out",
+    "user.create": "User created",
+    "user.update": "User updated",
+    "user.password_change": "Password changed",
+    "token.create": "API token created",
+    "token.revoke": "Token revoked",
+    "project.member_set": "Project member set",
+    "project.member_remove": "Project member removed",
+    "worker.join_token_create": "Worker join token created",
+    "worker.join_token_revoke": "Worker join token revoked",
+    "worker.join": "Worker joined",
+    "worker.join_denied": "Worker join refused",
+    "audit.export": "Audit log exported",
+    "worker.credential_rotate": "Worker credential rotated",
+    "worker.credential_revoke": "Worker credential revoked",
+    "worker.register": "Worker registered",
     "worker.deregister": "Worker deregistered",
     "worker.trust": "Worker trust changed",
     "worker.patch": "Worker ACL updated",
@@ -184,9 +205,24 @@ _CATEGORY_BY_PREFIX: dict[str, str] = {
     "workspace": "admin",
     "hook": "admin",
     "gate": "run",
+    "auth": "admin",
+    "user": "admin",
+    "token": "admin",
+    "project": "admin",
+    "join_token": "admin",
+    "audit": "admin",
 }
+# Security-relevant worker events stay visible under Admin.
+_WORKER_ADMIN_ACTIONS = (
+    "worker.join_token_create",
+    "worker.join_token_revoke",
+    "worker.join",
+    "worker.join_denied",
+    "worker.credential_rotate",
+    "worker.credential_revoke",
+)
 # Exact overrides (automatic / machine events).
-_CATEGORY_EXACT: dict[str, str] = {"schedule.tick": "system"}
+_CATEGORY_EXACT: dict[str, str] = {"schedule.tick": "system", **{a: "admin" for a in _WORKER_ADMIN_ACTIONS}}
 
 
 def audit_action_name(ev: dict[str, Any]) -> str:
@@ -269,6 +305,92 @@ def _bind_identity(
         return str(actor or "").strip()[:128] or "system", bool(verified), claimed, "internal"
 
 
+def _principal() -> dict[str, Any] | None:
+    """Who authenticated the current request: user / credential / role / worker / join token."""
+    try:
+        from app.core.trust.identity import principal_snapshot
+
+        return principal_snapshot()
+    except Exception:
+        return None
+
+
+def _flock(fh: Any) -> None:
+    """Cross-process append lock (released when ``fh`` closes)."""
+    try:
+        import fcntl
+
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    except Exception:
+        pass
+
+
+def _event_hash(event: dict[str, Any]) -> str:
+    body = {k: v for k, v in event.items() if k != "event_hash"}
+    raw = json.dumps(body, sort_keys=True, ensure_ascii=False, default=str, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _last_event_hash(path: Path) -> str | None:
+    """``event_hash`` of the last line (None for an empty / legacy tail)."""
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            if size == 0:
+                return None
+            back = min(size, 256 * 1024)
+            fh.seek(size - back)
+            tail = fh.read().splitlines()
+    except OSError:
+        return None
+    for raw in reversed(tail):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            return json.loads(raw.decode("utf-8")).get("event_hash")
+        except Exception:
+            return None
+    return None
+
+
+def verify_audit_chain(base_dir: str | Path | None = None) -> dict[str, Any]:
+    """Re-hash every chained event; report the first break (edit / delete / insert)."""
+    path = audit_events_path(base_dir)
+    checked = legacy = 0
+    prev: str | None = None
+    started = False
+    if not path.exists():
+        return {"ok": True, "checked": 0, "legacy_unchained": 0, "first_break": None}
+    with path.open("r", encoding="utf-8") as fh:
+        for lineno, line in enumerate(fh, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except Exception:
+                return {"ok": False, "checked": checked, "legacy_unchained": legacy,
+                        "first_break": {"line": lineno, "reason": "unparseable line"}}
+            if "event_hash" not in ev:
+                if started:
+                    return {"ok": False, "checked": checked, "legacy_unchained": legacy,
+                            "first_break": {"line": lineno, "reason": "unchained event after chain start"}}
+                legacy += 1
+                continue
+            if started and ev.get("prev_hash") != prev:
+                return {"ok": False, "checked": checked, "legacy_unchained": legacy,
+                        "first_break": {"line": lineno, "event_id": ev.get("event_id"), "reason": "prev_hash mismatch"}}
+            if _event_hash(ev) != ev.get("event_hash"):
+                return {"ok": False, "checked": checked, "legacy_unchained": legacy,
+                        "first_break": {"line": lineno, "event_id": ev.get("event_id"), "reason": "event_hash mismatch"}}
+            started = True
+            prev = ev["event_hash"]
+            checked += 1
+    return {"ok": True, "checked": checked, "legacy_unchained": legacy, "first_break": None, "head": prev}
+
+
 def record_audit(
     actor: str,
     action: str,
@@ -327,13 +449,23 @@ def record_audit(
         "metadata": meta_obj,
         "meta": meta_obj,  # legacy alias
     }
+    principal = _principal()
+    if principal:
+        event["principal"] = principal
+        if principal.get("kind") == "worker" and not actor_kind:
+            event["actor_kind"] = "worker"
+        elif principal.get("kind") == "user" and not actor_kind:
+            event["actor_kind"] = "user"
     try:
         path = audit_events_path(base_dir)
         path.parent.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(event, ensure_ascii=False, default=str) + "\n"
         with _lock:
-            with path.open("a", encoding="utf-8") as fh:
-                fh.write(line)
+            with path.open("a+", encoding="utf-8") as fh:
+                _flock(fh)
+                event["prev_hash"] = _last_event_hash(path)
+                event["event_hash"] = _event_hash(event)
+                fh.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+                fh.flush()
     except Exception as exc:
         logger.warning("record_audit failed (%s): %s", action, exc)
     return event
@@ -351,6 +483,13 @@ def list_audit(
     with_total: bool = False,
     category: str | None = None,
     exclude_category: str | None = None,
+    actor: str | None = None,
+    user_id: str | None = None,
+    credential_id: str | None = None,
+    worker_id: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    max_limit: int = 1000,
 ) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], int]:
     """Return audit events (newest first) after filters, paged by offset/limit.
 
@@ -361,8 +500,11 @@ def list_audit(
     reaches beyond the newest 1000 events. ``with_total`` returns
     ``(events, total_matched)``. ``category`` / ``exclude_category`` are
     comma lists over :func:`audit_category` (e.g. ``exclude_category="ui,system"``).
+    ``actor`` (case-insensitive exact), ``user_id`` / ``credential_id`` /
+    ``worker_id`` (principal block), ``since`` / ``until`` (ISO timestamps,
+    inclusive) narrow to one person / credential / machine / window.
     """
-    limit = max(1, min(int(limit or 100), 1000))
+    limit = max(1, min(int(limit or 100), max(1, int(max_limit))))
     offset = max(0, int(offset or 0))
     path = audit_events_path(base_dir)
     if not path.exists():
@@ -379,8 +521,36 @@ def list_audit(
     act = (action or "").strip()
     cats = _csv_set(category)
     no_cats = _csv_set(exclude_category)
+    who = (actor or "").strip().lower()
+    t_from = (since or "").strip()
+    t_to = (until or "").strip()
+
+    def _principal_match(ev: dict[str, Any]) -> bool:
+        pr = ev.get("principal") if isinstance(ev.get("principal"), dict) else {}
+        if user_id and pr.get("user_id") != user_id:
+            return False
+        if credential_id and pr.get("credential_id") != credential_id:
+            return False
+        if worker_id:
+            meta = ev.get("metadata") or ev.get("meta") or {}
+            ids = {pr.get("worker_id"), pr.get("mtls_worker_id"), (meta or {}).get("worker_id")}
+            if ev.get("resource_type") == "worker":
+                ids.add(ev.get("resource_id"))
+            if worker_id not in ids:
+                return False
+        return True
 
     def _match(ev: dict[str, Any], raw: str) -> bool:
+        if who and str(ev.get("actor") or "").lower() != who:
+            return False
+        if (user_id or credential_id or worker_id) and not _principal_match(ev):
+            return False
+        if t_from or t_to:
+            ts = str(ev.get("timestamp") or ev.get("ts") or "")
+            if t_from and ts < t_from:
+                return False
+            if t_to and ts > t_to:
+                return False
         if cats or no_cats:
             cat = audit_category(audit_action_name(ev))
             if cats and cat not in cats:

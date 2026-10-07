@@ -12,10 +12,8 @@ Reason To Change: On-disk layout or manifest schema evolves.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -29,44 +27,37 @@ DEPLOYMENT_MANIFEST = "deployment_artifact_manifest.json"
 TFLITE_MANIFEST = "tflite_artifact_manifest.json"
 
 
-def _copy_refs_to_files(refs: list[Any], files_dir: Path) -> list[dict[str, Any]]:
-    from app.core.artifacts.artifact_pack import pack_path_bytes
+def _copy_roles(art: Any, files_dir: Path) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Copy role files; return ``(wire_refs, path_map)``."""
+    from app.core.artifacts.artifact_pack import build_path_map, collect_path_bearing_roles, copy_refs_to_dir
+
+    wire_refs, src_to_rel = copy_refs_to_dir(collect_path_bearing_roles(art), files_dir)
+    return wire_refs, build_path_map(art, src_to_rel)
+
+
+def _load_refs(meta: dict[str, Any]) -> list[Any]:
     from app.models.artifact_ref import ArtifactRef
 
-    files_dir.mkdir(parents=True, exist_ok=True)
-    wire_refs: list[dict[str, Any]] = []
-    for ref in refs:
-        src = str(getattr(ref, "source_path", "") or "")
-        if not src or not Path(src).exists():
-            wire_refs.append(ref.model_dump() if hasattr(ref, "model_dump") else dict(ref))
+    refs = []
+    for raw in meta.get("refs") or []:
+        try:
+            refs.append(ArtifactRef.model_validate(raw).model_copy(update={"source_path": ""}))
+        except Exception:
             continue
-        rel = (ref.relative_path or ref.filename or ref.role or "artifact").replace("\\", "/")
-        dest = files_dir / rel
-        if Path(src).is_dir():
-            if dest.exists():
-                shutil.rmtree(dest, ignore_errors=True)
-            shutil.copytree(src, dest)
-            kind = "dir"
-        else:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest)
-            kind = "file"
-        blob, _ = pack_path_bytes(Path(src))
-        digest = hashlib.sha256(blob).hexdigest()
-        wire_refs.append(
-            ArtifactRef(
-                logical_id=digest,
-                role=ref.role,
-                sha256=digest,
-                uri="",
-                media_type=ref.media_type,
-                filename=ref.filename or Path(src).name,
-                kind=kind,  # type: ignore[arg-type]
-                relative_path=rel,
-                source_path="",
-            ).model_dump()
-        )
-    return wire_refs
+    return refs
+
+
+def _hash_input(data: Any, scalar_fields: tuple[str, ...]) -> str:
+    from app.core.artifacts.artifact_pack import content_digests, path_field_items
+
+    path_keys = set(path_field_items(data))
+    payload: dict[str, Any] = {f: getattr(data, f, None) for f in scalar_fields}
+    for dict_field in ("metrics", "metadata"):
+        d = getattr(data, dict_field, None)
+        if isinstance(d, dict):
+            payload[dict_field] = {k: v for k, v in d.items() if f"{dict_field}.{k}" not in path_keys}
+    payload["content"] = content_digests(data)
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _list_files(src_dir: Path) -> FileListing | None:
@@ -88,7 +79,6 @@ class DeploymentArtifactHandler:
     """Serialize DeploymentArtifact metadata + role files for run-artifact storage."""
 
     def serialize(self, data: Any, dest_dir: Path) -> None:
-        from app.core.artifacts.artifact_pack import collect_path_bearing_roles
         from app.models.deployment_artifact import DeploymentArtifact
 
         if isinstance(data, DeploymentArtifact):
@@ -98,12 +88,13 @@ class DeploymentArtifactHandler:
         else:
             raise TypeError(f"DeploymentArtifactHandler expected DeploymentArtifact, got {type(data)!r}")
 
+        from app.core.artifacts.artifact_pack import without_copied_paths
+
         dest_dir.mkdir(parents=True, exist_ok=True)
-        refs = collect_path_bearing_roles(art)
-        wire_refs = _copy_refs_to_files(refs, dest_dir / "files")
+        wire_refs, path_map = _copy_roles(art, dest_dir / "files")
         meta = {
-            "format": "deployment_artifact/v1",
-            "artifact_path": "",
+            "format": "deployment_artifact/v2",
+            "artifact_path": "" if "artifact_path" in path_map else str(art.artifact_path or ""),
             "model_format": art.model_format,
             "target_hardware": art.target_hardware,
             "quantization": art.quantization,
@@ -112,23 +103,13 @@ class DeploymentArtifactHandler:
             "output_shape": list(art.output_shape or []),
             "file_size_bytes": int(art.file_size_bytes or 0),
             "benchmark": art.benchmark,
-            "metadata": {
-                k: v
-                for k, v in dict(art.metadata or {}).items()
-                if not (
-                    isinstance(v, str)
-                    and (
-                        k.endswith("_path")
-                        or k in {"source", "source_model_path", "package_path"}
-                    )
-                )
-            },
+            "metadata": without_copied_paths(dict(art.metadata or {}), "metadata", path_map),
+            "path_map": path_map,
             "refs": wire_refs,
         }
-        (dest_dir / DEPLOYMENT_MANIFEST).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        (dest_dir / DEPLOYMENT_MANIFEST).write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
 
     def deserialize(self, src_dir: Path) -> Any | None:
-        from app.models.artifact_ref import ArtifactRef
         from app.models.deployment_artifact import DeploymentArtifact
 
         path = src_dir / DEPLOYMENT_MANIFEST
@@ -139,23 +120,27 @@ class DeploymentArtifactHandler:
         except Exception as exc:
             logger.warning("deployment_artifact: corrupt manifest at %s (%s)", path, exc)
             return None
+        from app.core.artifacts.artifact_pack import restore_path_map
+
         files_dir = src_dir / "files"
-        refs: list[ArtifactRef] = []
-        artifact_path = ""
+        refs = _load_refs(meta)
+        artifact_path = str(meta.get("artifact_path") or "")
         metadata = dict(meta.get("metadata") or {})
-        for raw in meta.get("refs") or []:
-            try:
-                ref = ArtifactRef.model_validate(raw)
-            except Exception:
-                continue
-            local = files_dir / (ref.relative_path or ref.filename or ref.role)
-            if local.exists():
-                ref = ref.model_copy(update={"source_path": ""})
+        if "path_map" in meta:
+            for field, local in restore_path_map(meta.get("path_map") or {}, files_dir).items():
+                if field == "artifact_path":
+                    artifact_path = local
+                elif field.startswith("metadata."):
+                    metadata[field[len("metadata."):]] = local
+        else:
+            for ref in refs:
+                local = files_dir / (ref.relative_path or ref.filename or ref.role)
+                if not local.exists():
+                    continue
                 if ref.role in {"deployment_bundle", "tflite"} and not artifact_path:
                     artifact_path = str(local)
                 elif ref.role == "labels":
                     metadata["labels_path"] = str(local)
-            refs.append(ref)
         return DeploymentArtifact(
             artifact_path=artifact_path,
             model_format=str(meta.get("model_format") or ""),
@@ -171,25 +156,14 @@ class DeploymentArtifactHandler:
         )
 
     def compute_content_hash_input(self, data: Any) -> str:
-        from app.core.artifacts.artifact_pack import collect_path_bearing_roles
+        from app.models.deployment_artifact import DeploymentArtifact
 
-        payload = data.model_dump() if hasattr(data, "model_dump") else (dict(data) if isinstance(data, dict) else {})
-        refs = collect_path_bearing_roles(data) if not isinstance(data, dict) else data.get("refs") or []
-        digests = []
-        for ref in refs:
-            digest = getattr(ref, "sha256", None) if not isinstance(ref, dict) else ref.get("sha256")
-            role = getattr(ref, "role", None) if not isinstance(ref, dict) else ref.get("role")
-            if digest:
-                digests.append(f"{role}:{digest}")
-        return json.dumps(
-            {
-                "labels": payload.get("labels"),
-                "model_format": payload.get("model_format"),
-                "ref_digests": digests,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
+        if isinstance(data, dict):
+            data = DeploymentArtifact.model_validate(data)
+        return _hash_input(
+            data,
+            ("labels", "model_format", "target_hardware", "quantization", "input_shape",
+             "output_shape", "benchmark"),
         )
 
     def infer_type(self, value: Any) -> str | None:
@@ -208,7 +182,6 @@ class TFLiteArtifactHandler:
     """Serialize TFLiteArtifact metadata + role files for run-artifact storage."""
 
     def serialize(self, data: Any, dest_dir: Path) -> None:
-        from app.core.artifacts.artifact_pack import collect_path_bearing_roles
         from app.models.tflite_artifact import TFLiteArtifact
 
         if isinstance(data, TFLiteArtifact):
@@ -219,20 +192,19 @@ class TFLiteArtifactHandler:
             raise TypeError(f"TFLiteArtifactHandler expected TFLiteArtifact, got {type(data)!r}")
 
         dest_dir.mkdir(parents=True, exist_ok=True)
-        refs = collect_path_bearing_roles(art)
-        wire_refs = _copy_refs_to_files(refs, dest_dir / "files")
+        wire_refs, path_map = _copy_roles(art, dest_dir / "files")
         meta = {
-            "format": "tflite_artifact/v1",
-            "tflite_path": "",
+            "format": "tflite_artifact/v2",
+            "tflite_path": "" if "tflite_path" in path_map else str(art.tflite_path or ""),
             "labels": list(art.labels or []),
             "quantisation": art.quantisation,
             "file_size_bytes": int(art.file_size_bytes or 0),
+            "path_map": path_map,
             "refs": wire_refs,
         }
         (dest_dir / TFLITE_MANIFEST).write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     def deserialize(self, src_dir: Path) -> Any | None:
-        from app.models.artifact_ref import ArtifactRef
         from app.models.tflite_artifact import TFLiteArtifact
 
         path = src_dir / TFLITE_MANIFEST
@@ -243,20 +215,20 @@ class TFLiteArtifactHandler:
         except Exception as exc:
             logger.warning("tflite_artifact: corrupt manifest at %s (%s)", path, exc)
             return None
+        from app.core.artifacts.artifact_pack import restore_path_map
+
         files_dir = src_dir / "files"
-        refs: list[ArtifactRef] = []
-        tflite_path = ""
-        for raw in meta.get("refs") or []:
-            try:
-                ref = ArtifactRef.model_validate(raw)
-            except Exception:
-                continue
-            local = files_dir / (ref.relative_path or ref.filename or ref.role)
-            if local.exists():
-                ref = ref.model_copy(update={"source_path": ""})
-                if ref.role == "tflite":
+        refs = _load_refs(meta)
+        tflite_path = str(meta.get("tflite_path") or "")
+        if "path_map" in meta:
+            tflite_path = restore_path_map(meta.get("path_map") or {}, files_dir).get(
+                "tflite_path", tflite_path
+            )
+        else:
+            for ref in refs:
+                local = files_dir / (ref.relative_path or ref.filename or ref.role)
+                if ref.role == "tflite" and local.exists():
                     tflite_path = str(local)
-            refs.append(ref)
         return TFLiteArtifact(
             tflite_path=tflite_path,
             labels=list(meta.get("labels") or []),
@@ -266,26 +238,11 @@ class TFLiteArtifactHandler:
         )
 
     def compute_content_hash_input(self, data: Any) -> str:
-        from app.core.artifacts.artifact_pack import collect_path_bearing_roles
+        from app.models.tflite_artifact import TFLiteArtifact
 
-        payload = data.model_dump() if hasattr(data, "model_dump") else (dict(data) if isinstance(data, dict) else {})
-        refs = collect_path_bearing_roles(data) if not isinstance(data, dict) else data.get("refs") or []
-        digests = []
-        for ref in refs:
-            digest = getattr(ref, "sha256", None) if not isinstance(ref, dict) else ref.get("sha256")
-            role = getattr(ref, "role", None) if not isinstance(ref, dict) else ref.get("role")
-            if digest:
-                digests.append(f"{role}:{digest}")
-        return json.dumps(
-            {
-                "labels": payload.get("labels"),
-                "quantisation": payload.get("quantisation"),
-                "ref_digests": digests,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
+        if isinstance(data, dict):
+            data = TFLiteArtifact.model_validate(data)
+        return _hash_input(data, ("labels", "quantisation"))
 
     def infer_type(self, value: Any) -> str | None:
         name = type(value).__name__

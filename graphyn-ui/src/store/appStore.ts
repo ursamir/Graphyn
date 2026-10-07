@@ -134,7 +134,8 @@ interface AppState {
   seed: number
   setSeed: (seed: number) => void
   logs: Array<{ message: string; level: string; ts: string; raw?: string }>
-  addLog: (message: string, level?: string, raw?: string) => void
+  /** Optional `ts` / event time; when omitted, parsed from `raw` JSON or wall clock. */
+  addLog: (message: string, level?: string, raw?: string, ts?: string) => void
   clearLogs: () => void
   isRunning: boolean
   setIsRunning: (v: boolean) => void
@@ -181,9 +182,10 @@ interface AppState {
    * Saved pipeline the Editor should open by name (keeps the toolbar's
    * pipeline / Draft·staging·prod link, unlike `loadGraphIntoBuilder`).
    */
-  pendingPipeline: { name: string; env?: 'draft' | 'staging' | 'prod' } | null
+  /** ``workspace`` = the workspace the request was made in; dropped if it changes. */
+  pendingPipeline: { name: string; env?: 'draft' | 'staging' | 'prod'; workspace: string } | null
   openPipelineInEditor: (name: string, env?: 'draft' | 'staging' | 'prod') => void
-  consumePendingPipeline: () => { name: string; env?: 'draft' | 'staging' | 'prod' } | null
+  consumePendingPipeline: () => { name: string; env?: 'draft' | 'staging' | 'prod'; workspace: string } | null
   /** Run the Editor's canvas was opened from (set with the pending graph). */
   editorRunContext: { runId: string; snapshot: boolean } | null
   setEditorRunContext: (ctx: { runId: string; snapshot: boolean } | null) => void
@@ -479,10 +481,25 @@ export const useAppStore = create<AppState>((set, get) => ({
   seed: 42,
   setSeed: (seed) => set({ seed }),
   logs: [],
-  addLog: (message, level = 'info', raw) =>
-    set((s) => ({
-      logs: [...s.logs, { message, level, ts: new Date().toISOString(), raw }].slice(-500),
-    })),
+  addLog: (message, level = 'info', raw, ts) =>
+    set((s) => {
+      let stamp = typeof ts === 'string' && ts.trim() ? ts.trim() : ''
+      if (!stamp && typeof raw === 'string' && raw.trim().startsWith('{')) {
+        try {
+          const ev = JSON.parse(raw) as Record<string, unknown>
+          const fromEv = ev.timestamp ?? ev.time ?? ev.ts
+          if (fromEv != null && String(fromEv).trim()) stamp = String(fromEv).trim()
+        } catch {
+          /* plain text */
+        }
+      }
+      return {
+        logs: [
+          ...s.logs,
+          { message, level, ts: stamp || new Date().toISOString(), raw },
+        ].slice(-500),
+      }
+    }),
   clearLogs: () => set({ logs: [] }),
   isRunning: false,
   setIsRunning: (isRunning) => set({ isRunning }),
@@ -567,8 +584,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   pendingPipeline: null,
   openPipelineInEditor: (name, env) => {
-    navigatePath(paths.editor(get().activeProject || 'workspace'), true)
-    set({ pendingPipeline: { name, env }, view: 'builder' })
+    const workspace = get().activeProject
+    if (!workspace) {
+      get().pushToast(`Open a workspace first to edit pipeline “${name}”.`, 'error')
+      navigatePath(paths.workspaces(), true)
+      return
+    }
+    navigatePath(paths.editor(workspace), true)
+    set({ pendingPipeline: { name, env, workspace }, view: 'builder' })
   },
   consumePendingPipeline: () => {
     const p = get().pendingPipeline

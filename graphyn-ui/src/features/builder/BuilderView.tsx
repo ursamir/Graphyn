@@ -67,6 +67,7 @@ import {
 } from './modelBuilderPresets'
 import {
   exportDestinationHint,
+  legacyIngestPathHint,
   GENERIC_EXPORT_OUTPUT_DIR,
   isRetargetableExportDir,
   stampProjectOnGraph,
@@ -79,7 +80,7 @@ import {
   SegmentedTabs,
   StatusBadge,
 } from '../../components/ui'
-import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, schemaFieldHint, schemaFieldLabel, shortRunId, skipConsecutiveByText } from '../../lib/format'
+import { formatExecutionLine, formatLogClock, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, schemaFieldHint, schemaFieldLabel, shortRunId, skipConsecutiveByText } from '../../lib/format'
 import {
   buildGraphFromCanvas,
   type NodePlacement,
@@ -147,8 +148,10 @@ import { canvasPathView } from './canvasPaths'
 import { journalToLogEntries, relabelLine } from './journalLog'
 import {
   collapseProgressRows,
+  collapseWaitingRows,
   finishedNodeIds,
   formatProgressLine,
+  formatWaitingLine,
   latestProgressByNode,
   parseProgress,
   type NodeProgress,
@@ -390,6 +393,9 @@ function BuilderInner() {
   const [nodeProgress, setNodeProgress] = React.useState<Record<string, NodeProgress>>({})
   /** Run id whose journal currently fills the execution log (hydrated, not streamed). */
   const hydratedRunRef = React.useRef<string | null>(null)
+  /** Run whose NDJSON stream dropped while the server kept running: the lastRunId
+   *  poller follows its journal and reports the final outcome (toast + nodes). */
+  const followJournalRef = React.useRef<string | null>(null)
   /** Set by loadGraph: the next linked-run hydrate may replace the log. */
   const allowHydrateRef = React.useRef(false)
   /** Bumped by loadGraph → fit view + re-check the linked run. */
@@ -701,6 +707,14 @@ function BuilderInner() {
               n.id === node.id
                 ? { ...n, data: { ...n.data, config: { ...n.data.config, [key]: value } } }
                 : n,
+            ),
+          )
+        },
+        onChangeLabel: (next) => {
+          // Allow an empty string while typing; blur restores the type default.
+          setNodes((nds) =>
+            nds.map((n) =>
+              n.id === node.id ? { ...n, data: { ...n.data, label: String(next ?? '') } } : n,
             ),
           )
         },
@@ -1615,7 +1629,13 @@ function BuilderInner() {
   React.useEffect(() => {
     if (!pendingPipeline || !activeProject) return
     const req = useAppStore.getState().consumePendingPipeline()
-    if (req) void openPipelineEnv(req.name, req.env)
+    if (!req) return
+    if (req.workspace !== activeProject) {
+      // Workspace switched before the Editor mounted: the name belongs elsewhere.
+      pushToast(`Did not open “${req.name}”: it was requested in workspace ${req.workspace}.`, 'info')
+      return
+    }
+    void openPipelineEnv(req.name, req.env)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingPipeline, activeProject])
 
@@ -1907,6 +1927,7 @@ function BuilderInner() {
 
     clearLogs()
     hydratedRunRef.current = null
+    followJournalRef.current = null
     allowHydrateRef.current = false
     setNodeProgress({})
     setRunHadErrors(false)
@@ -2086,6 +2107,7 @@ function BuilderInner() {
             }
           } else {
             // Still running on the server: hand off to the lastRunId journal poller.
+            followJournalRef.current = runId
             setServerBadge({ runId, status: 'running' })
             setRunOutcome('running')
             setStatusMessage('Stream lost - following Execution log from the run journal')
@@ -2165,22 +2187,22 @@ function BuilderInner() {
         // running or may have finished — reconcile instead of guessing.
         const msg = err instanceof Error ? err.message : String(err)
         addLog(`Stream error: ${msg} — checking run status`, 'warning')
-        const badge = await reconcileRunFromServer(knownRunId, { isStale: () => !isCurrent() })
+        const badge = await reconcileRunFromServer(knownRunId, {
+          guardCanvas: false,
+          isStale: () => !isCurrent(),
+          hydrateLog: true,
+        })
         if (!isCurrent()) return
         if (isTerminalBadge(badge)) {
           finishOutcome(knownRunId, badge)
           setRunHadErrors(badge === 'failed')
+          if (badge !== 'succeeded') settleUnfinishedNodes(badge === 'failed' ? 'failed' : 'cancelled')
           setStatusMessage(badge === 'succeeded' ? 'Run succeeded' : badge === 'failed' ? 'Run failed' : 'Run cancelled')
           return
         }
         if (badge === 'running') {
+          followJournalRef.current = knownRunId
           setServerBadge({ runId: knownRunId, status: 'running' })
-          await reconcileRunFromServer(knownRunId, {
-            guardCanvas: false,
-            isStale: () => !isCurrent(),
-            hydrateLog: true,
-          })
-          if (!isCurrent()) return
           setStatusMessage('Stream lost - following Execution log from the run journal')
           pushToast('Lost the run stream - Execution log now follows the run journal.', 'info')
           return
@@ -2455,10 +2477,14 @@ function BuilderInner() {
         (l) => l.level,
       )
   // Pretty: each node's node_progress events collapse into one live line
-  // (latest values + sparkline). Raw keeps every event.
+  // (latest values + sparkline); Mode B Waiting heartbeats collapse to one
+  // line with a growing "...." suffix. Raw keeps every event.
   const logRows = showRawLogs
     ? prettyLogs.map((row) => ({ kind: 'row' as const, row }))
-    : collapseProgressRows(prettyLogs, (l) => l.raw)
+    : collapseWaitingRows(
+        collapseProgressRows(prettyLogs, (l) => l.raw),
+        (l) => l.message,
+      )
   const hasErrorLogs = prettyLogs.some((l) => isErrorRow(l.level, l.message))
   const errorCount = hasErrorLogs
     ? Math.max(
@@ -2519,19 +2545,13 @@ function BuilderInner() {
    */
   React.useEffect(() => {
     if (!lastRunId) return
-    // While NDJSON is healthy and filling the log, skip. If isRunning but the log is
-    // empty / only stream-meta warnings, follow logs.json (Mode B stream drop).
-    const logsNow = useAppStore.getState().logs
-    const streamMetaOnly =
-      logsNow.length === 0 ||
-      logsNow.every((l) =>
-        /stream disconnect|stream error|checking run status|following run via journal|lost the run stream/i.test(
-          l.message,
-        ),
-      )
-    if (isRunning && !streamMetaOnly) return
+    // The live NDJSON stream owns run state. Both stream-drop paths return from
+    // handleRun (isRunning → false) after setting followJournalRef, so this
+    // effect never hydrates a previous run's journal into a new run's log.
+    if (isRunning) return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    let unknownDelay = 3000
     const runId = lastRunId
     const remembered = rememberedRunOutcome(runId)
     setServerBadge((prev) =>
@@ -2539,6 +2559,27 @@ function BuilderInner() {
         ? prev
         : { runId, status: remembered ?? 'loading' },
     )
+    const reportFollowed = (badge: ExecBadgeStatus) => {
+      if (followJournalRef.current !== runId) return
+      followJournalRef.current = null
+      if (badge === 'succeeded') {
+        setRunHadErrors(false)
+        setStatusMessage('Run succeeded')
+        pushToast('Run succeeded', 'success', {
+          actionLabel: 'View outputs',
+          onAction: () => openRun(runId, { panel: 'artifacts' }),
+          ttlMs: 12000,
+        })
+      } else if (badge === 'failed' || badge === 'cancelled') {
+        settleUnfinishedNodes(badge)
+        setRunHadErrors(badge === 'failed')
+        setStatusMessage(badge === 'failed' ? 'Run failed' : 'Run cancelled')
+        pushToast(badge === 'failed' ? 'Run failed — see the Execution log' : 'Run cancelled', badge === 'failed' ? 'error' : 'info')
+      } else {
+        setStatusMessage('Run record not found — check Observe → Runs')
+        pushToast('Lost track of the run: its record was not found on the server.', 'error')
+      }
+    }
     const tick = async () => {
       const badge = await reconcileRunFromServer(runId, {
         guardCanvas: true,
@@ -2549,21 +2590,34 @@ function BuilderInner() {
       if (isTerminalBadge(badge)) {
         // Also corrects the store's (un-keyed) runOutcome for the header chip.
         finishOutcome(runId, badge)
+        reportFollowed(badge)
         return
       }
       if (badge === 'running') {
+        unknownDelay = 3000
         setServerBadge({ runId, status: 'running' })
         timer = setTimeout(() => void tick(), 3000)
         return
       }
-      // unknown / missing: keep a remembered terminal outcome when we have one.
-      setServerBadge({ runId, status: remembered ?? badge })
+      if (badge === 'missing') {
+        setServerBadge({ runId, status: remembered ?? 'missing' })
+        if (!remembered) reportFollowed('missing')
+        return
+      }
+      // unknown = transient status error: keep polling with capped backoff
+      // instead of freezing the badge on one failed request.
+      setServerBadge({ runId, status: remembered ?? 'unknown' })
+      if (remembered) return
+      timer = setTimeout(() => void tick(), unknownDelay)
+      unknownDelay = Math.min(30000, unknownDelay * 2)
     }
     void tick()
     return () => {
       cancelled = true
       if (timer) clearTimeout(timer)
     }
+    // settleUnfinishedNodes / openRun / pushToast are stable helpers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastRunId, isRunning, reconcileRunFromServer, finishOutcome, loadGen])
 
   // ── Run ↔ canvas drift (audit) ─────────────────────────────────────
@@ -3765,6 +3819,29 @@ function BuilderInner() {
 
                     {mode === 'node' && node && (
                       <>
+                        <label
+                          className="block text-[12px] text-ink-700"
+                          title="Shown on the canvas, in the execution log, and in run focus. Saved as the graph node's label (same field as in example .graph.json files)."
+                        >
+                          <span className="font-medium">Label</span>
+                          <span className="mt-0.5 block text-[10px] leading-snug text-ink-400">
+                            Friendly name for this step (e.g. “Trainer · up to 50 epochs”).
+                          </span>
+                          <input
+                            type="text"
+                            className="field-control mt-1"
+                            value={node.data.label || ''}
+                            placeholder={humanNodeLabel(node.data.nodeType)}
+                            maxLength={160}
+                            onChange={(e) => node.data.onChangeLabel?.(e.target.value)}
+                            onBlur={(e) => {
+                              // Empty → restore the type’s default name so cards never go blank.
+                              if (!e.target.value.trim()) {
+                                node.data.onChangeLabel?.(humanNodeLabel(node.data.nodeType))
+                              }
+                            }}
+                          />
+                        </label>
                         {/* Node status (the run status is already in the Execution row above).
                             A failed node shows the "Node failed" box instead of a second FAILED badge. */}
                         {(() => {
@@ -4023,12 +4100,9 @@ function BuilderInner() {
                             const fieldIssues = nodeIssues?.get(key) ?? []
                             const hintFull = schemaFieldHint(def)
                             const lrNote = key === 'learning_rate' ? learningRateNote(lrLinks.get(node.id)) : null
-                            const destNote = exportDestinationHint(
-                              String(node.data.nodeType || ''),
-                              key,
-                              cfg,
-                              activeProject || '',
-                            )
+                            const destNote =
+                              exportDestinationHint(String(node.data.nodeType || ''), key, cfg, activeProject || '') ??
+                              legacyIngestPathHint(key, cfg[key])
                             return (
                             <label key={key} className="block text-[12px] text-ink-700">
                               <span className="font-medium">{schemaFieldLabel(key, def)}</span>
@@ -4279,15 +4353,38 @@ function BuilderInner() {
               ) : (
                 logRows.map((entry, i) => {
                   const l = entry.row
+                  const clock = formatLogClock(l.ts)
+                  const clockEl = clock ? (
+                    <span className="shrink-0 tabular-nums text-ink-500" title={l.ts}>
+                      {clock}
+                    </span>
+                  ) : null
                   if (entry.kind === 'progress') {
                     return (
-                      <div key={`p-${entry.progress.nodeId}-${i}`} className="text-sky-200" title={`${entry.count} progress updates`}>
+                      <div
+                        key={`p-${entry.progress.nodeId}-${i}`}
+                        className="flex min-w-0 items-baseline gap-1.5 text-sky-200"
+                        title={`${entry.count} progress updates`}
+                      >
+                        {clockEl}
                         <ProgressLogLine
                           text={formatProgressLine(entry.progress, pathView.labelOf.get(entry.progress.nodeId))}
                           progress={entry.progress}
                           history={entry.history}
                           count={entry.count}
                         />
+                      </div>
+                    )
+                  }
+                  if (entry.kind === 'waiting') {
+                    return (
+                      <div
+                        key={`w-${i}`}
+                        className="flex min-w-0 items-baseline gap-1.5 text-ink-400"
+                        title={`${entry.count} waiting notes`}
+                      >
+                        {clockEl}
+                        <span>{formatWaitingLine(entry.text, entry.count)}</span>
                       </div>
                     )
                   }
@@ -4299,13 +4396,14 @@ function BuilderInner() {
                       tabIndex={isErr ? -1 : undefined}
                       className={
                         isErr
-                          ? 'rounded bg-rose-500/10 px-1 text-rose-300 outline-none'
+                          ? 'flex min-w-0 items-baseline gap-1.5 rounded bg-rose-500/10 px-1 text-rose-300 outline-none'
                           : l.level === 'success'
-                            ? 'text-accent-300'
-                            : 'text-ink-200'
+                            ? 'flex min-w-0 items-baseline gap-1.5 text-accent-300'
+                            : 'flex min-w-0 items-baseline gap-1.5 text-ink-200'
                       }
                     >
-                      {showRawLogs ? l.raw || l.message : l.message}
+                      {clockEl}
+                      <span className="min-w-0">{showRawLogs ? l.raw || l.message : l.message}</span>
                     </div>
                   )
                 })

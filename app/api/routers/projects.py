@@ -210,6 +210,12 @@ def list_projects(
     items = _handle(_pm.list_all)
     if not isinstance(items, list):
         items = list(items or [])
+    from app.core.trust.identity import current_identity
+    from app.core.trust.rbac import visible_projects_filter
+
+    visible = visible_projects_filter(current_identity())
+    if visible is not None:
+        items = [p for p in items if visible(p.get("name"))]
     if q:
         ql = q.lower()
         items = [

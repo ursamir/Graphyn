@@ -24,6 +24,7 @@ Subcommands:
   runs     list                       List recent pipeline runs
   runs     logs <run_id>              Print log entries for a run
   worker   start                      Register as a distributed worker
+           join                       Enroll this host with a join token
   data     ls|upload|snapshot|download  Manage input labels / dataset versions
 """
 
@@ -46,18 +47,8 @@ from app.core.config import runs_dir as _runs_dir
 # Register the AudioSampleHandler so that artifact_store, pipeline_cache, and
 # checkpoint can serialize/deserialize AudioSample objects without importing
 # domain models themselves (ARCH-2 fix).
-from app.models.audio_artifact_serializer import register_audio_serializer as _reg_audio
-_reg_audio()
-from app.models.dataset_artifact_serializer import register_dataset_serializer as _reg_dataset
-_reg_dataset()
-from app.models.feature_array_serializer import register_feature_array_serializer as _reg_features
-_reg_features()
-from app.core.artifacts.file_tree import register_file_tree_serializer as _reg_file_tree
-from app.models.model_artifact_serializer import register_model_artifact_serializer as _reg_model
-from app.models.deployment_artifact_serializer import register_deployment_artifact_serializer as _reg_deploy
-_reg_file_tree()
-_reg_model()
-_reg_deploy()
+from app.models.serializers import register_builtin_serializers as _reg_serializers
+_reg_serializers()
 
 # ── Registry initialization ───────────────────────────────────────────────────
 # Explicitly populate the NodeRegistry singleton after the domain serializer
@@ -514,6 +505,11 @@ def build_parser():
     secrets_del_parser.add_argument("name")
     secrets_del_parser.set_defaults(func=cmd_secrets_delete)
 
+    # ── users ── (console users / RBAC, control host)
+    from app.cli.cmd_users import add_users_parser
+
+    add_users_parser(subparsers)
+
     # ── data ── (input labels / dataset versions)
     data_parser = subparsers.add_parser(
         "data",
@@ -626,7 +622,15 @@ def build_parser():
             "disables hard-refuse."
         ),
     )
+    worker_start.add_argument(
+        "--no-enrollment",
+        action="store_true",
+        help="Ignore a saved `worker join` enrollment (use GRAPHYN_WORKER_TOKEN / flags)",
+    )
     worker_start.set_defaults(func=cmd_worker_start)
+    from app.cli.cmd_worker_join import add_worker_join_parser
+
+    add_worker_join_parser(worker_sub)
 
     return parser
 

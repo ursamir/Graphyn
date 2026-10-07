@@ -287,6 +287,14 @@ def persist_run_identity(
     }
     if claimed:
         fields["claimed_actor"] = str(claimed)[:128]
+    try:
+        from app.core.trust.identity import principal_snapshot
+
+        principal = principal_snapshot()
+    except Exception:
+        principal = None
+    if principal:
+        fields["principal"] = principal
     body = payload if isinstance(payload, dict) else {}
     name = body.get("pipeline") or body.get("pipeline_name")
     if isinstance(name, str) and name.strip():

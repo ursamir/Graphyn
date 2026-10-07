@@ -107,6 +107,9 @@ class NodeJob(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
     seed: int | None = None
     input_refs: dict[str, str] = Field(default_factory=dict)
+    blob_grants: list[str] = Field(default_factory=list)
+    """Companion blob keys referenced inside ``input_refs`` payloads; the claim
+    holder may GET these (plus the input_ref keys) without a signed URL."""
     placement: IRPlacement | None = None
     timeout_s: float | None = 3600.0
     created_at: datetime = Field(default_factory=_utcnow)
@@ -118,6 +121,8 @@ class NodeJob(BaseModel):
     min_vram_mib: int | None = None
     tags: list[str] = Field(default_factory=list)
     pool: str | None = None
+    claim_pools: list[str] = Field(default_factory=list)
+    """Pools this claim counts against for ``GRAPHYN_POOL_MAX_CLAIMED`` (set at claim)."""
     lease_generation: int = 0
     """Incremented on lease reclaim; complete must present the same value."""
     attempts: int = 0

@@ -61,6 +61,7 @@ import { ShipPackageSummary } from './ShipPackageSummary'
 import { useShipManifest } from './useShipManifest'
 import { DEVICES_ENABLED } from '../ship/devicesFlag'
 import { paths } from '../../routes/paths'
+import { safeDecode } from '../../routes/parsePath'
 import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 
 type WizardStep = 1 | 2 | 3 | 4
@@ -116,7 +117,7 @@ function parseEdgeLocation(): {
     tabParam === 'devices'
   let projectFromPath: string | undefined
   if (parts[0] === 'workspaces' && parts[1] && parts[2] === 'ship') {
-    projectFromPath = decodeURIComponent(parts[1])
+    projectFromPath = safeDecode(parts[1])
   }
   return {
     project: (params.get('project') || '').trim() || projectFromPath || undefined,

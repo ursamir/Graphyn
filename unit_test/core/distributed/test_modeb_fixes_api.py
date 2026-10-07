@@ -18,7 +18,7 @@ from app.core.distributed.store import DiskStateStore
 
 
 @pytest.fixture(autouse=True)
-def patch_threads():
+def patch_threads(real_threads):
     """Override the global no-op Thread.start patch: TestClient needs threads."""
     yield
 

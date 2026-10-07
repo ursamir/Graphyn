@@ -24,7 +24,7 @@ import {
 import { MasterDetail, MasterDetailToggle, WorkbenchPage } from '../../layout'
 import { formatLocaleDateTime } from '../../lib/format'
 import { paths } from '../../routes/paths'
-import { navigatePath } from '../../routes/parsePath'
+import { navigatePath, safeDecode } from '../../routes/parsePath'
 import { onPathChange, readSearchParams } from '../../routes/nav'
 
 /** MCP propose_graph docs — console has no create-proposal form (POST needs full GraphIR). */
@@ -144,7 +144,7 @@ function writeBannerDismissed() {
 function parseProposalsLocation(): { id?: string } {
   const parts = window.location.pathname.replace(/\/+$/, '').split('/').filter(Boolean)
   if (parts[0] === 'agent' && parts[1] === 'inbox' && parts[2]) {
-    return { id: decodeURIComponent(parts[2]) }
+    return { id: safeDecode(parts[2]) }
   }
   const id = (readSearchParams().get('id') || '').trim()
   return id ? { id } : {}

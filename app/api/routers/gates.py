@@ -57,17 +57,37 @@ def decide_run_gate(run_id: str, node_id: str, request: Request, body: GateDecis
 
     run_path = _run_dir(run_id)
     ident = resolve_identity(request)
+    role = body.role
+    role_verified = False
+    if ident.get("kind") == "user":
+        # Signed-in users approve only under roles an admin assigned to them.
+        held = set(ident.get("approver_roles") or []) | set(ident.get("roles") or [])
+        if role and role not in held:
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "forbidden", "message": f"You do not hold the approver role '{role}'"},
+            )
+        if not role:
+            from app.core.runs.gates import gate_approver_roles
+
+            wanted = gate_approver_roles(run_path, node_id)
+            match = next((r for r in wanted if r in held), None)
+            role = match or role
+        role_verified = bool(role) and role in held
     try:
         gate = decide_gate(
             run_path,
             node_id,
             decision=body.decision,
             comment=body.comment,
-            role=body.role,
+            role=role,
             actor=str(ident.get("actor") or "unidentified"),
             actor_verified=bool(ident.get("actor_verified")),
             claimed_actor=ident.get("claimed_actor"),
             source="api",
+            role_verified=role_verified,
+            user_id=ident.get("user_id"),
+            credential_id=ident.get("credential_id"),
         )
     except GateError as exc:
         raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.message})

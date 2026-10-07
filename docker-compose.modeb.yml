@@ -34,7 +34,8 @@ services:
       GRAPHYN_JOB_WAIT_POLL_S: "4.0"
       GRAPHYN_HTTP_EGRESS_MODE: restricted
       GRAPHYN_HTTP_EGRESS_ALLOWLIST: "graphyn-api,api.openai.com,api.groq.com,huggingface.co,objects.githubusercontent.com"
-      # WAVE-2: blob encrypt-at-rest (optional), pool quotas, mTLS (profile)
+      # WAVE-2: blob encrypt-at-rest (optional), pool quotas, mTLS (overlay file)
+      GRAPHYN_BLOB_SIGNING_KEY: ${GRAPHYN_BLOB_SIGNING_KEY:-}
       GRAPHYN_BLOB_ENCRYPTION_KEY: ${GRAPHYN_BLOB_ENCRYPTION_KEY:-}
       GRAPHYN_POOL_MAX_CLAIMED: ${GRAPHYN_POOL_MAX_CLAIMED:-}
       GRAPHYN_MTLS_ENABLED: ${GRAPHYN_MTLS_ENABLED:-0}
@@ -68,10 +69,12 @@ services:
     environment:
       GRAPHYN_ENV: production
       GRAPHYN_API_TOKEN: ${GRAPHYN_API_TOKEN:-}
-      # Prefer a worker-scoped named token when configured, e.g.
-      # GRAPHYN_API_TOKENS=s99-ml:<token>:worker:s99-ml
-      GRAPHYN_API_TOKENS: ${GRAPHYN_API_TOKENS:-}
-      GRAPHYN_BLOB_SIGNING_KEY: ${GRAPHYN_BLOB_SIGNING_KEY:-${GRAPHYN_API_TOKEN:-}}
+      # Prefer a worker-scoped named token: map it on the control plane
+      # (GRAPHYN_API_TOKENS=s99-ml:<token>:worker:s99-ml) and set only the
+      # secret here. Takes precedence over GRAPHYN_API_TOKEN.
+      GRAPHYN_WORKER_TOKEN: ${GRAPHYN_WORKER_TOKEN:-}
+      # No GRAPHYN_BLOB_SIGNING_KEY on workers: it can mint a GET for any blob.
+      # Workers fetch inputs via claim-scoped blob GET instead.
       GRAPHYN_CONTROL_URL: http://graphyn-api:8001/api/v1
       GRAPHYN_WORKER_ID: s99-ml
       GRAPHYN_HOME: /data/graphyn-worker-home
@@ -121,8 +124,6 @@ volumes:
   graphyn-worker-plugins:
   graphyn-worker-workspace:
 
-  # Optional mTLS profile (fail closed when enabled):
-  #   1. ./scripts/gen_modeb_mtls_certs.sh ./certs/modeb s99-ml
-  #   2. docker compose -f docker-compose.yml -f docker-compose.modeb.yml
-  #        --profile mtls up -d --no-deps graphyn-api graphyn-worker
+  # Optional mTLS (fail closed): add -f docker-compose.modeb-mtls.yml after
+  # ./scripts/gen_modeb_mtls_certs.sh ./certs/modeb s99-ml.
   # Plain HTTP remains the default (GRAPHYN_MTLS_ENABLED unset).

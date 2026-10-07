@@ -75,5 +75,45 @@ def test_wait_remote_result_emits_immediate_note_and_backs_off(monkeypatch):
     assert run.logs, "logs should be flushed to the run journal"
     # Backoff: later wait slices should grow (not stay stuck at tiny polls forever).
     assert len(q.wait_calls) >= 2
-    assert max(q.wait_calls) >= q.wait_calls[0]
+    assert q.wait_calls[0] == pytest.approx(0.25)
+    assert q.wait_calls[1] > q.wait_calls[0]
+    # Capped at 5× the base slice (never unbounded).
+    assert max(q.wait_calls) <= 0.25 * 5 + 1e-9
     assert elapsed < 4.0
+
+
+def test_wait_remote_result_stops_waiting_after_progress(monkeypatch):
+    """Once node_progress lands, do not resume Waiting heartbeats between epochs."""
+    monkeypatch.setenv("GRAPHYN_JOB_WAIT_POLL_S", "0.2")
+    monkeypatch.setattr(backend_mod, "_ack", lambda queue, job_id: None)
+
+    class _ProgressQueue(_FakeQueue):
+        def list_events(self, job_id):  # noqa: ANN001, ARG002
+            # Emit one progress event after the first wait poll.
+            if time.monotonic() - self.t0 >= 0.35:
+                return [
+                    {
+                        "_seq": 1,
+                        "type": "node_progress",
+                        "node_id": "trainer_0",
+                        "epoch": 1,
+                        "epochs": 50,
+                    }
+                ]
+            return []
+
+    run = _FakeRun()
+    logger = PipelineLogger()
+    q = _ProgressQueue(ready_after=1.2)
+
+    backend_mod._wait_remote_result(
+        q, run, "job-prog-12345678", timeout_s=5.0, logger=logger, node_id="trainer_0"
+    )
+    waiting = [e for e in logger.logs if "Waiting for worker" in str(e.get("message", ""))]
+    latest = getattr(run, "_latest_node_progress", None) or {}
+    # At least one Waiting before progress; none after the first progress landed.
+    assert waiting, "expected an initial Waiting note before the worker reports progress"
+    assert "trainer_0" in latest
+    # All Waiting notes must have been emitted before progress_seen latches —
+    # i.e. count stays small (claim phase only), not one-per-poll for the whole wait.
+    assert len(waiting) <= 3

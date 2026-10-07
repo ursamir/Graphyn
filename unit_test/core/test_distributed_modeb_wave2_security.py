@@ -16,7 +16,7 @@ from app.core.distributed.registry import _reset_worker_registry, get_worker_reg
 
 
 @pytest.fixture(autouse=True)
-def patch_threads():
+def patch_threads(real_threads):
     """Override global Thread.start no-op so mTLS handshake threads run."""
     yield
 
@@ -49,7 +49,7 @@ def env(tmp_path, monkeypatch):
 # ── 1. mTLS cert generation + identity ───────────────────────────────────────
 
 
-def test_generate_mtls_certs_and_parse_worker_id(tmp_path, env):
+def test_generate_mtls_certs_and_parse_worker_id(tmp_path, env, monkeypatch):
     from app.core.distributed.mtls import (
         generate_modeb_mtls_certs,
         client_ssl_context,
@@ -78,12 +78,12 @@ def test_generate_mtls_certs_and_parse_worker_id(tmp_path, env):
     assert worker_id_from_peercert(peercert) == "s99-ml"
 
     # SSL contexts load
-    os.environ["GRAPHYN_MTLS_CA_CERT"] = str(paths["ca_cert"])
-    os.environ["GRAPHYN_MTLS_CERT"] = str(paths["control_cert"])
-    os.environ["GRAPHYN_MTLS_KEY"] = str(paths["control_key"])
-    os.environ["GRAPHYN_MTLS_CLIENT_CERT"] = str(paths["worker:s99-ml:cert"])
-    os.environ["GRAPHYN_MTLS_CLIENT_KEY"] = str(paths["worker:s99-ml:key"])
-    os.environ["GRAPHYN_MTLS_ENABLED"] = "1"
+    monkeypatch.setenv("GRAPHYN_MTLS_CA_CERT", str(paths["ca_cert"]))
+    monkeypatch.setenv("GRAPHYN_MTLS_CERT", str(paths["control_cert"]))
+    monkeypatch.setenv("GRAPHYN_MTLS_KEY", str(paths["control_key"]))
+    monkeypatch.setenv("GRAPHYN_MTLS_CLIENT_CERT", str(paths["worker:s99-ml:cert"]))
+    monkeypatch.setenv("GRAPHYN_MTLS_CLIENT_KEY", str(paths["worker:s99-ml:key"]))
+    monkeypatch.setenv("GRAPHYN_MTLS_ENABLED", "1")
     assert mtls_enabled()
     sctx = server_ssl_context()
     assert sctx.verify_mode == ssl.CERT_REQUIRED
@@ -104,12 +104,12 @@ def test_mtls_handshake_roundtrip(tmp_path, monkeypatch):
 
     monkeypatch.setenv("GRAPHYN_MTLS_ENABLED", "1")
     paths = generate_modeb_mtls_certs(tmp_path / "certs", worker_ids=["lab-w"])
-    os.environ["GRAPHYN_MTLS_CA_CERT"] = str(paths["ca_cert"])
-    os.environ["GRAPHYN_MTLS_CERT"] = str(paths["control_cert"])
-    os.environ["GRAPHYN_MTLS_KEY"] = str(paths["control_key"])
-    os.environ["GRAPHYN_MTLS_CLIENT_CERT"] = str(paths["worker:lab-w:cert"])
-    os.environ["GRAPHYN_MTLS_CLIENT_KEY"] = str(paths["worker:lab-w:key"])
-    os.environ["GRAPHYN_MTLS_ENABLED"] = "1"
+    monkeypatch.setenv("GRAPHYN_MTLS_CA_CERT", str(paths["ca_cert"]))
+    monkeypatch.setenv("GRAPHYN_MTLS_CERT", str(paths["control_cert"]))
+    monkeypatch.setenv("GRAPHYN_MTLS_KEY", str(paths["control_key"]))
+    monkeypatch.setenv("GRAPHYN_MTLS_CLIENT_CERT", str(paths["worker:lab-w:cert"]))
+    monkeypatch.setenv("GRAPHYN_MTLS_CLIENT_KEY", str(paths["worker:lab-w:key"]))
+    monkeypatch.setenv("GRAPHYN_MTLS_ENABLED", "1")
 
     sctx = server_ssl_context()
     cctx = client_ssl_context(check_hostname=False)

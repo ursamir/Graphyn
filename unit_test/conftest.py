@@ -201,6 +201,27 @@ def make_audio_sample():
 
 # ── Thread safety — prevent hangs ────────────────────────────────────────────
 
+_REAL_THREAD_START = threading.Thread.start  # captured before any test can patch it
+_REAL_POOL_SUBMIT = __import__("concurrent.futures").futures.ThreadPoolExecutor.submit
+
+
+@pytest.fixture
+def real_threads():
+    """Force real ``Thread.start`` / ``ThreadPoolExecutor.submit`` for one test.
+
+    An empty ``patch_threads`` override is not enough when an earlier test
+    leaked a patched ``Thread.start`` — TestClient's portal then never starts.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    saved = (threading.Thread.start, ThreadPoolExecutor.submit)
+    threading.Thread.start = _REAL_THREAD_START
+    ThreadPoolExecutor.submit = _REAL_POOL_SUBMIT
+    try:
+        yield
+    finally:
+        threading.Thread.start, ThreadPoolExecutor.submit = saved
+
 @pytest.fixture(autouse=True)
 def patch_threads(request):
     """Patch ThreadPoolExecutor.submit and Thread.start to no-ops.

@@ -730,7 +730,10 @@ def _artifact_skip_path_keys(node_id: str) -> frozenset[str]:
 
 
 def _load_data_json_paths(data_root: Path, *, node_id: str = "") -> list[str]:
-    """Read path refs from an ArtifactStore data dir (manifest.json or data.json).
+    """Read path refs from an ArtifactStore data dir (role manifest, manifest.json or data.json).
+
+    Model / deployment / TFLite artifacts write ``*_artifact_manifest.json``
+    with their files copied under ``files/`` — those copies are returned.
 
     Prefers the small ``manifest.json`` written by typed serializers
     (``audio_samples``, ``dataset_artifact``). Legacy tensor dumps in
@@ -748,6 +751,12 @@ def _load_data_json_paths(data_root: Path, *, node_id: str = "") -> list[str]:
         # Typed handlers write manifest.json; generic fallback still uses data.json.
         candidates.append(resolved / "manifest.json")
         candidates.append(resolved / "data.json")
+    if resolved.is_dir():
+        from app.core.artifacts.artifact_pack import role_manifest_file_paths
+
+        role_files = role_manifest_file_paths(resolved)
+        if role_files is not None:
+            return role_files
     skip = _artifact_skip_path_keys(node_id)
     for path in candidates:
         if not path.is_file():

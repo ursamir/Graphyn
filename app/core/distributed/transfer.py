@@ -10,6 +10,7 @@ Owns:             dump_port_value, load_port_value, put_blob,
                   job_output_key, parse_job_output_key, tombstone_blobs,
                   delete_job_blobs, delete_blobs, sweep_blobs,
                   mint_signed_blob_url, verify_signed_blob_url, blob_signing_secret,
+                  worker_bearer_token, blob_keys_referenced, put_port_value_with_grants,
                   prepare_port_value_for_put, materialize_path_sidecars,
                   materialize_artifact_refs, PATH_SIDELOAD_MARK (legacy),
                   UnreclaimedHostPathError.
@@ -563,27 +564,30 @@ def get_blob(uri: str, *, expected_sha256: str | None = None) -> bytes:
 
 
 def blob_signing_secret() -> str:
-    """HMAC secret for short-lived blob URLs.
+    """HMAC secret for short-lived blob URLs (``GRAPHYN_BLOB_SIGNING_KEY`` only).
 
-    ``GRAPHYN_BLOB_SIGNING_KEY`` when set, else ``GRAPHYN_API_TOKEN`` /
-    ``api_token()``. Empty when neither is configured (signed URLs unavailable).
+    Never derived from the API token: anyone holding the signing key can mint
+    a GET for *any* blob, so it must stay on the control plane. Empty when
+    unset (signed URLs unavailable; workers use claim-scoped blob GET).
     """
-    dedicated = (os.environ.get("GRAPHYN_BLOB_SIGNING_KEY") or "").strip()
-    if dedicated:
-        return dedicated
-    try:
-        from app.core.config import api_token
+    return (os.environ.get("GRAPHYN_BLOB_SIGNING_KEY") or "").strip()
 
-        return (api_token() or "").strip()
-    except Exception:
-        return (os.environ.get("GRAPHYN_API_TOKEN") or "").strip()
+
+def worker_bearer_token() -> str:
+    """``GRAPHYN_WORKER_TOKEN`` (worker-scoped) else ``GRAPHYN_API_TOKEN``."""
+    return (
+        os.environ.get("GRAPHYN_WORKER_TOKEN") or os.environ.get("GRAPHYN_API_TOKEN") or ""
+    ).strip()
+
+
+BLOB_URL_MAX_TTL_S = 3600
 
 
 def blob_url_ttl_s() -> int:
-    """Default TTL for signed blob URLs (``GRAPHYN_BLOB_URL_TTL_S``, default 300)."""
+    """Default TTL for signed blob URLs (``GRAPHYN_BLOB_URL_TTL_S``, default 300, max 3600)."""
     raw = (os.environ.get("GRAPHYN_BLOB_URL_TTL_S") or "300").strip()
     try:
-        return max(1, int(raw))
+        return min(BLOB_URL_MAX_TTL_S, max(1, int(raw)))
     except ValueError:
         return 300
 
@@ -614,7 +618,7 @@ def mint_signed_blob_url(
     sec = secret if secret is not None else blob_signing_secret()
     if not sec:
         raise ValueError("blob signing secret not configured")
-    ttl = int(ttl_s) if ttl_s is not None else blob_url_ttl_s()
+    ttl = min(BLOB_URL_MAX_TTL_S, int(ttl_s)) if ttl_s is not None else blob_url_ttl_s()
     exp = int(_time.time()) + max(1, ttl)
     method_u = (method or "GET").upper()
     msg = f"{k}|{exp}|{method_u}".encode("utf-8")
@@ -689,7 +693,7 @@ def http_put_blob(
     qs = ("?" + "&".join(params)) if params else ""
     url = f"{base}/artifacts/blob{qs}"
     headers = {"Content-Type": "application/octet-stream", "Accept": "application/json"}
-    tok = token if token is not None else os.environ.get("GRAPHYN_API_TOKEN", "")
+    tok = token if token is not None else worker_bearer_token()
     if tok:
         headers["Authorization"] = f"Bearer {tok}"
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
@@ -733,24 +737,31 @@ def http_get_blob(
 ) -> bytes:
     """GET blob bytes from control ``GET /artifacts/blob/{key}`` (verified).
 
-    Prefers a short-lived HMAC signed URL when a signing secret is available
-    (``GRAPHYN_BLOB_SIGNING_KEY`` or API token); still sends Bearer as a
-    fallback for operators. ``sha256/`` key digests and ``expected_sha256``
-    are checked; a mismatch raises :class:`BlobIntegrityError`.
+    Prefers a short-lived HMAC signed URL when ``GRAPHYN_BLOB_SIGNING_KEY`` is
+    set locally; otherwise relies on Bearer + worker id (claim-scoped GET).
+    Absolute ``http(s)://`` URLs are only followed when their origin matches
+    ``control_url`` — credentials are never sent to a foreign host.
+    ``sha256/`` key digests and ``expected_sha256`` are checked; a mismatch
+    raises :class:`BlobIntegrityError`.
     """
+    from urllib.parse import unquote, urlparse
+
     base = (control_url or "").rstrip("/")
     if not base:
         raise ValueError("control_url is required for http_get_blob")
-    # Absolute signed URL already?
-    if isinstance(uri, str) and uri.startswith("http") and "sig=" in uri:
-        url = uri
-        # key for verify_blob_bytes: last path segment after /artifacts/blob/
-        from urllib.parse import urlparse, parse_qs
-
+    if isinstance(uri, str) and uri.lower().startswith(("http://", "https://")):
         parsed = urlparse(uri)
-        path = parsed.path or ""
+        ctl = urlparse(base)
+        same_origin = (
+            parsed.scheme.lower() == ctl.scheme.lower()
+            and (parsed.hostname or "").lower() == (ctl.hostname or "").lower()
+            and parsed.port == ctl.port
+        )
         marker = "/artifacts/blob/"
-        key = path.split(marker, 1)[-1] if marker in path else uri_to_key(uri)
+        if not same_origin or marker not in (parsed.path or ""):
+            raise ValueError(f"Refusing blob URL outside control origin: {uri!r}")
+        url = uri
+        key = unquote(parsed.path.split(marker, 1)[-1])
     else:
         key = uri_to_key(uri) if "://" in str(uri) or str(uri).startswith("artifact:") else str(uri).lstrip("/")
         encoded_key = quote(key, safe="/")
@@ -761,7 +772,7 @@ def http_get_blob(
             except ValueError:
                 pass
     headers = {"Accept": "application/octet-stream"}
-    tok = token if token is not None else os.environ.get("GRAPHYN_API_TOKEN", "")
+    tok = token if token is not None else worker_bearer_token()
     if tok:
         headers["Authorization"] = f"Bearer {tok}"
     wid = worker_id or os.environ.get("GRAPHYN_WORKER_ID") or None
@@ -941,6 +952,25 @@ def put_port_value(value: Any, *, key: str | None = None) -> str:
     """Serialize a port value (ArtifactRef pack, fail-closed) and store it; return URI."""
     prepared = prepare_port_value_for_put(value)
     return put_blob(dump_port_value(prepared), key=key)
+
+
+_ARTIFACT_URI_BYTES_RE = re.compile(rb"artifact://[A-Za-z0-9_.-]+/([A-Za-z0-9_./-]+)")
+
+
+def blob_keys_referenced(payload: bytes) -> list[str]:
+    """Blob keys of ``artifact://`` URIs embedded in a serialized port value."""
+    keys: set[str] = set()
+    for m in _ARTIFACT_URI_BYTES_RE.finditer(payload or b""):
+        k = m.group(1).decode("ascii", errors="ignore").lstrip("/")
+        if k and _BLOB_KEY_RE.match(k) and ".." not in k.split("/"):
+            keys.add(k)
+    return sorted(keys)
+
+
+def put_port_value_with_grants(value: Any, *, key: str | None = None) -> tuple[str, list[str]]:
+    """Store a port value; return ``(uri, companion_blob_keys)`` for job grants."""
+    payload = dump_port_value(prepare_port_value_for_put(value))
+    return put_blob(payload, key=key), blob_keys_referenced(payload)
 
 
 def put_port_value_with_digest(value: Any, *, key: str | None = None) -> tuple[str, str]:

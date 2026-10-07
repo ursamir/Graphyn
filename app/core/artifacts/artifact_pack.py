@@ -104,26 +104,107 @@ def is_host_path(value: Any) -> bool:
     return False
 
 
+EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+
+
+def _iter_dir_members(src: Path) -> Iterable[tuple[str, Path]]:
+    """``(arcname, path)`` for every dir/regular file under *src*, sorted, symlinks skipped."""
+    yield ".", src
+    for root, dirs, files in os.walk(src, followlinks=False):
+        dirs.sort()
+        rel_root = Path(root).relative_to(src)
+        for d in list(dirs):
+            p = Path(root) / d
+            if p.is_symlink():
+                log.warning("artifact_pack: skipping symlinked dir %s", p)
+                dirs.remove(d)
+                continue
+            yield (rel_root / d).as_posix(), p
+        for f in sorted(files):
+            p = Path(root) / f
+            if p.is_symlink():
+                log.warning("artifact_pack: skipping symlink %s", p)
+                continue
+            if not p.is_file():
+                continue
+            yield (rel_root / f).as_posix(), p
+
+
+def _write_dir_tar(src: Path, fileobj: Any) -> None:
+    """Deterministic tar.gz: sorted members, zeroed mtime/uid/gid/names, gzip mtime=0.
+
+    Hardlinks are dereferenced (each link is stored as a regular file) so the
+    archive never depends on inode identity.
+    """
+    import gzip
+
+    with gzip.GzipFile(fileobj=fileobj, mode="wb", mtime=0) as gz:
+        with tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as tar:
+            for arcname, path in _iter_dir_members(src):
+                info = tarfile.TarInfo(name=arcname if arcname == "." else f"./{arcname}")
+                info.mtime = 0
+                info.uid = info.gid = 0
+                info.uname = info.gname = ""
+                if path.is_dir():
+                    info.type = tarfile.DIRTYPE
+                    info.mode = 0o755
+                    tar.addfile(info)
+                    continue
+                st = path.stat()
+                info.type = tarfile.REGTYPE
+                info.mode = 0o755 if st.st_mode & 0o111 else 0o644
+                info.size = st.st_size
+                with open(path, "rb") as fh:
+                    tar.addfile(info, fh)
+
+
+class _HashSink:
+    """File-like sink that only hashes (and counts) what is written."""
+
+    def __init__(self) -> None:
+        self.h = hashlib.sha256()
+        self.n = 0
+
+    def write(self, data: bytes) -> int:
+        self.h.update(data)
+        self.n += len(data)
+        return len(data)
+
+    def flush(self) -> None:
+        pass
+
+
 def pack_path_bytes(src: Path) -> tuple[bytes, str]:
     """Return ``(blob_bytes, kind)`` for a file (``file``) or directory (``dir``).
 
-    Directories are gzip-compressed tar archives (arcname ``.``). Symlinks and
-    non-regular members are skipped.
+    Directories are deterministic gzip-compressed tar archives (arcname ``.``):
+    identical content always yields identical bytes / sha256. Symlinks and
+    non-regular members are skipped; hardlinks are stored as regular files.
+    Empty files are valid (``EMPTY_SHA256``).
     """
     src = Path(src)
     if src.is_file():
-        data = src.read_bytes()
-        if not data:
-            raise ValueError(f"Refusing empty file for pack: {src}")
-        return data, "file"
+        return src.read_bytes(), "file"
     if src.is_dir():
         buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-            tar.add(str(src), arcname=".", recursive=True, filter=_tar_add_filter)
-        data = buf.getvalue()
-        if not data:
-            raise ValueError(f"Refusing empty directory pack: {src}")
-        return data, "dir"
+        _write_dir_tar(src, buf)
+        return buf.getvalue(), "dir"
+    raise ValueError(f"Neither file nor directory: {src}")
+
+
+def hash_path(src: Path) -> tuple[str, str]:
+    """Streamed ``(sha256, kind)`` equal to ``sha256(pack_path_bytes(src)[0])`` — no full copy in RAM."""
+    src = Path(src)
+    if src.is_file():
+        h = hashlib.sha256()
+        with open(src, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest(), "file"
+    if src.is_dir():
+        sink = _HashSink()
+        _write_dir_tar(src, sink)
+        return sink.h.hexdigest(), "dir"
     raise ValueError(f"Neither file nor directory: {src}")
 
 
@@ -135,20 +216,30 @@ def _tar_add_filter(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
     return tarinfo
 
 
+def _unsafe_member_name(name: str) -> bool:
+    text = (name or "").replace("\\", "/")
+    if text.startswith("/") or (len(text) > 1 and text[1] == ":"):
+        return True
+    return any(part == ".." for part in text.split("/"))
+
+
 def unpack_directory(data: bytes, dest: Path) -> None:
     """Extract a packed directory tar.gz into *dest* (no ``..`` / absolute)."""
     dest.mkdir(parents=True, exist_ok=True)
     buf = io.BytesIO(data)
     with tarfile.open(fileobj=buf, mode="r:gz") as tar:
         for member in tar.getmembers():
-            name = (member.name or "").replace("\\", "/")
-            if name.startswith("/") or name.startswith("..") or "/../" in f"/{name}/":
+            if _unsafe_member_name(member.name):
                 raise ValueError(f"Refusing unsafe tar member {member.name!r}")
             if member.issym() or member.islnk():
                 continue
             if not (member.isfile() or member.isdir()):
                 continue
-            tar.extract(member, path=dest, set_attrs=False, filter="data")
+            try:
+                tar.extract(member, path=dest, set_attrs=False, filter="data")
+            except TypeError:
+                # Python < 3.11.4 has no extraction filters; members were vetted above.
+                tar.extract(member, path=dest, set_attrs=False)
 
 
 def atomic_write_bytes(dest: Path, data: bytes) -> None:
@@ -325,7 +416,11 @@ def collect_path_bearing_roles(obj: Any) -> list[Any]:
             if sibling.is_file():
                 _ensure("labels", str(sibling), relative="labels.txt", kind_hint="file")
 
-    # CsvTableResult
+    if _is_dataset_artifact(obj):
+        mp = str(getattr(obj, "manifest_path", "") or "")
+        if mp:
+            _ensure("dataset_manifest", mp, relative=Path(mp).name or "manifest.json", kind_hint="file")
+
     # CsvTableResult (duck): path + rows — pack the CSV file when present on disk.
     if name == "CsvTableResult" or (
         hasattr(obj, "path") and hasattr(obj, "rows") and hasattr(obj, "row_count")
@@ -344,6 +439,22 @@ def collect_path_bearing_roles(obj: Any) -> list[Any]:
         uri = str(getattr(obj, "uri", "") or "")
         if backend in {"", "local", "file"} and uri and not uri.startswith(("s3://", "artifact://", "http://", "https://")):
             _ensure("other", uri, relative=Path(uri).name or "object.bin", kind_hint="file")
+
+    # Remaining existing ``*_path`` metrics / metadata (checkpoint_path,
+    # calibration_path, …) travel as ``metrics.<key>`` roles instead of being
+    # silently stripped; materialize rewrites the key to the local copy.
+    covered = {str(getattr(r, "source_path", "") or "") for r in refs}
+    for dict_field, d in (("metrics", metrics), ("metadata", metadata)):
+        for key, val in d.items():
+            if not isinstance(val, str) or not val.strip() or key in PROVENANCE_PATH_KEYS:
+                continue
+            if not (key in PATH_METRIC_KEYS or str(key).endswith("_path")):
+                continue
+            if val in covered or not _looks_local_fs(val):
+                continue
+            role = f"{dict_field}.{key}"
+            _ensure(role, val, relative=f"{dict_field}/{_safe_basename(str(key))}/{_safe_basename(Path(val).name)}")
+            covered.add(val)
 
     return refs
 
@@ -383,7 +494,11 @@ def apply_packed_refs(
                     )
                 continue
             data, kind = pack_path_bytes(path)
-            uri, digest = put_companion(data)
+            if data:
+                uri, digest = put_companion(data)
+            else:
+                # Blob stores refuse empty bodies; materialize recreates the file.
+                uri, digest = f"artifact://local/sha256/{EMPTY_SHA256}", EMPTY_SHA256
             ref = ref.model_copy(
                 update={
                     "kind": kind,
@@ -398,6 +513,13 @@ def apply_packed_refs(
             )
         elif not (ref.uri and ref.sha256):
             # Nothing to pack and no wire identity — drop.
+            continue
+        elif not str(ref.uri).startswith("artifact://"):
+            # A producer-declared ref may only point into the artifact store.
+            if fail_closed:
+                raise UnreclaimedHostPathError(
+                    f"ArtifactRef role={ref.role!r} uri must be artifact://…, got {ref.uri!r}"
+                )
             continue
         else:
             # Already packed; ensure source_path cleared.
@@ -507,7 +629,14 @@ def strip_host_paths(obj: Any, *, fail_closed: bool = True) -> Any:
             continue
         changed = False
         new_d = dict(d)
+        stripped: list[str] = []
         for key, val in list(new_d.items()):
+            if isinstance(val, (dict, list)):
+                cleaned = _strip_nested(val, f"{dict_field}.{key}", stripped)
+                if cleaned is not val:
+                    new_d[key] = cleaned
+                    changed = True
+                continue
             if not isinstance(val, str) or not val.strip():
                 continue
             if val.startswith(("artifact://", "s3://", "http://", "https://")):
@@ -516,8 +645,16 @@ def strip_host_paths(obj: Any, *, fail_closed: bool = True) -> Any:
             if key_is_path and (is_host_path(val) or _looks_local_fs(val)):
                 new_d[key] = ""
                 changed = True
+                if key not in PROVENANCE_PATH_KEYS:
+                    stripped.append(f"{dict_field}.{key}")
         if changed:
             obj = _set_field(obj, dict_field, new_d)
+        if stripped:
+            log.warning(
+                "artifact_pack: %s host path(s) not transferable (missing on producer), cleared: %s",
+                type(obj).__name__,
+                ", ".join(stripped[:12]),
+            )
 
     # Clear any residual source_path on refs.
     refs = list(getattr(obj, "refs", None) or [])
@@ -538,6 +675,32 @@ def strip_host_paths(obj: Any, *, fail_closed: bool = True) -> Any:
     return obj
 
 
+def _strip_nested(value: Any, where: str, stripped: list[str]) -> Any:
+    """Clear host-path ``*_path`` / ``*_dir`` strings nested in dicts/lists (copy on change)."""
+    if isinstance(value, dict):
+        out = None
+        for k, v in value.items():
+            if isinstance(v, (dict, list)):
+                nv = _strip_nested(v, f"{where}.{k}", stripped)
+            elif (
+                isinstance(v, str)
+                and (str(k).endswith(("_path", "_dir")) or k in PATH_METRIC_KEYS)
+                and (is_host_path(v) or _looks_local_fs(v))
+            ):
+                nv = ""
+                stripped.append(f"{where}.{k}")
+            else:
+                nv = v
+            if nv is not v:
+                out = dict(value) if out is None else out
+                out[k] = nv
+        return value if out is None else out
+    if isinstance(value, list):
+        items = [_strip_nested(v, f"{where}[{i}]", stripped) for i, v in enumerate(value)]
+        return value if all(a is b for a, b in zip(items, value)) else items
+    return value
+
+
 def _looks_local_fs(value: str) -> bool:
     """True for absolute paths OR existing relative filesystem paths."""
     text = (value or "").strip()
@@ -545,6 +708,10 @@ def _looks_local_fs(value: str) -> bool:
         return False
     if is_host_path(text):
         return True
+    # Relative strings only count when they look like a path ("runs/x.keras"),
+    # so a metric value such as "accuracy" never matches a stray cwd file.
+    if "/" not in text and "\\" not in text:
+        return False
     try:
         return Path(text).exists()
     except OSError:
@@ -663,17 +830,66 @@ def hydrate_ref_bytes(
     dest = dest_root / rel
     kind = str(ref.kind or "file")
     if kind == "dir":
-        marker = dest_root / f".{rel.replace('/', '__')}.extracted"
-        if not marker.is_file():
+        # Marker name is a hash of rel (``a/b`` vs ``a__b`` must not collide) and
+        # holds the digest: a different blob at the same rel re-extracts.
+        marker = dest_root / f".extracted-{hashlib.sha256(rel.encode('utf-8')).hexdigest()[:20]}"
+        try:
+            current = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
+        except OSError:
+            current = ""
+        if current == digest and dest.is_dir():
+            return dest
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.parent / f".{dest.name}.extract.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+        try:
+            unpack_directory(data, tmp)
+            old = None
             if dest.exists():
-                shutil.rmtree(dest, ignore_errors=True)
-            unpack_directory(data, dest)
-            marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.write_text(digest, encoding="utf-8")
+                old = dest.parent / f".{dest.name}.old.{uuid.uuid4().hex[:8]}"
+                os.replace(dest, old)
+            os.replace(tmp, dest)
+            if old is not None:
+                shutil.rmtree(old, ignore_errors=True)
+        finally:
+            if tmp.exists():
+                shutil.rmtree(tmp, ignore_errors=True)
+        atomic_write_bytes(marker, digest.encode("utf-8"))
         return dest
-    if not dest.is_file() or dest.stat().st_size != len(data):
-        atomic_write_bytes(dest, data)
+    if dest.is_file():
+        try:
+            existing, _ = hash_path(dest)
+        except OSError:
+            existing = ""
+        if existing == digest:
+            return dest
+    atomic_write_bytes(dest, data)
     return dest
+
+
+_DICT_ROLE_PREFIXES = ("metrics.", "metadata.")
+
+
+def _apply_dict_roles(obj: Any, local_by_role: dict[str, Path]) -> Any:
+    """Rewrite ``metrics[key]`` / ``metadata[key]`` for ``metrics.<key>`` roles."""
+    for dict_field in ("metrics", "metadata"):
+        prefix = f"{dict_field}."
+        hits = {r[len(prefix):]: p for r, p in local_by_role.items() if r.startswith(prefix)}
+        if not hits:
+            continue
+        d = getattr(obj, dict_field, None)
+        if not isinstance(d, dict):
+            continue
+        new_d = dict(d)
+        for key, local in hits.items():
+            new_d[key] = str(local)
+        obj = _set_field(obj, dict_field, new_d)
+    return obj
+
+
+def _is_dataset_artifact(obj: Any) -> bool:
+    return type(obj).__name__ == "DatasetArtifact" or (
+        hasattr(obj, "manifest_path") and hasattr(obj, "X_train") and hasattr(obj, "labels")
+    )
 
 
 def materialize_refs_onto(
@@ -701,11 +917,15 @@ def materialize_refs_onto(
         if not uri:
             new_refs.append(ref)
             continue
-        data = get_companion(uri, expected_sha256=ref.sha256 or None)
+        if (ref.sha256 or "").lower() == EMPTY_SHA256:
+            data = b""
+        else:
+            data = get_companion(uri, expected_sha256=ref.sha256 or None)
         local = hydrate_ref_bytes(ref, data, dest_root=dest_root)
         local_by_role[str(ref.role)] = local
         new_refs.append(ref.model_copy(update={"source_path": ""}))
     obj = _set_refs(obj, new_refs)
+    obj = _apply_dict_roles(obj, local_by_role)
 
     name = type(obj).__name__
     if name == "ModelArtifact" or (
@@ -770,6 +990,9 @@ def materialize_refs_onto(
     ):
         if "other" in local_by_role:
             obj = _set_field(obj, "path", str(local_by_role["other"]))
+    elif _is_dataset_artifact(obj):
+        if "dataset_manifest" in local_by_role:
+            obj = _set_field(obj, "manifest_path", str(local_by_role["dataset_manifest"]))
     elif name == "ObjectRef" or (
         hasattr(obj, "key") and hasattr(obj, "uri") and hasattr(obj, "backend")
         and not hasattr(obj, "model_path")
@@ -809,6 +1032,8 @@ def has_path_bearing_contract(obj: Any) -> bool:
     name = type(obj).__name__
     if name in {"ModelArtifact", "TFLiteArtifact", "DeploymentArtifact", "CsvTableResult", "ObjectRef"}:
         return True
+    if _is_dataset_artifact(obj):
+        return True
     if hasattr(obj, "model_path") and hasattr(obj, "labels") and hasattr(obj, "metrics"):
         return True
     if hasattr(obj, "tflite_path") and hasattr(obj, "quantisation"):
@@ -820,3 +1045,146 @@ def has_path_bearing_contract(obj: Any) -> bool:
     if hasattr(obj, "key") and hasattr(obj, "uri") and hasattr(obj, "backend") and not hasattr(obj, "model_path"):
         return True
     return False
+
+
+# ── On-disk serializer helpers (run artifacts / pipeline cache) ───────────────
+
+_TOP_PATH_FIELDS = ("model_path", "tflite_path", "artifact_path", "manifest_path")
+
+# Manifests written by the ArtifactRef-based serializers (model / deployment / tflite).
+ROLE_MANIFEST_NAMES = (
+    "model_artifact_manifest.json",
+    "deployment_artifact_manifest.json",
+    "tflite_artifact_manifest.json",
+)
+
+
+def role_manifest_file_paths(data_dir: Path) -> list[str] | None:
+    """Copied role files (``files/<rel>``) of a role manifest in *data_dir*; None if absent."""
+    import json as _json
+
+    for name in ROLE_MANIFEST_NAMES:
+        mp = Path(data_dir) / name
+        if not mp.is_file():
+            continue
+        try:
+            meta = _json.loads(mp.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        rels = [str(r) for r in (meta.get("path_map") or {}).values()]
+        rels += [
+            str(r.get("relative_path") or r.get("filename") or "")
+            for r in (meta.get("refs") or []) if isinstance(r, dict)
+        ]
+        out: list[str] = []
+        for rel in rels:
+            if not rel:
+                continue
+            local = Path(data_dir) / "files" / _safe_relpath(rel)
+            if local.exists() and str(local) not in out:
+                out.append(str(local))
+        return out
+    return None
+
+
+def path_field_items(obj: Any) -> dict[str, str]:
+    """``{"model_path": v, "metrics.<k>": v, "metadata.<k>": v}`` for path-valued fields."""
+    out: dict[str, str] = {}
+    for field in _TOP_PATH_FIELDS:
+        val = getattr(obj, field, None)
+        if isinstance(val, str) and val.strip():
+            out[field] = val
+    for dict_field in ("metrics", "metadata"):
+        d = getattr(obj, dict_field, None)
+        if not isinstance(d, dict):
+            continue
+        for key, val in d.items():
+            if isinstance(val, str) and val.strip() and (
+                key in PATH_METRIC_KEYS or str(key).endswith("_path")
+            ):
+                out[f"{dict_field}.{key}"] = val
+    return out
+
+
+def _skip_symlinks(directory: str, names: list[str]) -> list[str]:
+    return [n for n in names if os.path.islink(os.path.join(directory, n))]
+
+
+def copy_refs_to_dir(refs: list[Any], files_dir: Path) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Copy each ref's ``source_path`` under *files_dir*; return ``(wire_refs, {src: rel})``.
+
+    Digests are streamed (:func:`hash_path`) — no in-memory tarball per role.
+    Symlinks are not followed (same rule as :func:`pack_path_bytes`).
+    """
+    from app.models.artifact_ref import ArtifactRef
+
+    files_dir.mkdir(parents=True, exist_ok=True)
+    wire_refs: list[dict[str, Any]] = []
+    src_to_rel: dict[str, str] = {}
+    for ref in refs:
+        src = str(getattr(ref, "source_path", "") or "")
+        if not src or not Path(src).exists():
+            wire_refs.append(ref.model_dump() if hasattr(ref, "model_dump") else dict(ref))
+            continue
+        rel = _safe_relpath(ref.relative_path or ref.filename or ref.role or "artifact")
+        dest = files_dir / rel
+        if Path(src).is_dir():
+            if dest.exists():
+                shutil.rmtree(dest, ignore_errors=True)
+            shutil.copytree(src, dest, symlinks=False, ignore=_skip_symlinks)
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+        digest, kind = hash_path(Path(src))
+        src_to_rel[src] = rel
+        wire_refs.append(
+            ArtifactRef(
+                logical_id=digest,
+                role=ref.role,
+                sha256=digest,
+                uri="",
+                media_type=ref.media_type,
+                filename=ref.filename or Path(src).name,
+                kind=kind,  # type: ignore[arg-type]
+                relative_path=rel,
+                source_path="",
+            ).model_dump()
+        )
+    return wire_refs, src_to_rel
+
+
+def build_path_map(obj: Any, src_to_rel: dict[str, str]) -> dict[str, str]:
+    """Field → copied relative path, for every path field whose file was copied."""
+    return {f: src_to_rel[v] for f, v in path_field_items(obj).items() if v in src_to_rel}
+
+
+def without_copied_paths(d: dict[str, Any], prefix: str, path_map: dict[str, str]) -> dict[str, Any]:
+    """Blank dict values that ``path_map`` restores from ``files/`` on load."""
+    return {k: ("" if f"{prefix}.{k}" in path_map else v) for k, v in d.items()}
+
+
+def restore_path_map(path_map: dict[str, str], files_dir: Path) -> dict[str, str]:
+    """``path_map`` → absolute local paths that exist under *files_dir*."""
+    out: dict[str, str] = {}
+    for field, rel in (path_map or {}).items():
+        local = files_dir / _safe_relpath(str(rel))
+        if local.exists():
+            out[field] = str(local)
+    return out
+
+
+def content_digests(obj: Any) -> list[str]:
+    """``role:sha256`` over the *actual bytes* of every role (streamed), sorted."""
+    out: list[str] = []
+    for ref in collect_path_bearing_roles(obj):
+        role = getattr(ref, "role", "") or ""
+        src = str(getattr(ref, "source_path", "") or "")
+        digest = ""
+        if src:
+            try:
+                digest, _ = hash_path(Path(src))
+            except (OSError, ValueError):
+                digest = ""
+        digest = digest or str(getattr(ref, "sha256", "") or "")
+        out.append(f"{role}:{digest or 'missing:' + src}")
+    return sorted(out)

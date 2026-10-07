@@ -8,7 +8,7 @@ Canonical IA (Phase 1): `docs/IA_PROJECT_FIRST.md`.
 | Module | Role |
 |---|---|
 | `src/routes/paths.ts` | Typed History API builders (`paths.editor`, `paths.runPanel`, …) |
-| `src/routes/parsePath.ts` | Pathname → view. `stripLegacyAppHash()` drops a leftover `#/…` fragment. |
+| `src/routes/parsePath.ts` | Pathname → view. `stripLegacyAppHash()` drops a leftover `#/…` fragment. `safeDecode()` is the only path-segment decoder (malformed `%` → raw segment, never a throw). |
 | `src/routes/viewMap.ts` | `AppView` → path (`pathForView`) |
 | `src/routes/nav.ts` | `goView`, jump keys, nav labels |
 | `src/main.tsx` | Wraps the app in `BrowserRouter` |

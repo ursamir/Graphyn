@@ -3,10 +3,13 @@
 Bounded Context:  Application Layer — MCP Interface
 Responsibility:   Token authentication middleware for MCP tool invocations.
 Owns:             check_auth() — validates _meta.auth_token against
-                  GRAPHYN_API_TOKEN or a GRAPHYN_API_TOKENS mapped token. Reads token on every call (no caching)
-                  so token rotation takes effect immediately.
+                  GRAPHYN_API_TOKEN, a GRAPHYN_API_TOKENS mapped token or an
+                  issued user token (then checks the tool's RBAC permission
+                  via mcp_tool_permission() + project membership). Reads token
+                  on every call (no caching) so rotation takes effect immediately.
                   resolve_mcp_actor() — bind audit actor to the token map.
-Public Surface:   check_auth(arguments) -> dict | None,
+Public Surface:   check_auth(arguments, tool_name=None) -> dict | None,
+                  mcp_tool_permission(tool_name) -> str,
                   resolve_mcp_actor(arguments) -> identity dict
 Must NOT:         Cache the API token at module level. Must not import from
                   app.domain or any execution module.
@@ -68,7 +71,7 @@ def resolve_mcp_actor(arguments: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def check_auth(arguments: dict[str, Any]) -> dict[str, Any] | None:
+def check_auth(arguments: dict[str, Any], tool_name: str | None = None) -> dict[str, Any] | None:
     """Validate the auth token in the tool arguments.
 
     Returns None if auth passes (or is not configured in development).
@@ -108,4 +111,64 @@ def check_auth(arguments: dict[str, Any]) -> dict[str, Any] | None:
                 "_meta.auth_token."
             ),
         }
+    from app.core.trust.identity import identity_from_credentials
+
+    ident = identity_from_credentials(str(provided))
+    if ident.get("kind") == "worker":
+        # Worker-scoped tokens only speak the job protocol (TRUST_MODEL §1).
+        return {
+            "error": True,
+            "error_type": "forbidden",
+            "message": "Worker-scoped tokens cannot call MCP tools — use an operator token.",
+        }
+    if tool_name and ident.get("kind") == "user":
+        from app.core.trust.rbac import check_project_permission
+
+        args = arguments or {}
+        project = args.get("project") or args.get("workspace")
+        project = str(project).strip() if isinstance(project, str) and project.strip() else None
+        msg = check_project_permission(ident, project, mcp_tool_permission(tool_name))
+        if msg:
+            return {"error": True, "error_type": "forbidden", "message": msg}
     return None
+
+
+# Non-read MCP tools → permission (same names as app.core.trust.rbac).
+_MCP_TOOL_PERMISSIONS: dict[str, str] = {
+    "execute_pipeline": "runs.execute",
+    "pause_run": "runs.execute",
+    "resume_run": "runs.execute",
+    "cancel_run": "runs.execute",
+    "replay_run": "runs.execute",
+    "run_schedule_now": "runs.execute",
+    "accept_proposal": "approve",
+    "reject_proposal": "approve",
+    "approve_model_prod": "approve",
+    "promote_pipeline": "approve",
+    "promote_ship_package": "approve",
+    "decide_gate": "approve",
+    "install_plugin": "plugins.admin",
+    "manage_plugin": "plugins.admin",
+    "create_credential": "credentials.admin",
+    "update_credential": "credentials.admin",
+    "revoke_credential": "credentials.admin",
+    "get_webhooks": "system.admin",
+    "put_webhooks": "system.admin",
+    "test_webhook": "system.admin",
+    "get_audit_events": "audit.read",
+    "export_audit": "audit.read",
+    "list_workers": "read",
+    "list_jobs": "read",
+    "mark_notifications_read": "read",
+}
+_READ_PREFIXES = ("list_", "get_", "describe_", "search_", "inspect_", "validate_", "compare_", "generate_", "optimize_")
+
+
+def mcp_tool_permission(tool_name: str) -> str:
+    """Permission a user needs to call ``tool_name`` (unknown writes → ``pipelines.write``)."""
+    name = str(tool_name or "")
+    if name in _MCP_TOOL_PERMISSIONS:
+        return _MCP_TOOL_PERMISSIONS[name]
+    if name.startswith(_READ_PREFIXES):
+        return "read"
+    return "pipelines.write"

@@ -1,7 +1,7 @@
 import React from 'react'
 import { ListTodo as EmptyListTodo, Server as EmptyServer } from 'lucide-react'
-import { ExternalLink, RefreshCw, Server, X } from 'lucide-react'
-import { apiJson } from '../../api/client'
+import { ExternalLink, Plus, RefreshCw, Server, X } from 'lucide-react'
+import { ApiError, apiJson } from '../../api/client'
 import { formatLocaleDateTime, formatRelativeTime } from '../../lib/format'
 import { useAppStore } from '../../store/appStore'
 import { usePolling } from '../../lib/usePolling'
@@ -16,6 +16,7 @@ import {
   StatusBadge,
 } from '../../components/ui'
 import { WorkbenchPage } from '../../layout'
+import { WorkerJoinPanel } from './WorkerJoinPanel'
 
 /** Same-host smoke command — see docs/SDK_AND_CLI.md `graphyn worker start`. */
 const WORKER_START_CMD =
@@ -97,13 +98,28 @@ export default function WorkersView() {
   const [selected, setSelected] = React.useState<WorkerRow | null>(null)
   const [editAllowed, setEditAllowed] = React.useState('')
   const [editTrusted, setEditTrusted] = React.useState(true)
+  /** Only send `trusted` when the operator touched it or the server reported it. */
+  const [editTrustedTouched, setEditTrustedTouched] = React.useState(false)
   const [editMaxClaimed, setEditMaxClaimed] = React.useState('')
   const [savingAcl, setSavingAcl] = React.useState(false)
-  const [fleetTab, setFleetTab] = React.useState<'workers' | 'queue'>('workers')
+  const [fleetTab, setFleetTab] = React.useState<'workers' | 'queue' | 'join'>('workers')
   const [recentRuns, setRecentRuns] = React.useState<
     Array<{ run_id: string; status?: string; created_at?: string; graph_name?: string }>
   >([])
   const [queueNote, setQueueNote] = React.useState<string | null>(null)
+
+  const selectWorker = (w: WorkerRow) => {
+    setSelected(w)
+    setEditAllowed((w.allowed_plugins ?? []).join(', '))
+    setEditTrusted(w.trusted !== false)
+    setEditTrustedTouched(false)
+    setEditMaxClaimed(w.max_claimed != null ? String(w.max_claimed) : '')
+  }
+  // Keep the open drawer in step with polled rows (status, usage, trust) without
+  // clobbering in-progress edits.
+  React.useEffect(() => {
+    setSelected((cur) => (cur ? (workers?.find((w) => w.worker_id === cur.worker_id) ?? cur) : cur))
+  }, [workers])
 
   const refresh = React.useCallback(async () => {
     setError(null)
@@ -184,20 +200,27 @@ export default function WorkersView() {
           value={fleetTab}
           options={[
             { id: 'workers', label: 'Workers' },
+            { id: 'join', label: 'Enrollment' },
             { id: 'queue', label: 'Queue' },
           ]}
           onChange={setFleetTab}
         />
       }
       actions={
-        <button type="button" className="btn-secondary" onClick={() => void refresh()}>
-          <RefreshCw className="h-3.5 w-3.5" /> Refresh
-        </button>
+        <>
+          <button type="button" className="btn-primary" onClick={() => setFleetTab('join')}>
+            <Plus className="h-3.5 w-3.5" /> Add worker
+          </button>
+          <button type="button" className="btn-secondary" onClick={() => void refresh()}>
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+        </>
       }
     >
       <div className="space-y-4">
       <p className="text-xs text-ink-500">
-        Workers use the same API token as this console.
+        Add workers with a join token (Enrollment) — each gets its own credential and identity. Workers started with
+        the shared API token still work but are attributed to that token only.
       </p>
 
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-ink-200 bg-white px-4 py-3 text-sm shadow-sm">
@@ -213,7 +236,9 @@ export default function WorkersView() {
 
       {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
 
-      {fleetTab === 'queue' ? (
+      {fleetTab === 'join' ? (
+        <WorkerJoinPanel onChanged={() => void refresh()} />
+      ) : fleetTab === 'queue' ? (
         <section className="space-y-4 rounded-2xl border border-ink-200 bg-white p-4 shadow-sm">
           <div>
             <h3 className="text-sm font-semibold text-ink-900">Job queue</h3>
@@ -382,12 +407,7 @@ export default function WorkersView() {
                       <tr
                         key={w.worker_id}
                         className="cursor-pointer border-b border-ink-100/80 last:border-0 hover:bg-ink-50/60"
-                        onClick={() => {
-                          setSelected(w)
-                          setEditAllowed((w.allowed_plugins ?? []).join(', '))
-                          setEditTrusted(w.trusted !== false)
-                          setEditMaxClaimed(w.max_claimed != null ? String(w.max_claimed) : '')
-                        }}
+                        onClick={() => selectWorker(w)}
                       >
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
@@ -402,11 +422,11 @@ export default function WorkersView() {
                               <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-600">
                                 Untrusted
                               </span>
-                            ) : (
+                            ) : w.trusted === true ? (
                               <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800">
                                 Trusted
                               </span>
-                            )}
+                            ) : null}
                           </div>
                           {w.plugins && w.plugins.length > 0 && (
                             <div className="mt-1 text-[11px] text-ink-400">
@@ -572,17 +592,22 @@ export default function WorkersView() {
                     <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-600">
                       No
                     </span>
-                  ) : (
+                  ) : selected.trusted === true ? (
                     <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800">
                       Yes
                     </span>
+                  ) : (
+                    <span className="text-[11px] text-ink-400">Not reported</span>
                   )}
                 </div>
                 <label className="mb-2 flex items-center gap-2 text-ink-700">
                   <input
                     type="checkbox"
                     checked={editTrusted}
-                    onChange={(e) => setEditTrusted(e.target.checked)}
+                    onChange={(e) => {
+                      setEditTrusted(e.target.checked)
+                      setEditTrustedTouched(true)
+                    }}
                   />
                   Allow claims (trusted)
                 </label>
@@ -592,6 +617,7 @@ export default function WorkersView() {
                     <input
                       type="number"
                       min={0}
+                      step={1}
                       className="mt-1 w-full rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
                       value={editMaxClaimed}
                       onChange={(e) => setEditMaxClaimed(e.target.value)}
@@ -606,10 +632,14 @@ export default function WorkersView() {
                       {selected.usage?.bytes_in ?? selected.usage_bytes_in ?? 0} B in
                     </p>
                   )}
-                <label className="block text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+                <label
+                  htmlFor="worker-allowed-plugins"
+                  className="block text-[11px] font-semibold uppercase tracking-wide text-ink-400"
+                >
                   Allowed plugins
                 </label>
                 <input
+                  id="worker-allowed-plugins"
                   value={editAllowed}
                   onChange={(e) => setEditAllowed(e.target.value)}
                   placeholder="comma-separated; empty = no extra allowlist"
@@ -642,22 +672,35 @@ export default function WorkersView() {
                       .split(',')
                       .map((s) => s.trim())
                       .filter(Boolean)
+                    const maxRaw = editMaxClaimed.trim()
+                    if (maxRaw !== '' && !/^\d+$/.test(maxRaw)) {
+                      pushToast('Max concurrent claimed must be a whole number ≥ 0 (or empty for unlimited).', 'error')
+                      return
+                    }
+                    const body: Record<string, unknown> = {
+                      max_claimed: maxRaw === '' ? null : Number(maxRaw),
+                      allowed_plugins: allowed.length ? allowed : null,
+                    }
+                    if (editTrustedTouched || selected.trusted !== undefined) body.trusted = editTrusted
                     setSavingAcl(true)
                     void apiJson(`/workers/${encodeURIComponent(id)}`, {
                       method: 'PATCH',
-                      body: JSON.stringify({
-                        trusted: editTrusted,
-                        max_claimed: editMaxClaimed.trim() === '' ? null : Number(editMaxClaimed),
-                        allowed_plugins: allowed.length ? allowed : null,
-                      }),
+                      body: JSON.stringify(body),
                     })
                       .then((row) => {
                         pushToast(`Updated ACL for ${id}`, 'success')
-                        setSelected(row as WorkerRow)
+                        selectWorker(row as WorkerRow)
                         void refresh()
                       })
                       .catch((err) =>
-                        pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                        pushToast(
+                          err instanceof ApiError && err.status === 403
+                            ? 'Changing a worker ACL needs an operator token — set it in Settings.'
+                            : err instanceof Error
+                              ? err.message
+                              : String(err),
+                          'error',
+                        ),
                       )
                       .finally(() => setSavingAcl(false))
                   }}

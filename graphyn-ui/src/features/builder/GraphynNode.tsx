@@ -51,6 +51,8 @@ export type GraphynNodeData = {
   /** View-only: latest node_progress while running; never saved. */
   progress?: NodeProgress | null
   onChangeConfig?: (key: string, value: unknown) => void
+  /** Display name saved as IR ``label`` (logs, canvas card, run focus). */
+  onChangeLabel?: (next: string) => void
   onChangePlacement?: (next: NodePlacement | null) => void
   onChangeErrorPolicy?: (next: { onError: NodeOnError | null; retry: NodeRetry | null }) => void
   onDelete?: () => void

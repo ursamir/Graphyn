@@ -291,6 +291,43 @@ def _finding(
     }
 
 
+def _placement_findings(node: Any) -> list[dict[str, Any]]:
+    """VAL-PLACE: mode=worker requires a worker id; mode=pool requires a pool name."""
+    errors: list[dict[str, Any]] = []
+    # UI historically allowed Mode=worker with an empty Worker field, which
+    # resolve_worker() fail-closes as "No eligible worker". Catch at validate.
+    placement = getattr(node, "placement", None)
+    if placement is not None:
+        pmode = str(getattr(placement, "mode", None) or "auto")
+        pworker = getattr(placement, "worker", None)
+        ppool = getattr(placement, "pool", None)
+        if pmode == "worker" and not (isinstance(pworker, str) and pworker.strip()):
+            errors.append(
+                _finding(
+                    "VAL-PLACE",
+                    "error",
+                    f"[{node.id}] placement.mode=worker requires a non-empty "
+                    f"worker id (got worker={pworker!r}). Pick a worker, or use "
+                    f"mode=auto/pool with tags/pool instead.",
+                    node_ids=[node.id],
+                    field="placement.worker",
+                )
+            )
+        if pmode == "pool" and not (isinstance(ppool, str) and ppool.strip()):
+            errors.append(
+                _finding(
+                    "VAL-PLACE",
+                    "error",
+                    f"[{node.id}] placement.mode=pool requires a non-empty "
+                    f"pool name (got pool={ppool!r}).",
+                    node_ids=[node.id],
+                    field="placement.pool",
+                )
+            )
+
+    return errors
+
+
 def _validate_edge_conditions(graph: Any, errors: list[dict]) -> None:
     """VAL-COND: syntax/whitelist-check edge conditions before execution."""
     from app.core.execution.conditions import ConditionEvaluationError, validate_condition_syntax
@@ -471,6 +508,7 @@ def validate_graph_ir_result(graph: Any, registry: Any) -> dict:
             except Exception:
                 remote_ok = False
             if remote_ok:
+                errors.extend(_placement_findings(node))
                 continue
             try:
                 available = sorted(m.node_type for m in registry.list_nodes())
@@ -506,37 +544,7 @@ def validate_graph_ir_result(graph: Any, registry: Any) -> dict:
                     )
                 )
 
-        # VAL-PLACE: mode=worker requires worker id; mode=pool requires pool name.
-        # UI historically allowed Mode=worker with an empty Worker field, which
-        # resolve_worker() fail-closes as "No eligible worker". Catch at validate.
-        placement = getattr(node, "placement", None)
-        if placement is not None:
-            pmode = str(getattr(placement, "mode", None) or "auto")
-            pworker = getattr(placement, "worker", None)
-            ppool = getattr(placement, "pool", None)
-            if pmode == "worker" and not (isinstance(pworker, str) and pworker.strip()):
-                errors.append(
-                    _finding(
-                        "VAL-PLACE",
-                        "error",
-                        f"[{node.id}] placement.mode=worker requires a non-empty "
-                        f"worker id (got worker={pworker!r}). Pick a worker, or use "
-                        f"mode=auto/pool with tags/pool instead.",
-                        node_ids=[node.id],
-                        field="placement.worker",
-                    )
-                )
-            if pmode == "pool" and not (isinstance(ppool, str) and ppool.strip()):
-                errors.append(
-                    _finding(
-                        "VAL-PLACE",
-                        "error",
-                        f"[{node.id}] placement.mode=pool requires a non-empty "
-                        f"pool name (got pool={ppool!r}).",
-                        node_ids=[node.id],
-                        field="placement.pool",
-                    )
-                )
+        errors.extend(_placement_findings(node))
 
         # IR route/continue shadows Config on_error_port — warn when both are set.
         pol = getattr(node, "on_error", None)

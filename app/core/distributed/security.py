@@ -61,7 +61,10 @@ def assert_remote_config_safe(config: dict[str, Any] | None) -> dict[str, Any]:
     Reuses :func:`find_inline_secrets` against a one-node fake graph so remote
     enqueue shares the same policy as Graph IR validation.
     """
-    cfg = copy.deepcopy(dict(config or {}))
+    from app.core.ir.models import thaw_config
+
+    # IR configs are deep-frozen (nested MappingProxyType), which deepcopy cannot pickle.
+    cfg = copy.deepcopy(thaw_config(dict(config or {})))
     hits = find_inline_secrets(
         {"nodes": [{"id": "remote", "node_type": "x", "config": cfg}]}
     )

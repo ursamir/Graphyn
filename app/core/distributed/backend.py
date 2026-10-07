@@ -193,29 +193,51 @@ def _forward_job_events(
     run: Any,
     node_id: str,
     seen: set[int],
-) -> None:
-    """Copy worker job events into the run journal / NDJSON stream (best-effort)."""
+) -> int:
+    """Copy worker job events into the run journal / NDJSON stream (best-effort).
+
+    Returns the number of newly forwarded events (used to suppress the
+    periodic ``Waiting for worker…`` note while live ``node_progress`` flows).
+    """
     if logger is None:
-        return
+        return 0
     list_fn = getattr(queue, "list_events", None)
     if not callable(list_fn):
-        return
+        return 0
     try:
         events = list_fn(job_id) or []
     except Exception:
-        return
+        return 0
+    forwarded = 0
     for idx, ev in enumerate(events):
-        if idx in seen or not isinstance(ev, dict):
+        if not isinstance(ev, dict):
             continue
-        seen.add(idx)
+        # ``_seq`` is monotonic across the events cap; the index shifts once trimmed.
+        seq = ev.get("_seq")
+        key = seq if isinstance(seq, int) else idx
+        if key in seen:
+            continue
+        seen.add(key)
         et = str(ev.get("type") or ev.get("event") or "")
-        if et in ("outputs",):
+        if et in ("outputs", "provenance"):
             continue
+        forwarded += 1
         if et == "node_progress" and hasattr(logger, "node_progress"):
             payload = dict(ev)
             payload.setdefault("node_id", node_id)
             try:
                 logger.node_progress(payload)
+            except Exception:
+                pass
+            # Mirror latest-per-node into meta.json (same as Mode A orchestrator sink)
+            # so GET /runs/{id}/status shows live epoch/loss while waiting.
+            try:
+                nid = str(payload.get("node_id") or node_id or "")
+                if nid and run is not None and hasattr(run, "_write_meta_field"):
+                    latest = dict(getattr(run, "_latest_node_progress", None) or {})
+                    latest[nid] = payload
+                    run._latest_node_progress = latest
+                    run._write_meta_field("node_progress", latest)
             except Exception:
                 pass
         else:
@@ -224,7 +246,9 @@ def _forward_job_events(
                 logger.info(f"[worker/{node_id}] {msg}")
             except Exception:
                 pass
-    _flush_run_logs(run, logger)
+    if forwarded:
+        _flush_run_logs(run, logger)
+    return forwarded
 
 
 def _wait_remote_result(
@@ -254,6 +278,10 @@ def _wait_remote_result(
     # Emit the first "Waiting for worker…" immediately so Editor hydrate / NDJSON
     # is never blank while Mode B remote nodes sit in claim/execute.
     last_note = -1e9
+    # Once the worker has reported node_progress for this node, never resume the
+    # Waiting heartbeat — epoch gaps often exceed 5s and would spam the journal
+    # between progress lines (UI collapses repeats, but Mode A never emits them).
+    progress_seen = False
     # Back off the result poll: a tight 0.5s loop + worker GET /jobs spam fought
     # for uvicorn capacity and made the Execution log look stuck.
     import os as _os
@@ -286,11 +314,19 @@ def _wait_remote_result(
             if not getattr(run, "is_paused", False):
                 queue.set_run_paused(run.run_id, False)
         if logger is not None and node_id:
-            _forward_job_events(
+            n_new = _forward_job_events(
                 queue, job_id, logger=logger, run=run, node_id=node_id, seen=seen_events
             )
             now = _time.monotonic()
-            if now - last_note >= 5.0:
+            if not progress_seen:
+                latest = getattr(run, "_latest_node_progress", None) or {}
+                if isinstance(latest, dict) and node_id in latest:
+                    progress_seen = True
+            # While live node_progress is streaming (or has started), skip the
+            # "Waiting…" spam — the journal already shows epoch/loss like Mode A.
+            if n_new:
+                last_note = now
+            elif not progress_seen and now - last_note >= 5.0:
                 last_note = now
                 try:
                     logger.info(
@@ -462,6 +498,26 @@ def _cache_save(cache_key: str | None, node_type: str, outputs: Any) -> None:
     from app.core.execution.pipeline_cache import PipelineCache
 
     PipelineCache().save(cache_key, outputs)
+
+
+def _node_execution_lineage(job: Any, result: Any, node_type: str) -> dict[str, Any]:
+    """Per-node ``executed_by`` row for the run record (control-observed provenance only)."""
+    prov: dict[str, Any] = {}
+    for ev in getattr(result, "events", None) or []:
+        if isinstance(ev, dict) and ev.get("type") == "provenance":
+            prov = ev
+    row: dict[str, Any] = {
+        "node_type": node_type,
+        "job_id": getattr(job, "job_id", None),
+        "worker_id": getattr(result, "worker_id", None) or prov.get("worker_id"),
+        "lease_generation": getattr(result, "lease_generation", None),
+        "status": getattr(result, "status", None),
+        "output_sha256": dict(getattr(result, "output_sha256", None) or {}),
+    }
+    for key in ("principal", "enrollment", "worker"):
+        if prov.get(key):
+            row[key] = prov[key]
+    return row
 
 
 def _is_routed_error_output(outputs: Any, ir_node: Any) -> bool:
@@ -710,7 +766,12 @@ class DistributedBackend(RuntimeBackend):
 
         from app.core.distributed.models import NodeJob
         from app.core.distributed.queue import get_job_queue
-        from app.core.distributed.transfer import get_port_value, put_port_value
+        from app.core.distributed.transfer import (
+            default_materialize_root,
+            get_port_value,
+            put_port_value_with_grants,
+            safe_job_segment,
+        )
         from app.core.ir.loader import dump_ir
         from app.core.runs.run_control import deregister_active_run, register_active_run
         from app.core.runs.run_journal import RunManager
@@ -793,6 +854,7 @@ class DistributedBackend(RuntimeBackend):
         waves = compute_ir_waves(graph)
         node_outputs: dict[str, dict[str, Any]] = {}
         node_workers: dict[str, str] = {}
+        node_lineage: dict[str, dict] = {}
         # Per-job waits use GRAPHYN_DISTRIBUTED_JOB_TIMEOUT / job.timeout_s
         # (no shared graph-wide deadline).
 
@@ -980,9 +1042,11 @@ class DistributedBackend(RuntimeBackend):
                         continue
 
                     input_refs: dict[str, str] = {}
+                    blob_grants: set[str] = set()
                     for port, value in inputs.items():
-                        uri = put_port_value(value)
+                        uri, grants = put_port_value_with_grants(value)
                         input_refs[port] = uri
+                        blob_grants.update(grants)
                         input_uploads[uri] = _blob_mtime_ns(uri)
 
                     placement = getattr(ir_node, "placement", None)
@@ -1036,6 +1100,7 @@ class DistributedBackend(RuntimeBackend):
                         config=safe_cfg,
                         seed=node_seed,
                         input_refs=input_refs,
+                        blob_grants=sorted(blob_grants),
                         placement=job_placement,
                         require_gpu=bool(constraints["require_gpu"]),
                         min_vram_mib=constraints["min_vram_mib"],
@@ -1111,9 +1176,15 @@ class DistributedBackend(RuntimeBackend):
                     outputs = {}
                     if result.output_refs:
                         digests = dict(getattr(result, "output_sha256", None) or {})
+                        # Per run/node hydrate dir: a shared root would let one
+                        # run's companions shadow another's at the same rel path.
+                        out_dir = default_materialize_root() / safe_job_segment(str(run_id)) / safe_job_segment(str(node_id))
                         for port, uri in result.output_refs.items():
                             outputs[port] = get_port_value(
-                                uri, expected_sha256=digests.get(port)
+                                uri,
+                                expected_sha256=digests.get(port),
+                                materialize_dir=out_dir,
+                                port=str(port),
                             )
                     else:
                         for ev in result.events or []:
@@ -1135,6 +1206,8 @@ class DistributedBackend(RuntimeBackend):
                         node_workers[node_id] = str(target)
 
                     run._write_meta_field("distributed_node_workers", dict(node_workers))
+                    node_lineage[node_id] = _node_execution_lineage(stored, result, ir_node.node_type)
+                    run._write_meta_field("distributed_node_lineage", dict(node_lineage))
 
                     dur = round(_time.time() - _remote_start, 4)
                     if logger is not None:

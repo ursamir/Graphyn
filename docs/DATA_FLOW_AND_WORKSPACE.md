@@ -189,6 +189,17 @@ does not rediscover exporter trees or parse domain files such as `labels.csv`.
 Any node type (audio export, video, webhook dump, LLM transcript, inference
 bundle) can publish the same way.
 
+Model, deployment and TFLite artifacts are stored by their serializers
+(`app/models/model_artifact_serializer.py`,
+`app/models/deployment_artifact_serializer.py`) as a **v2 role manifest**
+(`*_artifact_manifest.json`): the referenced files are copied under `files/`
+and a `path_map` records which config/metadata field pointed at which copy, so
+loading restores every path role. v1 manifests still load. Run output listing
+(`run_outputs`) and run summaries (`run_summary`) read those manifests, so the
+copied files are what the console lists. Every interface (API, CLI, MCP, SDK)
+registers these serializers through
+`app.models.serializers.register_builtin_serializers()`.
+
 
 ---
 

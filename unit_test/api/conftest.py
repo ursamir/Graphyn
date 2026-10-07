@@ -12,7 +12,7 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def patch_threads():
+def patch_threads(real_threads):
     """Override the global patch_threads fixture for API tests.
 
     TestClient requires real threads to function; patching Thread.start

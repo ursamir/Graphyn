@@ -121,7 +121,7 @@ async def handle_call_tool(
     body is unchanged.
     """
     # ── Auth check ─────────────────────────────────────────────────────────────
-    auth_error = check_auth(arguments)
+    auth_error = check_auth(arguments, name)
     if auth_error is not None:
         log.info("tool=%s outcome=unauthorized", name)
         return _tool_result(auth_error, is_error=True)
@@ -139,10 +139,22 @@ async def handle_call_tool(
 
     # ── Dispatch ───────────────────────────────────────────────────────────────
     handler = _TOOLS[name]["handler"]
+
+    def _call_with_identity():
+        # Bind the caller (token → user / operator) so record_audit names them.
+        from app.core.trust.identity import identity_from_credentials, reset_request_identity, set_request_identity
+
+        meta = arguments.get("_meta") if isinstance(arguments, dict) and isinstance(arguments.get("_meta"), dict) else {}
+        ident = identity_from_credentials(str(meta.get("auth_token") or "") or None)
+        ident["origin"] = "mcp"
+        tok = set_request_identity(ident if ident.get("token_mapped") else None)
+        try:
+            return handler(arguments)
+        finally:
+            reset_request_identity(tok)
+
     try:
-        result = await asyncio.get_running_loop().run_in_executor(
-            _HANDLER_EXECUTOR, lambda: handler(arguments)
-        )
+        result = await asyncio.get_running_loop().run_in_executor(_HANDLER_EXECUTOR, _call_with_identity)
     except Exception as exc:
         error = {
             "error": True,
@@ -169,18 +181,8 @@ def _startup() -> None:
     try:
         # Register domain serializers so artifact_store/pipeline_cache/checkpoint
         # can handle AudioSample objects without importing domain models (ARCH-2 fix).
-        from app.models.audio_artifact_serializer import register_audio_serializer
-        register_audio_serializer()
-        from app.models.dataset_artifact_serializer import register_dataset_serializer
-        register_dataset_serializer()
-        from app.models.feature_array_serializer import register_feature_array_serializer
-        register_feature_array_serializer()
-        from app.core.artifacts.file_tree import register_file_tree_serializer
-        register_file_tree_serializer()
-        from app.models.model_artifact_serializer import register_model_artifact_serializer
-        register_model_artifact_serializer()
-        from app.models.deployment_artifact_serializer import register_deployment_artifact_serializer
-        register_deployment_artifact_serializer()
+        from app.models.serializers import register_builtin_serializers
+        register_builtin_serializers()
 
         # Explicitly populate the NodeRegistry singleton after the domain serializer
         # is registered so node imports that reference AudioSample work correctly.

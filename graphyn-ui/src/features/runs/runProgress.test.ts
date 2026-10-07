@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   collapseProgressRows,
+  collapseWaitingRows,
   finishedNodeIds,
   runningNodesOf,
   formatProgressLine,
+  formatWaitingLine,
   latestProgressByNode,
   parseProgress,
   progressBadgeText,
   progressSeries,
   sparklinePoints,
+  waitingDots,
 } from './runProgress'
 
 const ev = (epoch: number, extra: Record<string, unknown> = {}) => ({
@@ -58,6 +61,32 @@ describe('collapse', () => {
   it('sparkline points span the box', () => {
     expect(sparklinePoints([0, 1], 10, 4)).toBe('0.0,4.0 10.0,0.0')
     expect(sparklinePoints([1], 10, 4)).toBe('')
+  })
+  it('collapses Waiting-for-worker heartbeats interleaved with progress', () => {
+    const wait = (n: number) => ({
+      m: `Waiting for worker on node trainer_0 (job=1ac78f69…)`,
+      n,
+    })
+    const rows = [
+      { m: 'start' },
+      wait(1),
+      ev(1),
+      wait(2),
+      ev(2),
+      wait(3),
+      wait(4),
+    ]
+    const out = collapseWaitingRows(
+      collapseProgressRows(rows, (r) => ('type' in r ? r : null)),
+      (r) => String((r as { m?: string }).m || ''),
+    )
+    expect(out.map((o) => o.kind)).toEqual(['row', 'waiting', 'progress'])
+    const w = out[1]
+    expect(w.kind === 'waiting' && w.count).toBe(4)
+    expect(w.kind === 'waiting' && formatWaitingLine(w.text, w.count)).toMatch(/\.{1,4}$/)
+    expect(waitingDots(1)).toBe('.')
+    expect(waitingDots(4)).toBe('....')
+    expect(waitingDots(5)).toBe('.')
   })
 })
 

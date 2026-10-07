@@ -199,7 +199,7 @@ Default Compose is single-machine `LocalPythonBackend`. For multi-machine placem
 
 ```bash
 export GRAPHYN_CONTROL_URL=http://<control-host>:8001/api/v1
-export GRAPHYN_API_TOKEN=change-me
+export GRAPHYN_WORKER_TOKEN=change-me   # worker-scoped token bound to this worker id
 venv/bin/python -m app.cli.main worker start \
   --control-url "$GRAPHYN_CONTROL_URL" \
   --worker-id server99-gpu --labels gpu --pool gpu-lab
@@ -226,6 +226,12 @@ Full runbook, env vars, cancel/lease, and UI (**Deploy → Workers**): [DISTRIBU
 | `GRAPHYN_DISTRIBUTED_BLOB_GRACE_S` | `30` | `distributed/backend.py` | Delay before run-end transfer-blob cleanup (`0` = immediately) |
 | `GRAPHYN_DISTRIBUTED_KEEP_BLOBS` | unset | `distributed/backend.py` | `1` disables run-end blob cleanup (debugging) |
 | `GRAPHYN_DISTRIBUTED_BLOB_TTL_S` | `86400` | `run_cleanup.py` | `cleanup_workspace` sweep age for `artifacts/distributed_blobs` |
+| `GRAPHYN_WORKER_TOKEN` | unset | worker CLI (`distributed/transfer.py`) | Worker bearer token; preferred over `GRAPHYN_API_TOKEN` on worker hosts |
+| `GRAPHYN_WORKER_UNBOUND_TOKENS` | unset | `trust/identity.py` | `1` allows `kind=worker` tokens without a `worker_id` binding (lab only); otherwise they fail closed unless mTLS supplies the id |
+| `GRAPHYN_BLOB_SIGNING_KEY` | unset | `distributed/transfer.py` | Control-plane HMAC key for signed blob URLs; no API-token fallback |
+| `GRAPHYN_BLOB_ENCRYPTION_OLD_KEYS` | unset | `distributed/blob_crypto.py` | Comma-separated retired blob encryption keys, tried on decrypt during rotation |
+| `GRAPHYN_ENV` | unset | `app/api/main.py` | `production` / `prod` / `staging` disables the `X-Graphyn-Mtls-Worker-Id` test header |
+| `GRAPHYN_INPUT_INVENTORY_TTL_S` | `300` | `mlops/dataset_inputs.py` | Max age of the cached input-label inventory before a re-scan |
 
 See [TRUST_MODEL.md](./TRUST_MODEL.md) for the security rationale and [DISTRIBUTED_EXECUTION.md § Env reference](./DISTRIBUTED_EXECUTION.md) for the full Mode B list.
 
