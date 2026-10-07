@@ -13,7 +13,7 @@ Graphyn today is a **single-operator** platform: one shared API token (when conf
 |---|---|---|
 | **Unauthenticated-dev** | `GRAPHYN_API_TOKEN` unset **and** auth not required | All `/api/v1/*` routes and MCP tools accept callers without a token. Intended for local single-user development only. |
 | **Shared bearer** | `GRAPHYN_API_TOKEN` set | REST requires `Authorization: Bearer <token>`; MCP requires `_meta.auth_token`. Same token for every operator and worker. |
-| **Named tokens** | `GRAPHYN_API_TOKENS` and/or `GRAPHYN_API_TOKENS_FILE` set | Each listed token is accepted (REST + MCP) alongside `GRAPHYN_API_TOKEN`. A mapped token **binds the audit actor**: events, run meta and sealed run records record the mapped name with `actor_verified: true`; a differing `X-Actor` is only `claimed_actor`. This is attribution, **not** authorization — every valid token still has full control-plane access. |
+| **Named tokens** | `GRAPHYN_API_TOKENS` and/or `GRAPHYN_API_TOKENS_FILE` set | Each listed token is accepted (REST + MCP) alongside `GRAPHYN_API_TOKEN`. A mapped token **binds the audit actor** (`actor_verified: true`). Text form: `name:token` (operator) or `name:token:worker[:worker_id]`; JSON: `{"token":"name"}` or `{"token":{"name","kind","worker_id"}}`. **Operator** tokens keep full control-plane access. **Worker-scoped** tokens (`kind=worker`) may only act as their bound `worker_id` on `/jobs/*`, worker heartbeat, claim/complete/events, and blob put/get (header `X-Graphyn-Worker-Id` or body/query). Fail closed when auth is configured. |
 | **Fail-closed** | `GRAPHYN_AUTH_REQUIRED=1` **or** `GRAPHYN_ENV` ∈ {`production`,`prod`,`staging`} | Empty `GRAPHYN_API_TOKEN` is rejected (401 / MCP unauthorized). Set a token before exposing the API. |
 
 **Audit identity.** With the single shared token (or no auth) the actor is the self-declared `X-Actor` header (or `"unidentified"`) and is recorded `actor_verified: false`. `"system"` is reserved for internal background jobs (no HTTP request). `GET /api/v1/me` shows the caller how they will be recorded.
@@ -52,12 +52,12 @@ No credential → 401, even in unauthenticated-dev (the hook route never falls b
 | **Projects** | Bearer holder (all projects) | Bearer holder | Bearer holder | n/a | n/a |
 | **Graphs** (pipelines / IR) | Bearer holder (any project) | Bearer holder | Bearer holder | Bearer holder (run) | n/a (do not embed secrets in IR) |
 | **Runs** | Bearer holder | Bearer holder (enqueue) | Bearer holder (pause/cancel/…) | Bearer holder | n/a |
-| **Artifacts** | Bearer holder (all keys / blobs) | Bearer holder / workers with bearer | Bearer holder | Replay via bearer | n/a |
+| **Artifacts** | Operator / claim holder / signed URL | Worker with claim (jobs/ keys) or operator | Bearer holder | Replay via bearer / signed GET | n/a |
 | **Datasets** (input/output mounts) | Bearer holder | Bearer holder | Bearer holder | n/a | n/a |
 | **Plugins** | Bearer holder (list/search) | n/a | Enable/disable/uninstall: bearer | **Install** + dependency install: bearer | n/a |
 | **Credentials** (platform connections) | Bearer holder — **redacted fields only** | Bearer holder (create/update) | Bearer holder (revoke/delete) | Resolved in-process by nodes | **Never** via list/get API/MCP; raw values only inside runtime resolve |
 | **Named-secret files** (ops bootstrap under `GRAPHYN_HOME/secrets/`) | CLI `secrets list` — names only | CLI `secrets set` | CLI `secrets delete` | `resolve_secret()` in-process | **Never** via product REST/MCP (removed) |
-| **Workers** | Bearer holder | Register / heartbeat: bearer | Deregister: bearer | Claim/complete jobs: bearer | n/a |
+| **Workers** | Bearer holder | Register / heartbeat: bearer (worker-scoped → own id) | Deregister / PATCH ACL: **operator** | Claim/complete: bearer (worker-scoped → own id) | n/a |
 | **Deployments** (edge packs / wizard outputs) | Bearer holder (project-scoped files) | Bearer holder | Bearer holder | Package/deploy actions: bearer | n/a |
 | **Proposals** | Bearer holder | Bearer holder / MCP with auth | Accept/reject: bearer | Apply via accept: bearer | n/a |
 
@@ -69,7 +69,7 @@ No credential → 401, even in unauthenticated-dev (the hook route never falls b
 | Per-user accounts / OAuth / OIDC / SSO | **Not shipped** |
 | Per-project isolation (user A cannot read project B) | **Not shipped** — bearer sees all projects |
 | Multi-tenant DB schemas / org boundaries | **Not shipped** |
-| Separate worker credentials vs API token | **Not shipped** — workers use the same bearer |
+| Separate worker credentials vs API token | **Partial (WAVE-1)** — worker-scoped named tokens + route ACL; shared bearer still supported |
 | Fine-grained secret ACL (per-secret readers) | **Not shipped** |
 
 ### Future requirement (when multi-user is supported)
@@ -176,6 +176,41 @@ Rules:
 4. Plugin authors must not ship pickle gadgets; isolated worker outputs are recast onto platform types before host unpickle when possible (`recast_plugin_types`).
 
 Regression: `RestrictedUnpickler` tests in `unit_test/core/plugins/test_dep_isolation.py`, `test_restricted_unpickler.py`, `test_security_restricted_unpickler.py`; transfer path in `unit_test/core/test_distributed_transfer.py`.
+
+
+## 6. Mode B WAVE-1 (distributed workers)
+
+Env knobs (read live; lab defaults keep Mode B working without them):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GRAPHYN_API_TOKENS` / `_FILE` | empty | Named tokens; optional `kind=worker` + `worker_id` binding (see §1) |
+| `GRAPHYN_WORKER_TRUST_REQUIRED` | unset | When `1` **and** `auth_required()`, untrusted workers cannot claim |
+| `GRAPHYN_WORKER_REQUIRE_PLUGIN_ADVERTISE` | unset | When `1`, empty `plugins` advertisement cannot claim (fail closed) |
+| `GRAPHYN_BLOB_SIGNING_KEY` | falls back to `GRAPHYN_API_TOKEN` | HMAC secret for short-lived blob GET URLs |
+| `GRAPHYN_BLOB_URL_TTL_S` | `300` | Signed blob URL TTL (seconds) |
+| `GRAPHYN_HTTP_EGRESS_MODE` | `trusted` | Set `restricted` on Mode B compose (api↔worker allowlist) |
+| `GRAPHYN_BLOB_ENCRYPTION_KEY` | unset | urlsafe-b64 32-byte key; encrypts blob files at rest (plaintext sha256 keys). Unset = plaintext |
+| `GRAPHYN_POOL_MAX_CLAIMED` | unset | JSON `{"gpu-lab":2}` or `gpu-lab=2,cpu=4` concurrent claimed/running caps per pool |
+| `GRAPHYN_MTLS_ENABLED` | unset | `1` = require client certs (fail closed). Default HTTP when unset |
+| `GRAPHYN_MTLS_CA_CERT` / `_CERT` / `_KEY` | unset | Control CA + server cert/key PEMs |
+| `GRAPHYN_MTLS_CLIENT_CERT` / `_CLIENT_KEY` | unset | Worker client cert/key PEMs |
+| `GRAPHYN_WORKER_SPOOL` | `1` | Offline store-and-forward under `{GRAPHYN_HOME}/worker_spool/` |
+
+Controls:
+
+* **Per-worker plugin ACL** — `allowed_plugins` / `plugin_hashes` (pins) / `trusted` on `WorkerInfo`; admin `PATCH /workers/{id}`; claim intersects advertised ∩ allowlist and checks content hash pins.
+* **Blob GET** — operator token, OR worker holding the job-scoped claim, OR valid `exp`+`sig` HMAC URL (`mint_signed_blob_url` / `GET …/artifacts/blob/{key}?exp=&sig=`).
+* **Remote config** — `assert_remote_config_safe` strips/forbids inline secrets before enqueue (refs only: `*_env`, `secret_name`, `connection_id`).
+* **Event redaction** — control redacts secret-shaped keys / bearer / webhook URLs on `events` and `complete` before persistence.
+* **Audit** — `worker.register|deregister|trust`, `job.claim|complete|cancel`, `blob.put|get` (metadata only; never raw bytes).
+* **mTLS (WAVE-2)** — `scripts/gen_modeb_mtls_certs.sh` + `python -m app.api.mtls_serve`; cert CN / URI SAN `urn:graphyn:worker:{id}` binds worker identity (AND/OR worker token). HTTP remains default when disabled.
+* **Blob encrypt-at-rest (WAVE-2)** — content-address by plaintext sha256; on-disk GBE1 envelope when `GRAPHYN_BLOB_ENCRYPTION_KEY` set.
+* **Pool / worker quotas (WAVE-2)** — `GRAPHYN_POOL_MAX_CLAIMED` + `WorkerInfo.max_claimed` (admin PATCH); usage counters on `GET /workers`.
+* **Worker spool (WAVE-2)** — when control is unreachable, complete/blob/events spool and flush on reconnect (lease_generation fencing drops stale items).
+
+Skipped (not shipped): TPM/SGX hardware attestation (no hardware API — plugin hash pins are the software attestation), multi-tenant org/SaaS tables.
+
 
 ## Related
 

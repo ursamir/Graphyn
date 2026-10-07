@@ -821,9 +821,13 @@ class JobQueue:
                 continue
             if str(job.run_id or "") in _paused_run_ids(snap):
                 continue
+            if not _worker_trust_ok(worker):
+                continue
             if not _plugins_allow(worker, job.node_type):
                 continue
             if not worker_eligible_for_job(worker, job):
+                continue
+            if _quota_blocks_claim(worker, job, jobs_raw):
                 continue
             now = _utcnow()
             claimed = job.model_copy(
@@ -884,9 +888,16 @@ class JobQueue:
                 if str(job.run_id or "") in self._paused_runs:
                     continue
                 # Hard refuse: advertised plugins must include node_type.
+                if not _worker_trust_ok(worker):
+                    continue
                 if not _plugins_allow(worker, job.node_type):
                     continue
                 if not worker_eligible_for_job(worker, job):
+                    continue
+                jobs_raw = {
+                    jid: j.model_dump(mode="python") for jid, j in self._jobs.items()
+                }
+                if _quota_blocks_claim(worker, job, jobs_raw):
                     continue
                 now = _utcnow()
                 claimed = job.model_copy(
@@ -1502,6 +1513,13 @@ class JobQueue:
             self._persist_unlocked()
             return updated
 
+    def list_events(self, job_id: str) -> list[dict[str, Any]]:
+        """Return a copy of events appended for ``job_id`` (empty if none)."""
+        with self._lock:
+            if self._store is not None:
+                self._sync_from_store_unlocked(job_id=job_id)
+            return list(self._events.get(job_id) or [])
+
     def append_events(self, job_id: str, events: list[dict[str, Any]]) -> int:
         """Append log/event payloads for a job. Returns new event count."""
         with self._lock:
@@ -1578,7 +1596,7 @@ class JobQueue:
         """
         poll = poll_interval_s
         if poll is None:
-            poll = float(os.environ.get("GRAPHYN_JOB_WAIT_POLL_S", "0.25") or "0.25")
+            poll = float(os.environ.get("GRAPHYN_JOB_WAIT_POLL_S", "4.0") or "4.0")
         poll = max(0.05, float(poll))
 
         deadline = None if timeout_s is None else (time.monotonic() + float(timeout_s))
@@ -1638,15 +1656,113 @@ class JobQueue:
             self._persist_unlocked()
 
 
-def _plugins_allow(worker: WorkerInfo, node_type: str) -> bool:
-    """Hard refuse when worker advertises plugins and node_type is missing."""
-    plugins = list(worker.plugins or [])
-    if not plugins:
-        # Empty advertisement → unknown capability set (dev/tests); allow.
+
+def _count_active_in_jobs(
+    jobs: dict[str, Any] | list[Any],
+    *,
+    worker_id: str | None = None,
+    pool: str | None = None,
+) -> int:
+    """Count claimed/running jobs in a snapshot dict or job list."""
+    n = 0
+    iterable = jobs.values() if isinstance(jobs, dict) else jobs
+    for payload in iterable:
+        try:
+            if isinstance(payload, NodeJob):
+                job = payload
+            else:
+                job = NodeJob.model_validate(payload)
+        except Exception:
+            continue
+        if job.status not in ("claimed", "running"):
+            continue
+        if worker_id is not None and job.claimed_by != worker_id:
+            continue
+        if pool is not None and str(job.pool or "") != str(pool):
+            continue
+        n += 1
+    return n
+
+
+def _quota_blocks_claim(worker: WorkerInfo, job: NodeJob, jobs_raw: dict[str, Any]) -> bool:
+    """True when claiming ``job`` would exceed worker or pool concurrent quotas."""
+    from app.core.distributed.quotas import parse_pool_max_claimed, worker_max_claimed
+
+    limit = worker_max_claimed(worker)
+    if limit is not None:
+        if _count_active_in_jobs(jobs_raw, worker_id=worker.worker_id) >= limit:
+            return True
+    limits = parse_pool_max_claimed()
+    if limits:
+        pools: list[str] = []
+        if job.pool:
+            pools.append(str(job.pool))
+        for p in list(worker.pools or []):
+            s = str(p or "").strip()
+            if s and s not in pools:
+                pools.append(s)
+        for pool_name in pools:
+            if pool_name in limits and _count_active_in_jobs(jobs_raw, pool=pool_name) >= limits[pool_name]:
+                return True
+    return False
+
+
+def _worker_trust_ok(worker: WorkerInfo) -> bool:
+    """Fail closed for untrusted workers when trust is required."""
+    if bool(getattr(worker, "trusted", True)):
         return True
+    import os
+
+    flag = (os.environ.get("GRAPHYN_WORKER_TRUST_REQUIRED") or "").strip().lower()
+    if flag not in ("1", "true", "yes", "on"):
+        return True
+    try:
+        from app.core.config import auth_required
+
+        if not auth_required():
+            return True
+    except Exception:
+        return True
+    return False
+
+
+def _plugins_allow(worker: WorkerInfo, node_type: str) -> bool:
+    """Hard refuse when advertised / allowlisted plugins omit ``node_type``.
+
+    Rules (fail closed when flags require it):
+    * empty advertised ``plugins`` → allow in lab; deny when
+      ``GRAPHYN_WORKER_REQUIRE_PLUGIN_ADVERTISE=1``.
+    * intersect advertised ∩ ``allowed_plugins`` when the latter is set.
+    * when ``plugin_hashes`` pins a type, ``content_hashes[type]`` must match.
+    """
+    import os
+
+    plugins = list(worker.plugins or [])
+    require_adv = (os.environ.get("GRAPHYN_WORKER_REQUIRE_PLUGIN_ADVERTISE") or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    if not plugins:
+        return not require_adv
     if not node_type:
         return False
-    return node_type in plugins
+    allowed = getattr(worker, "allowed_plugins", None)
+    if allowed is not None:
+        allow_set = {str(x) for x in allowed}
+        plugins = [p for p in plugins if p in allow_set]
+    if node_type not in plugins:
+        return False
+    pins = getattr(worker, "plugin_hashes", None) or None
+    if isinstance(pins, dict) and node_type in pins:
+        expected = str(pins.get(node_type) or "").strip().lower()
+        if not expected:
+            return False
+        advert = getattr(worker, "content_hashes", None) or {}
+        if not isinstance(advert, dict):
+            return False
+        got = str(advert.get(node_type) or "").strip().lower()
+        if got != expected:
+            return False
+    return True
 
 
 _QUEUE: JobQueue | None = None

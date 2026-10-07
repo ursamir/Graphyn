@@ -71,7 +71,6 @@ import {
   isRetargetableExportDir,
   stampProjectOnGraph,
 } from '../../lib/projectStamp'
-import { normalizeRunStatus } from '../../lib/runStatus'
 import {
   ConfirmButton,
   EmptyState,
@@ -905,8 +904,28 @@ function BuilderInner() {
   const labelOfRef = React.useRef<Map<string, string>>(new Map())
   const hydrateLogFromJournal = (runId: string, events: Array<Record<string, unknown>>, badge: ExecBadgeStatus) => {
     const st = useAppStore.getState()
-    if (st.isRunning) return
-    const mayReplace = st.logs.length === 0 || hydratedRunRef.current === runId || allowHydrateRef.current
+    const liveServerRun = badge === 'running'
+    // Local NDJSON owns the log while this tab is mid-stream and already has
+    // real execution lines. Mode B often drops the stream while the server keeps
+    // running: follow logs.json even if isRunning is still true briefly, or when
+    // the log is empty / only stream-disconnect warnings.
+    const streamMetaOnly =
+      st.logs.length === 0 ||
+      st.logs.every((l) =>
+        /stream disconnect|stream error|checking run status|following run via journal|lost the run stream/i.test(
+          l.message,
+        ),
+      )
+    if (st.isRunning && !liveServerRun) return
+    if (st.isRunning && liveServerRun && !streamMetaOnly && hydratedRunRef.current !== runId) return
+    const mayReplace =
+      st.logs.length === 0 ||
+      streamMetaOnly ||
+      hydratedRunRef.current === runId ||
+      allowHydrateRef.current ||
+      // Linked run still executing on the server: keep the journal live even if
+      // a lone Stream-error line made mayReplace false under the old rule.
+      liveServerRun
     if (!mayReplace || events.length === 0) return
     allowHydrateRef.current = false
     hydratedRunRef.current = runId
@@ -974,16 +993,28 @@ function BuilderInner() {
         const events = detail.logs.filter((l) => l && typeof l === 'object') as Array<Record<string, unknown>>
         if (opts.guardCanvas) {
           // Only paint statuses when this run belongs to the graph on the canvas:
-          // graph name must match (when recorded) and every node_id referenced
-          // by the run must exist on the canvas.
+          // graph name must match (when recorded). Node ids: require overlap with
+          // the canvas — not "every journal id" (a single stray id used to skip
+          // the whole hydrate and leave Execution log empty while Last run=Running).
           const runGraphName = typeof detail.meta?.graph_name === 'string' ? detail.meta.graph_name.trim() : ''
           const canvasGraphName = graphNameRef.current.trim()
           if (runGraphName && canvasGraphName && runGraphName !== canvasGraphName) return badge
           const canvasIds = new Set(nodesRef.current.map((n) => n.id))
-          const runIds = events
-            .map((e) => (typeof e.node_id === 'string' ? e.node_id : null))
-            .filter((x): x is string => Boolean(x))
-          if (runIds.length === 0 || runIds.some((id) => !canvasIds.has(id))) return badge
+          if (canvasIds.size === 0) return badge
+          const runIds = [
+            ...new Set(
+              events
+                .map((e) => (typeof e.node_id === 'string' ? e.node_id : null))
+                .filter((x): x is string => Boolean(x)),
+            ),
+          ]
+          if (runIds.length === 0) {
+            // pipeline_start / waiting notes may precede node_id events: still fill the log.
+            if (opts.hydrateLog) hydrateLogFromJournal(runId, events, badge)
+            return badge
+          }
+          const overlap = runIds.filter((id) => canvasIds.has(id)).length
+          if (overlap === 0) return badge
         }
         applyStatusesFromEvents(events, badge)
         if (opts.hydrateLog) hydrateLogFromJournal(runId, events, badge)
@@ -2023,52 +2054,48 @@ function BuilderInner() {
       if (!isCurrent()) return
       let polledTerminal: 'completed' | 'failed' | 'cancelled' | null = null
       if (!sawDone && !sawError && !wasCancelled && !streamCancelled) {
-        const msg = 'Stream disconnected — checking run status'
-        setStatusMessage(msg)
-        addLog(msg, 'warning')
+        // Mode B / proxies often end the NDJSON body while the server run continues.
+        // Do NOT block here with isRunning=true until terminal: that starved journal
+        // hydrate and left Execution log on "loading its journal" forever.
         if (!runId) {
+          const msg = 'Stream disconnected - checking run status'
+          setStatusMessage(msg)
+          addLog(msg, 'warning')
           hadError = true
-          lastErrorDetail = 'Stream disconnected before the run id was known; check Observe → Runs.'
+          lastErrorDetail = 'Stream disconnected before the run id was known; check Observe -> Runs.'
         } else {
-          // Poll until the journal reports a terminal state (or this run is superseded).
-          while (isCurrent()) {
-            try {
-              const st = await apiJson<{ status?: string }>(
-                `/runs/${encodeURIComponent(runId)}/status`,
-                { signal: controller.signal, retries: 0 },
-              )
-              const norm = normalizeRunStatus(st?.status)
-              if (norm === 'completed' || norm === 'failed' || norm === 'cancelled') {
-                polledTerminal = norm
-                break
-              }
-            } catch (pollErr) {
-              if (controller.signal.aborted) throw pollErr
-              /* transient — keep polling */
-            }
-            await new Promise((r) => setTimeout(r, 2000))
-          }
+          const badge = await reconcileRunFromServer(runId, {
+            guardCanvas: false,
+            isStale: () => !isCurrent(),
+            hydrateLog: true,
+          })
           if (!isCurrent()) return
-          if (polledTerminal === 'failed') {
-            hadError = true
-            lastErrorDetail = lastErrorDetail || 'Run failed (reported by run status after stream disconnect).'
-          } else if (polledTerminal === 'cancelled') {
-            wasCancelled = true
-          }
-          addLog(`Run status after disconnect: ${polledTerminal}`, polledTerminal === 'completed' ? 'success' : 'warning')
-          // Pull authoritative per-node statuses from the journal.
-          try {
-            const detail = await apiJson<{ logs?: Array<Record<string, unknown>> }>(
-              `/runs/${encodeURIComponent(runId)}`,
+          if (isTerminalBadge(badge)) {
+            polledTerminal =
+              badge === 'succeeded' ? 'completed' : badge === 'failed' ? 'failed' : 'cancelled'
+            addLog(
+              `Run status after disconnect: ${polledTerminal}`,
+              polledTerminal === 'completed' ? 'success' : 'warning',
             )
-            if (isCurrent() && Array.isArray(detail.logs)) {
-              applyStatusesFromEvents(
-                detail.logs.filter((l) => l && typeof l === 'object') as Array<Record<string, unknown>>,
-                polledTerminal === 'completed' ? 'succeeded' : polledTerminal ?? 'unknown',
-              )
+            if (polledTerminal === 'failed') {
+              hadError = true
+              lastErrorDetail =
+                lastErrorDetail || 'Run failed (reported by run status after stream disconnect).'
+            } else if (polledTerminal === 'cancelled') {
+              wasCancelled = true
             }
-          } catch {
-            /* best-effort */
+          } else {
+            // Still running on the server: hand off to the lastRunId journal poller.
+            setServerBadge({ runId, status: 'running' })
+            setRunOutcome('running')
+            setStatusMessage('Stream lost - following Execution log from the run journal')
+            addLog('Stream disconnected - following run via journal', 'warning')
+            pushToast(
+              'Lost the run stream - Execution log now follows the run journal.',
+              'info',
+            )
+            if (runId) setLastRunId(runId)
+            return
           }
         }
       }
@@ -2148,8 +2175,14 @@ function BuilderInner() {
         }
         if (badge === 'running') {
           setServerBadge({ runId: knownRunId, status: 'running' })
-          setStatusMessage('Stream lost — run still executing on the server')
-          pushToast('Lost the run stream — the run is still executing; open it in Runs to follow.', 'info')
+          await reconcileRunFromServer(knownRunId, {
+            guardCanvas: false,
+            isStale: () => !isCurrent(),
+            hydrateLog: true,
+          })
+          if (!isCurrent()) return
+          setStatusMessage('Stream lost - following Execution log from the run journal')
+          pushToast('Lost the run stream - Execution log now follows the run journal.', 'info')
           return
         }
       }
@@ -2485,7 +2518,18 @@ function BuilderInner() {
    * when lastRunId changes; poll while the server says it's still live.
    */
   React.useEffect(() => {
-    if (!lastRunId || isRunning) return
+    if (!lastRunId) return
+    // While NDJSON is healthy and filling the log, skip. If isRunning but the log is
+    // empty / only stream-meta warnings, follow logs.json (Mode B stream drop).
+    const logsNow = useAppStore.getState().logs
+    const streamMetaOnly =
+      logsNow.length === 0 ||
+      logsNow.every((l) =>
+        /stream disconnect|stream error|checking run status|following run via journal|lost the run stream/i.test(
+          l.message,
+        ),
+      )
+    if (isRunning && !streamMetaOnly) return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const runId = lastRunId
@@ -3786,11 +3830,12 @@ function BuilderInner() {
                                   <select
                                     className="field-control mt-1"
                                     value={p.mode ?? 'auto'}
-                                    onChange={(e) =>
-                                      setP({
-                                        mode: e.target.value as NodePlacement['mode'],
-                                      })
-                                    }
+                                    onChange={(e) => {
+                                      const mode = e.target.value as NodePlacement['mode']
+                                      // Honest: switching to worker/pool does not invent
+                                      // an id — leave required fields empty until filled.
+                                      setP({ mode })
+                                    }}
                                   >
                                     <option value="auto">auto</option>
                                     <option value="local">local</option>
@@ -3823,23 +3868,54 @@ function BuilderInner() {
                                   <span className="font-medium">Require GPU</span>
                                 </label>
                                 <label className="block text-[12px] text-ink-700">
-                                  <span className="font-medium">Pool</span>
+                                  <span className="font-medium">
+                                    Pool
+                                    {p.mode === 'pool' ? (
+                                      <span className="ml-1 font-normal text-rose-700">required</span>
+                                    ) : null}
+                                  </span>
                                   <input
-                                    className="field-control mt-1 font-mono"
+                                    className={
+                                      p.mode === 'pool' && !(p.pool ?? '').trim()
+                                        ? 'field-control mt-1 font-mono ring-1 ring-rose-400'
+                                        : 'field-control mt-1 font-mono'
+                                    }
                                     placeholder="gpu-lab"
                                     value={p.pool ?? ''}
                                     onChange={(e) => setP({ pool: e.target.value.trim() || null })}
+                                    aria-invalid={p.mode === 'pool' && !(p.pool ?? '').trim()}
                                   />
                                 </label>
                                 <label className="block text-[12px] text-ink-700">
-                                  <span className="font-medium">Worker</span>
+                                  <span className="font-medium">
+                                    Worker
+                                    {p.mode === 'worker' ? (
+                                      <span className="ml-1 font-normal text-rose-700">required</span>
+                                    ) : null}
+                                  </span>
                                   <input
-                                    className="field-control mt-1 font-mono"
-                                    placeholder="worker id"
+                                    className={
+                                      p.mode === 'worker' && !(p.worker ?? '').trim()
+                                        ? 'field-control mt-1 font-mono ring-1 ring-rose-400'
+                                        : 'field-control mt-1 font-mono'
+                                    }
+                                    placeholder="e.g. s99-ml"
                                     value={p.worker ?? ''}
                                     onChange={(e) => setP({ worker: e.target.value.trim() || null })}
+                                    aria-invalid={p.mode === 'worker' && !(p.worker ?? '').trim()}
                                   />
                                 </label>
+                                {p.mode === 'worker' && !(p.worker ?? '').trim() ? (
+                                  <p className="text-[11px] leading-snug text-rose-700" role="alert">
+                                    Mode=worker needs an exact worker id (see Deploy → Workers).
+                                    Or switch Mode to auto and set Tags/Pool (e.g. gpu + gpu-lab).
+                                  </p>
+                                ) : null}
+                                {p.mode === 'pool' && !(p.pool ?? '').trim() ? (
+                                  <p className="text-[11px] leading-snug text-rose-700" role="alert">
+                                    Mode=pool needs a pool name (e.g. gpu-lab).
+                                  </p>
+                                ) : null}
                               </>
                             )
                           })()}
@@ -4195,7 +4271,9 @@ function BuilderInner() {
               {prettyLogs.length === 0 ? (
                 <div className="text-ink-500">
                   {lastRunId
-                    ? 'No events for this graph yet — press Run, or open the linked run for its full log.'
+                    ? execBadge === 'running'
+                      ? 'Linked run is still executing - refreshing journal (hard-refresh if this stays empty).'
+                      : 'No events for this graph yet — press Run, or open the linked run for its full log.'
                     : 'No events yet — press Run to see each step’s progress here.'}
                 </div>
               ) : (

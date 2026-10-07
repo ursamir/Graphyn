@@ -30,6 +30,23 @@ type WorkerRow = {
   labels?: string[]
   pools?: string[]
   plugins?: string[]
+  node_types?: string[]
+  allowed_plugins?: string[] | null
+  plugin_hashes?: Record<string, string> | null
+  content_hashes?: Record<string, string> | null
+  trusted?: boolean
+  max_claimed?: number | null
+  usage_claims?: number
+  usage_completes?: number
+  usage_bytes_in?: number
+  usage_bytes_out?: number
+  usage?: {
+    claims?: number
+    completes?: number
+    bytes_in?: number
+    bytes_out?: number
+  }
+  pool_max_claimed?: Record<string, number>
   heartbeat_at?: string
   active_jobs?: number
   resources?: {
@@ -78,6 +95,10 @@ export default function WorkersView() {
   const [filterPool, setFilterPool] = React.useState('')
   const [filterStatus, setFilterStatus] = React.useState('')
   const [selected, setSelected] = React.useState<WorkerRow | null>(null)
+  const [editAllowed, setEditAllowed] = React.useState('')
+  const [editTrusted, setEditTrusted] = React.useState(true)
+  const [editMaxClaimed, setEditMaxClaimed] = React.useState('')
+  const [savingAcl, setSavingAcl] = React.useState(false)
   const [fleetTab, setFleetTab] = React.useState<'workers' | 'queue'>('workers')
   const [recentRuns, setRecentRuns] = React.useState<
     Array<{ run_id: string; status?: string; created_at?: string; graph_name?: string }>
@@ -361,7 +382,12 @@ export default function WorkersView() {
                       <tr
                         key={w.worker_id}
                         className="cursor-pointer border-b border-ink-100/80 last:border-0 hover:bg-ink-50/60"
-                        onClick={() => setSelected(w)}
+                        onClick={() => {
+                          setSelected(w)
+                          setEditAllowed((w.allowed_plugins ?? []).join(', '))
+                          setEditTrusted(w.trusted !== false)
+                          setEditMaxClaimed(w.max_claimed != null ? String(w.max_claimed) : '')
+                        }}
                       >
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
@@ -370,6 +396,15 @@ export default function WorkersView() {
                             {stale && (
                               <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
                                 Stale
+                              </span>
+                            )}
+                            {w.trusted === false ? (
+                              <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-600">
+                                Untrusted
+                              </span>
+                            ) : (
+                              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800">
+                                Trusted
                               </span>
                             )}
                           </div>
@@ -385,6 +420,12 @@ export default function WorkersView() {
                           {typeof w.active_jobs === 'number' && w.active_jobs > 0 && (
                             <div className="mt-1 text-[11px] text-ink-500">{w.active_jobs} active</div>
                           )}
+                          {(w.usage?.claims || w.usage_claims) ? (
+                            <div className="mt-1 text-[11px] text-ink-400">
+                              {w.usage?.claims ?? w.usage_claims ?? 0} claims · {w.usage?.completes ?? w.usage_completes ?? 0} done
+                              {w.max_claimed != null ? ` · max ${w.max_claimed}` : ''}
+                            </div>
+                          ) : null}
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex flex-wrap gap-1">
@@ -523,6 +564,107 @@ export default function WorkersView() {
                   <p className="text-ink-700">{selected.plugins.join(', ')}</p>
                 </div>
               )}
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Trust & plugin ACL</div>
+                <div className="mb-2 flex items-center gap-2">
+                  <span className="text-ink-500">Trusted</span>
+                  {selected.trusted === false ? (
+                    <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-600">
+                      No
+                    </span>
+                  ) : (
+                    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800">
+                      Yes
+                    </span>
+                  )}
+                </div>
+                <label className="mb-2 flex items-center gap-2 text-ink-700">
+                  <input
+                    type="checkbox"
+                    checked={editTrusted}
+                    onChange={(e) => setEditTrusted(e.target.checked)}
+                  />
+                  Allow claims (trusted)
+                </label>
+
+                  <label className="mt-3 block text-xs font-medium text-ink-600">
+                    Max concurrent claimed
+                    <input
+                      type="number"
+                      min={0}
+                      className="mt-1 w-full rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
+                      value={editMaxClaimed}
+                      onChange={(e) => setEditMaxClaimed(e.target.value)}
+                      placeholder="unlimited"
+                    />
+                  </label>
+                  {(selected.usage?.claims != null || selected.usage_claims != null) && (
+                    <p className="mt-2 text-[11px] text-ink-500">
+                      Usage: {selected.usage?.claims ?? selected.usage_claims ?? 0} claims,{' '}
+                      {selected.usage?.completes ?? selected.usage_completes ?? 0} completes,{' '}
+                      {selected.usage?.bytes_out ?? selected.usage_bytes_out ?? 0} B out /{' '}
+                      {selected.usage?.bytes_in ?? selected.usage_bytes_in ?? 0} B in
+                    </p>
+                  )}
+                <label className="block text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+                  Allowed plugins
+                </label>
+                <input
+                  value={editAllowed}
+                  onChange={(e) => setEditAllowed(e.target.value)}
+                  placeholder="comma-separated; empty = no extra allowlist"
+                  className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+                />
+                <p className="mt-1 text-[11px] text-ink-400">
+                  Intersects with the worker's advertised plugins when set.
+                </p>
+                {selected.plugin_hashes && Object.keys(selected.plugin_hashes).length > 0 && (
+                  <div className="mt-2">
+                    <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+                      Hash pins
+                    </div>
+                    <ul className="space-y-0.5 font-mono text-[11px] text-ink-600">
+                      {Object.entries(selected.plugin_hashes).map(([nt, h]) => (
+                        <li key={nt}>
+                          {nt}: {String(h).slice(0, 12)}…
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="btn-secondary mt-3"
+                  disabled={savingAcl}
+                  onClick={() => {
+                    const id = selected.worker_id
+                    const allowed = editAllowed
+                      .split(',')
+                      .map((s) => s.trim())
+                      .filter(Boolean)
+                    setSavingAcl(true)
+                    void apiJson(`/workers/${encodeURIComponent(id)}`, {
+                      method: 'PATCH',
+                      body: JSON.stringify({
+                        trusted: editTrusted,
+                        max_claimed: editMaxClaimed.trim() === '' ? null : Number(editMaxClaimed),
+                        allowed_plugins: allowed.length ? allowed : null,
+                      }),
+                    })
+                      .then((row) => {
+                        pushToast(`Updated ACL for ${id}`, 'success')
+                        setSelected(row as WorkerRow)
+                        void refresh()
+                      })
+                      .catch((err) =>
+                        pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                      )
+                      .finally(() => setSavingAcl(false))
+                  }}
+                >
+                  {savingAcl ? 'Saving…' : 'Save ACL'}
+                </button>
+              </div>
             </div>
             <div className="border-t border-ink-100 px-4 py-3">
               <ConfirmButton

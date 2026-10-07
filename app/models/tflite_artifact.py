@@ -4,11 +4,11 @@ Bounded Context:  Domain — Data Types
 Responsibility:   Typed data contract for a TFLite model artifact. Output of
                   edge_optimizer node (TFLite backend).
 Owns:             TFLiteArtifact Pydantic model — tflite_path, labels,
-                  quantisation, file_size_bytes.
+                  quantisation, file_size_bytes, refs.
 Public Surface:   TFLiteArtifact
 Must NOT:         Import from app.core.nodes.registry or app.core.execution.orchestrator.
                   Must not contain quantization logic.
-Dependencies:     pydantic (PortDataType base).
+Dependencies:     pydantic (PortDataType base), app.models.artifact_ref.
 Reason To Change: TFLiteArtifact schema gains new fields, or quantization
                   format options change.
 
@@ -19,9 +19,12 @@ by AutoDiscovery. Migrated from examples/06_speech_commands_e2e/.
 # annotations into strings (PEP 563), which breaks Pydantic v2 model_rebuild()
 # when the module is loaded via importlib.
 
+from typing import List
+
 from pydantic import ConfigDict, Field, field_validator
 
 from app.core.nodes.ports import PortDataType
+from app.models.artifact_ref import ArtifactRef
 
 
 class TFLiteArtifact(PortDataType):
@@ -30,10 +33,11 @@ class TFLiteArtifact(PortDataType):
     Produced by TFLiteExporterNode.
 
     Fields:
-        tflite_path:     path to the .tflite flatbuffer file
+        tflite_path:     path to the .tflite flatbuffer file (local after hydrate)
         labels:          sorted list of class label strings
         quantisation:    one of "float32", "float16", "int8"
         file_size_bytes: flatbuffer file size in bytes
+        refs:            content-addressed ArtifactRef manifest (role: tflite, …)
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -42,6 +46,7 @@ class TFLiteArtifact(PortDataType):
     labels: list = Field(default_factory=list)
     quantisation: str = "float32"
     file_size_bytes: int = 0
+    refs: List[ArtifactRef] = Field(default_factory=list)
 
     @field_validator("quantisation")
     @classmethod

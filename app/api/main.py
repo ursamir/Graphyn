@@ -92,7 +92,11 @@ _reg_dataset()
 from app.models.feature_array_serializer import register_feature_array_serializer as _reg_features
 _reg_features()
 from app.core.artifacts.file_tree import register_file_tree_serializer as _reg_file_tree
+from app.models.model_artifact_serializer import register_model_artifact_serializer as _reg_model
+from app.models.deployment_artifact_serializer import register_deployment_artifact_serializer as _reg_deploy
 _reg_file_tree()
+_reg_model()
+_reg_deploy()
 
 from app.core.nodes import initialize_registry as _init_registry
 
@@ -261,11 +265,15 @@ register_exception_handlers(app)
 
 @app.middleware("http")
 async def _identity_middleware(request: Request, call_next):
-    """Bind the caller's token-derived identity for core audit emitters.
+    """Bind the caller's token-derived (+ optional mTLS) identity for audit.
 
     The ContextVar is set before ``call_next`` so endpoint code (and sync
     endpoints run in the threadpool, which copies the context) sees it;
     record_audit then replaces generic actors with this identity.
+
+    When mTLS is enabled, the peer certificate's CN / URI SAN maps to
+    ``mtls_worker_id``. A worker-scoped bearer that disagrees with the cert
+    is refused (403). Cert-only callers are treated as that worker.
     """
     from app.api.actor import resolve_identity
     from app.core.trust.identity import reset_request_identity, set_request_identity
@@ -274,6 +282,49 @@ async def _identity_middleware(request: Request, call_next):
         ident = resolve_identity(request)
     except Exception:
         ident = None
+    try:
+        from app.core.distributed.mtls import (
+            mtls_enabled,
+            peercert_from_scope,
+            worker_id_from_peercert,
+        )
+
+        if mtls_enabled():
+            cert = peercert_from_scope(getattr(request, "scope", None))
+            wid = worker_id_from_peercert(cert)
+            if not wid and (os.environ.get("GRAPHYN_MTLS_TEST_HEADER") or "").strip() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            ):
+                # Lab/TestClient only — never enable in production compose.
+                wid = (request.headers.get("x-graphyn-mtls-worker-id") or "").strip() or None
+            if wid:
+                ident = dict(ident or {})
+                token_wid = (ident.get("worker_id") or "").strip() or None
+                if (
+                    ident.get("kind") == "worker"
+                    and token_wid
+                    and token_wid != wid
+                ):
+                    return JSONResponse(
+                        status_code=403,
+                        content={
+                            "detail": "mTLS cert worker_id does not match token binding",
+                        },
+                    )
+                ident["mtls_worker_id"] = wid
+                ident["mtls_verified"] = True
+                if not token_wid:
+                    ident["kind"] = "worker"
+                    ident["worker_id"] = wid
+                    if not ident.get("actor") or ident.get("actor") == "unidentified":
+                        ident["actor"] = f"mtls:{wid}"
+                    ident["actor_verified"] = True
+                    ident["token_mapped"] = True
+    except Exception as exc:
+        _logger.debug("mTLS identity merge skipped: %s", exc)
     token = set_request_identity(ident)
     try:
         return await call_next(request)
@@ -302,7 +353,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS", "DELETE", "PUT", "PATCH"],
     # Enumerate specific headers — allow_headers=["*"] is forbidden by the CORS
     # spec when allow_credentials=True and causes browsers to reject responses.
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Request-Id", "Accept", "X-Actor", "Idempotency-Key"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Request-Id", "Accept", "X-Actor", "Idempotency-Key", "X-Graphyn-Worker-Id"],
 )
 # Compress large JSON (Outputs listings, run journals). Clients send Accept-Encoding: gzip.
 app.add_middleware(GZipMiddleware, minimum_size=1000)

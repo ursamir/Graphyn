@@ -1,0 +1,128 @@
+# Mode B on ONE host (Server-99): graphyn-api = control plane, graphyn-worker = heavy-ML worker.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.modeb.yml up -d --no-deps graphyn-api graphyn-worker
+#
+# See docs/DISTRIBUTED_EXECUTION.md §14 (Mode B compose + WAVE-1 security).
+#
+# Plugin split:
+#   * Control allowlist = common/light + audio-prep. NOTE: allowlist only filters
+#     *install* — heavy ML node types already installed in the shared graphyn-home
+#     stay registered on control. They are needed there anyway: the control
+#     validates every graph (VAL-UNK-TYPE) before scheduling; remote-only types
+#     advertised by workers are also accepted when GRAPHYN_BACKEND=distributed.
+#   * Worker has its OWN GRAPHYN_HOME + plugins dir + workspace scratch — NO shared
+#     host ./workspace bind. Data plane is HTTP artifact blobs only.
+#   * Worker re-uses the control's isolated venvs (TensorFlow etc., ~22 GB) via a
+#     volume subpath mount at the SAME path, so nothing is re-downloaded.
+#
+# WAVE-1 network: api↔worker on an internal docker network; HTTP egress restricted
+# with an allowlist that includes the control service hostname.
+
+networks:
+  graphyn-modeb:
+    name: graphyn-modeb
+    internal: false  # workers may need public model hubs; tighten with egress mode
+
+services:
+  graphyn-api:
+    networks:
+      - graphyn-modeb
+      - default
+    environment:
+      GRAPHYN_BACKEND: distributed
+      GRAPHYN_DISTRIBUTED_JOB_TIMEOUT: "3600"
+      GRAPHYN_JOB_WAIT_POLL_S: "4.0"
+      GRAPHYN_HTTP_EGRESS_MODE: restricted
+      GRAPHYN_HTTP_EGRESS_ALLOWLIST: "graphyn-api,api.openai.com,api.groq.com,huggingface.co,objects.githubusercontent.com"
+      # WAVE-2: blob encrypt-at-rest (optional), pool quotas, mTLS (profile)
+      GRAPHYN_BLOB_ENCRYPTION_KEY: ${GRAPHYN_BLOB_ENCRYPTION_KEY:-}
+      GRAPHYN_POOL_MAX_CLAIMED: ${GRAPHYN_POOL_MAX_CLAIMED:-}
+      GRAPHYN_MTLS_ENABLED: ${GRAPHYN_MTLS_ENABLED:-0}
+      GRAPHYN_MTLS_CA_CERT: ${GRAPHYN_MTLS_CA_CERT:-}
+      GRAPHYN_MTLS_CERT: ${GRAPHYN_MTLS_CERT:-}
+      GRAPHYN_MTLS_KEY: ${GRAPHYN_MTLS_KEY:-}
+      GRAPHYN_BUNDLED_PLUGIN_ALLOWLIST: "python-code,set-map,json-transform,if-switch,merge,wait-delay,error-catch,schedule-trigger,webhook-trigger,http-request,http-webhook,csv-table,credential-probe,prompt-template,llm-chat,send-email,object-store,eval-gate,structured-llm,hitl-approve,output-schema-validate,guardrail-filter,dataset-ingest,audio-conditioner,segmenter,audio-quality-gate,augmentation-pipeline,audio-exporter"
+
+  graphyn-worker:
+    image: newaudio3-graphyn-api:latest
+    pull_policy: never
+    container_name: graphyn-worker
+    networks:
+      - graphyn-modeb
+    command:
+      - python
+      - -m
+      - app.cli.main
+      - worker
+      - start
+      - --control-url
+      - http://graphyn-api:8001/api/v1
+      - --worker-id
+      - s99-ml
+      - --labels
+      - gpu,ml
+      - --pool
+      - gpu-lab
+      - --heartbeat
+      - "5"
+    environment:
+      GRAPHYN_ENV: production
+      GRAPHYN_API_TOKEN: ${GRAPHYN_API_TOKEN:-}
+      # Prefer a worker-scoped named token when configured, e.g.
+      # GRAPHYN_API_TOKENS=s99-ml:<token>:worker:s99-ml
+      GRAPHYN_API_TOKENS: ${GRAPHYN_API_TOKENS:-}
+      GRAPHYN_BLOB_SIGNING_KEY: ${GRAPHYN_BLOB_SIGNING_KEY:-${GRAPHYN_API_TOKEN:-}}
+      GRAPHYN_CONTROL_URL: http://graphyn-api:8001/api/v1
+      GRAPHYN_WORKER_ID: s99-ml
+      GRAPHYN_HOME: /data/graphyn-worker-home
+      GRAPHYN_PROJECT_DIR: /app/workspace
+      GRAPHYN_PLUGINS_DIR: /app/plugins
+      GRAPHYN_PLUGIN_VENVS_DIR: /data/graphyn-home/plugins/venvs
+      GRAPHYN_AUTO_INSTALL_PLUGINS: "1"
+      GRAPHYN_BUNDLED_PLUGIN_ALLOWLIST: "feature-frontend,dataset-builder,trainer,evaluator,edge-optimizer,realtime-inference,deployment-packager,set-map"
+      GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS: "1"
+      GRAPHYN_ISOLATED_BOOT_HEAVY: "1"
+      GRAPHYN_ISOLATED_INSTALL_TORCH: "0"
+      GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL: "0"
+      # CPU-safe: no NVIDIA device passed; FaceRecognition / other GPU apps keep the card.
+      GRAPHYN_ML_FORCE_CPU: "1"
+      GRAPHYN_TF_DEVICE: cpu
+      CUDA_VISIBLE_DEVICES: ""
+      GRAPHYN_WORKER_COMPLETE_RETRIES: "6"
+      GRAPHYN_WORKER_JOB_POLL_S: "4.0"
+      GRAPHYN_JOB_WAIT_POLL_S: "4.0"
+      GRAPHYN_HTTP_EGRESS_MODE: restricted
+      GRAPHYN_HTTP_EGRESS_ALLOWLIST: "graphyn-api,api.openai.com,api.groq.com,huggingface.co,objects.githubusercontent.com"
+      GRAPHYN_BLOB_ENCRYPTION_KEY: ${GRAPHYN_BLOB_ENCRYPTION_KEY:-}
+      GRAPHYN_WORKER_SPOOL: ${GRAPHYN_WORKER_SPOOL:-1}
+      GRAPHYN_MTLS_ENABLED: ${GRAPHYN_MTLS_ENABLED:-0}
+      GRAPHYN_MTLS_CA_CERT: ${GRAPHYN_MTLS_CA_CERT:-}
+      GRAPHYN_MTLS_CLIENT_CERT: ${GRAPHYN_MTLS_CLIENT_CERT:-}
+      GRAPHYN_MTLS_CLIENT_KEY: ${GRAPHYN_MTLS_CLIENT_KEY:-}
+    volumes:
+      - graphyn-worker-home:/data/graphyn-worker-home
+      - graphyn-worker-plugins:/app/plugins
+      # Private scratch only — NEVER share host ./workspace with control (blob transfer).
+      - graphyn-worker-workspace:/app/workspace
+      - type: volume
+        source: graphyn-home
+        target: /data/graphyn-home/plugins/venvs
+        volume:
+          subpath: plugins/venvs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - graphyn-api
+    restart: unless-stopped
+
+volumes:
+  graphyn-home:
+  graphyn-worker-home:
+  graphyn-worker-plugins:
+  graphyn-worker-workspace:
+
+  # Optional mTLS profile (fail closed when enabled):
+  #   1. ./scripts/gen_modeb_mtls_certs.sh ./certs/modeb s99-ml
+  #   2. docker compose -f docker-compose.yml -f docker-compose.modeb.yml
+  #        --profile mtls up -d --no-deps graphyn-api graphyn-worker
+  # Plain HTTP remains the default (GRAPHYN_MTLS_ENABLED unset).

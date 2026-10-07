@@ -177,6 +177,10 @@ def _startup() -> None:
         register_feature_array_serializer()
         from app.core.artifacts.file_tree import register_file_tree_serializer
         register_file_tree_serializer()
+        from app.models.model_artifact_serializer import register_model_artifact_serializer
+        register_model_artifact_serializer()
+        from app.models.deployment_artifact_serializer import register_deployment_artifact_serializer
+        register_deployment_artifact_serializer()
 
         # Explicitly populate the NodeRegistry singleton after the domain serializer
         # is registered so node imports that reference AudioSample work correctly.

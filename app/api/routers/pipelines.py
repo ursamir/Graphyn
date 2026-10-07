@@ -574,12 +574,24 @@ def run_pipeline_async(request: Request, payload: dict = Body(...)):
             run_mgr.save_config(payload.get("yaml", ""))
 
         def _run():
+            # Same journal contract as /run: PipelineLogger -> logs.json for Observe/Editor.
+            from app.core.logger import PipelineLogger  # noqa: PLC0415
+
+            async_logger = PipelineLogger()
             try:
                 from app.core.execution.runtime_backend import get_backend  # noqa: PLC0415
                 get_backend().execute(
-                    graph, run_manager=run_mgr, input_overrides=input_overrides
+                    graph,
+                    logger=async_logger,
+                    run_manager=run_mgr,
+                    input_overrides=input_overrides,
                 )
             except Exception as exc:
+                try:
+                    async_logger.pipeline_error(str(exc) or type(exc).__name__)
+                    run_mgr.save_logs(async_logger.logs)
+                except Exception:
+                    pass
                 run_mgr.mark_failed(str(exc))
 
         _PIPELINE_RUN_EXECUTOR.submit(_run)

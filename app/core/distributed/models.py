@@ -11,7 +11,8 @@ Dependencies:     pydantic, stdlib (datetime, typing), app.core.ir.models
                   (IRPlacement only).
 Reason To Change: Job protocol fields evolve, or worker capability schema grows
                   (e.g. finished_at / result_consumed_at history markers,
-                  JobResult.output_sha256 integrity map).
+                  JobResult.output_sha256 integrity map,
+                  Mode B plugin ACL / trust / remote node_types).
 """
 from __future__ import annotations
 
@@ -59,6 +60,28 @@ class WorkerInfo(BaseModel):
     pools: list[str] = Field(default_factory=list)
     resources: WorkerResources = Field(default_factory=WorkerResources)
     plugins: list[str] = Field(default_factory=list)
+    """Advertised executable node_type ids this worker can run."""
+    node_types: list[str] = Field(default_factory=list)
+    """Optional remote-only type names (no code) for control catalog awareness."""
+    allowed_plugins: list[str] | None = None
+    """Control-side allowlist; when set, claim intersects advertised ∩ allowed."""
+    plugin_hashes: dict[str, str] | None = None
+    """Control-side node_type → sha256 pins (admin PATCH / register)."""
+    content_hashes: dict[str, str] | None = None
+    """Worker-advertised node_type → sha256 (from register/heartbeat body)."""
+    trusted: bool = True
+    """Lab default True. When auth_required and GRAPHYN_WORKER_TRUST_REQUIRED=1,
+    untrusted workers cannot claim."""
+    max_claimed: int | None = None
+    """Optional per-worker concurrent claimed/running cap (admin PATCH)."""
+    usage_claims: int = 0
+    """Durable claim counter (incremented on successful claim)."""
+    usage_completes: int = 0
+    """Durable complete counter."""
+    usage_bytes_in: int = 0
+    """Bytes downloaded from control (blob GET) attributed to this worker."""
+    usage_bytes_out: int = 0
+    """Bytes uploaded to control (blob PUT) attributed to this worker."""
     graphyn_version: str | None = None
     heartbeat_at: datetime = Field(default_factory=_utcnow)
     status: WorkerStatus = "idle"

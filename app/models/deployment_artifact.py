@@ -6,7 +6,7 @@ Responsibility:   Typed data contract for a packaged model ready for
                   edge_optimizer nodes.
 Owns:             DeploymentArtifact Pydantic model — artifact_path,
                   model_format, target_hardware, quantization, labels,
-                  benchmark results, metadata.
+                  benchmark results, metadata, refs.
 Public Surface:   DeploymentArtifact
 Must NOT:         Import from app.core.nodes.registry or app.core.execution.orchestrator.
                   Must not contain packaging logic.
@@ -20,11 +20,12 @@ and benchmark results. V1.md §5.3, §14.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from pydantic import Field
 
 from app.core.nodes.ports import PortDataType
+from app.models.artifact_ref import ArtifactRef
 
 
 class DeploymentArtifact(PortDataType):
@@ -57,3 +58,4 @@ class DeploymentArtifact(PortDataType):
     file_size_bytes: int = 0
     benchmark: Optional[dict[str, Any]] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    refs: List[ArtifactRef] = Field(default_factory=list)

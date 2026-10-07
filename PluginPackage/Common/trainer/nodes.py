@@ -23,6 +23,7 @@ from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
 from app.models.dataset_artifact import DatasetArtifact
+from app.models.artifact_ref import ArtifactRef
 from app.models.model_artifact import ModelArtifact
 
 log = logging.getLogger(__name__)
@@ -208,6 +209,92 @@ def write_labels_txt(directory, labels) -> str | None:
     except OSError as exc:
         log.warning("could not write labels.txt in %s: %s", path, exc)
         return None
+
+
+
+def _model_artifact_with_refs(
+    *,
+    model_path: str,
+    labels: list,
+    history: dict,
+    metrics: dict,
+    keras_model_path: str = "",
+    labels_path: str = "",
+    pytorch_model_path: str = "",
+) -> ModelArtifact:
+    """Build ModelArtifact with an explicit ArtifactRef role manifest.
+
+    Local path fields remain for same-host execution; Mode B transfer packs
+    ``refs`` by role and clears unreclaimed host paths on the wire.
+    """
+    refs: list[ArtifactRef] = []
+    if keras_model_path and Path(keras_model_path).exists():
+        refs.append(
+            ArtifactRef(
+                role="keras_model",
+                kind="file",
+                filename=Path(keras_model_path).name,
+                relative_path="model.keras",
+                source_path=str(keras_model_path),
+                media_type="application/x-keras",
+            )
+        )
+    if model_path and Path(model_path).is_dir():
+        refs.append(
+            ArtifactRef(
+                role="saved_model",
+                kind="dir",
+                filename=Path(model_path).name or "saved_model",
+                relative_path="saved_model",
+                source_path=str(model_path),
+                media_type="application/x-savedmodel",
+            )
+        )
+    elif pytorch_model_path and Path(pytorch_model_path).is_file():
+        refs.append(
+            ArtifactRef(
+                role="pytorch_model",
+                kind="file",
+                filename=Path(pytorch_model_path).name,
+                relative_path=Path(pytorch_model_path).name,
+                source_path=str(pytorch_model_path),
+                media_type="application/x-pytorch",
+            )
+        )
+    elif model_path and Path(model_path).is_file() and str(model_path).lower().endswith((".pt", ".pth")):
+        refs.append(
+            ArtifactRef(
+                role="pytorch_model",
+                kind="file",
+                filename=Path(model_path).name,
+                relative_path=Path(model_path).name,
+                source_path=str(model_path),
+                media_type="application/x-pytorch",
+            )
+        )
+    lp = labels_path
+    if not lp and keras_model_path:
+        sibling = Path(keras_model_path).parent / "labels.txt"
+        if sibling.is_file():
+            lp = str(sibling)
+    if lp and Path(lp).is_file():
+        refs.append(
+            ArtifactRef(
+                role="labels",
+                kind="file",
+                filename="labels.txt",
+                relative_path="labels.txt",
+                source_path=str(lp),
+                media_type="text/plain",
+            )
+        )
+    return ModelArtifact(
+        model_path=model_path,
+        labels=list(labels),
+        history=dict(history or {}),
+        metrics=dict(metrics or {}),
+        refs=refs,
+    )
 
 
 class TrainerNode(Node):
@@ -707,11 +794,13 @@ class TrainerNode(Node):
         }
         if labels_path:
             metrics["labels_path"] = labels_path
-        return ModelArtifact(
+        return _model_artifact_with_refs(
             model_path=saved_model_path,
             labels=list(labels),
             history=dict(history.history),
             metrics=metrics,
+            keras_model_path=keras_model_path,
+            labels_path=labels_path or "",
         )
 
     @staticmethod
@@ -975,11 +1064,13 @@ class TrainerNode(Node):
         }
         if labels_path:
             metrics["labels_path"] = labels_path
-        return ModelArtifact(
+        return _model_artifact_with_refs(
             model_path=str(pt_path),
             labels=list(labels),
             history=history,
             metrics=metrics,
+            labels_path=labels_path or "",
+            pytorch_model_path=str(pt_path),
         )
 
     # ── main process ─────────────────────────────────────────────────────────
@@ -1249,14 +1340,17 @@ class ModelBuilderNode(Node):
         labels = list(getattr(dataset, "labels", None) or [])
         # The compiled_<uuid>.keras file name stays unique; the UI shows display_name.
         return {
-            "output": ModelArtifact(
+            "output": _model_artifact_with_refs(
                 model_path=str(path),
                 labels=labels,
+                history={},
                 metrics={
                     "architecture": self.config.architecture,
                     "display_name": self._display_name(),
                     "labels": list(labels),
+                    "keras_model_path": str(path),
                 },
+                keras_model_path=str(path),
             )
         }
 

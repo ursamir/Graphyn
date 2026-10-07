@@ -51,6 +51,7 @@ from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
+from app.models.artifact_ref import ArtifactRef
 from app.models.deployment_artifact import DeploymentArtifact
 
 log = logging.getLogger(__name__)
@@ -810,6 +811,83 @@ def render_readme(
 
 # ── node ──────────────────────────────────────────────────────────────────────
 
+
+def _resolve_deployment_path(artifact: DeploymentArtifact) -> str:
+    """Local path from hydrated refs / artifact_path (Mode B)."""
+    ap = str(getattr(artifact, "artifact_path", "") or "").strip()
+    if ap and Path(ap).exists():
+        return ap
+    meta = getattr(artifact, "metadata", None) or {}
+    lp = str(meta.get("labels_path") or "").strip()
+    for ref in getattr(artifact, "refs", None) or []:
+        role = getattr(ref, "role", None)
+        if role not in {"deployment_bundle", "tflite"}:
+            continue
+        sp = str(getattr(ref, "source_path", "") or "").strip()
+        if sp and Path(sp).exists():
+            return sp
+    if lp:
+        sibling_tflite = Path(lp).parent / "model.tflite"
+        if sibling_tflite.is_file():
+            return str(sibling_tflite)
+        parent = Path(lp).parent
+        if parent.is_dir() and any(parent.iterdir()):
+            return str(parent)
+    return ap
+
+
+def _attach_package_refs(artifact: DeploymentArtifact, pkg_path: Path) -> DeploymentArtifact:
+    """Declare ArtifactRef roles for the packaged bundle (+ labels when present)."""
+    refs: list = []
+    if pkg_path.exists():
+        kind = "dir" if pkg_path.is_dir() else "file"
+        media = None
+        name = pkg_path.name or "package"
+        if name.endswith(".tar.gz") or pkg_path.suffix in {".tgz", ".gz"}:
+            media = "application/gzip"
+        refs.append(
+            ArtifactRef(
+                role="deployment_bundle",
+                kind=kind,  # type: ignore[arg-type]
+                filename=name,
+                relative_path=name,
+                source_path=str(pkg_path),
+                media_type=media,
+            )
+        )
+    labels_file = None
+    if pkg_path.is_dir():
+        cand = pkg_path / "labels.txt"
+        if cand.is_file():
+            labels_file = cand
+    elif pkg_path.is_file():
+        cand = pkg_path.parent / "labels.txt"
+        if cand.is_file():
+            labels_file = cand
+    meta = dict(getattr(artifact, "metadata", None) or {})
+    if labels_file is not None:
+        meta["labels_path"] = str(labels_file)
+        refs.append(
+            ArtifactRef(
+                role="labels",
+                kind="file",
+                filename="labels.txt",
+                relative_path="labels.txt",
+                source_path=str(labels_file),
+                media_type="text/plain",
+            )
+        )
+    try:
+        return artifact.model_copy(
+            update={"refs": refs, "metadata": meta, "artifact_path": str(pkg_path)}
+        )
+    except Exception:
+        artifact.refs = refs
+        artifact.metadata = meta
+        artifact.artifact_path = str(pkg_path)
+        return artifact
+
+
 class DeploymentPackagerNode(Node):
     """Bundle optimized models into deployment-ready packages.
 
@@ -885,6 +963,13 @@ class DeploymentPackagerNode(Node):
         except OSError:
             pass
 
+        # Prefer hydrated ArtifactRef roles (Mode B) over producer host paths.
+        resolved = _resolve_deployment_path(artifact)
+        if resolved and resolved != (artifact.artifact_path or ""):
+            try:
+                artifact = artifact.model_copy(update={"artifact_path": resolved})
+            except Exception:
+                artifact.artifact_path = resolved
         model_path = Path(artifact.artifact_path) if artifact.artifact_path else None
         labels = list(getattr(artifact, "labels", None) or [])
         pkg_name = self.config.package_name or f"model_{target}"
@@ -921,6 +1006,7 @@ class DeploymentPackagerNode(Node):
             result = copy.deepcopy(artifact)
             for k, v in update.items():
                 setattr(result, k, v)
+        result = _attach_package_refs(result, Path(pkg_path))
         log.info("DeploymentPackagerNode: packaged → %s", pkg_path)
         return result
 

@@ -145,17 +145,43 @@ def cmd_worker_start(args):
     once = bool(getattr(args, "once", False))
 
     def _headers():
-        h = {"Content-Type": "application/json", "Accept": "application/json"}
+        h = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "X-Graphyn-Worker-Id": worker_id,
+        }
         if token:
             h["Authorization"] = f"Bearer {token}"
         return h
+
+    def _ssl_context():
+        """mTLS client context when GRAPHYN_MTLS_* is set; else None (plain HTTP)."""
+        try:
+            from app.core.distributed.mtls import mtls_enabled, urllib_ssl_context
+
+            if mtls_enabled():
+                return urllib_ssl_context()
+        except Exception as exc:
+            print(f"[worker] mTLS context failed: {exc}", file=sys.stderr)
+            raise
+        return None
+
+    _ssl_ctx = _ssl_context()
+    if _ssl_ctx is not None:
+        print("[worker] mTLS client cert enabled for control plane", file=sys.stderr)
+        if control_url.startswith("http://"):
+            print(
+                "[worker] WARNING: control_url is http:// but mTLS is enabled; "
+                "prefer https://graphyn-api:8001/api/v1",
+                file=sys.stderr,
+            )
 
     def _http_json(method: str, path: str, payload=None):
         url = f"{control_url}{path}"
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers=_headers(), method=method)
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=30, **({"context": _ssl_ctx} if _ssl_ctx is not None else {})) as resp:
                 body = resp.read().decode("utf-8")
                 return json.loads(body) if body else {}
         except urllib.error.HTTPError as exc:
@@ -235,14 +261,52 @@ def cmd_worker_start(args):
             file=sys.stderr,
         )
 
-    def _hydrate_inputs(input_refs: dict) -> dict:
-        """Resolve input_refs to in-memory port values (local store or HTTP)."""
+    def _hydrate_inputs(input_refs: dict, *, node_write_dir=None) -> dict:
+        """Resolve input_refs to in-memory port values (local store or HTTP).
+
+        Path-bearing platform artifacts arrive with an ArtifactRef manifest:
+        companion blobs are fetched (local or HTTP) and hydrated under
+        ``<node_write_dir>/_inputs/<port>/…`` (siblings preserved). Falls back
+        to ``artifacts/distributed_materialized/_inputs/<port>/`` when no write
+        dir is known (Mode B — no shared FS).
+        """
         from pathlib import Path as _Path
         from app.core.distributed.transfer import (
+            default_materialize_root,
             get_blob,
             http_get_blob,
+            inputs_materialize_dir,
             load_port_value,
         )
+
+        base_write = _Path(node_write_dir) if node_write_dir else default_materialize_root()
+
+        def _fetch_companion(uri: str, expected_sha256: str | None = None) -> bytes:
+            data = None
+            try:
+                data = get_blob(uri, expected_sha256=expected_sha256)
+            except FileNotFoundError:
+                data = None
+            except Exception as exc:
+                print(
+                    f"[worker] local companion {uri!r} unusable ({exc}); fetching via HTTP",
+                    file=sys.stderr,
+                )
+                data = None
+            if data is not None:
+                return data
+            if not control_url or in_process:
+                raise RuntimeError(
+                    f"Cannot hydrate companion {uri!r}: blob missing locally "
+                    "and no control URL for HTTP fetch"
+                )
+            return http_get_blob(
+                control_url,
+                uri,
+                token=token or None,
+                worker_id=worker_id,
+                expected_sha256=expected_sha256,
+            )
 
         inputs = {}
         for port, ref in (input_refs or {}).items():
@@ -253,7 +317,11 @@ def cmd_worker_start(args):
                 path = ref[7:] if ref.startswith("file://") else ref
                 data = _Path(path).read_bytes()
                 try:
-                    inputs[port] = load_port_value(data)
+                    inputs[port] = load_port_value(
+                        data,
+                        materialize_dir=inputs_materialize_dir(base_write, str(port)),
+                        get_companion=_fetch_companion,
+                    )
                 except Exception:
                     inputs[port] = path
                 continue
@@ -277,8 +345,12 @@ def cmd_worker_start(args):
                             "and no control URL for HTTP fetch"
                         )
                     # http_get_blob verifies sha256/ key digests (fail closed).
-                    data = http_get_blob(control_url, ref, token=token or None)
-                inputs[port] = load_port_value(data)
+                    data = http_get_blob(control_url, ref, token=token or None, worker_id=worker_id)
+                inputs[port] = load_port_value(
+                    data,
+                    materialize_dir=inputs_materialize_dir(base_write, str(port)),
+                    get_companion=_fetch_companion,
+                )
                 continue
             inputs[port] = ref
         return inputs
@@ -289,6 +361,10 @@ def cmd_worker_start(args):
         Returns ``(output_refs, output_sha256)``. Keys use the *claimed*
         lease generation; the control plane only accepts the upload while
         this worker still holds that claim.
+
+        Path-bearing artifacts (trained ``ModelArtifact``, TFLite, deployment
+        bundles) pack ArtifactRef roles into companion blobs first so the
+        control plane can hydrate real bytes without a shared filesystem.
         """
         import hashlib as _hashlib
 
@@ -296,15 +372,34 @@ def cmd_worker_start(args):
             dump_port_value,
             http_put_blob,
             job_output_key,
+            prepare_port_value_for_put,
             put_blob,
+            put_blob_with_digest,
         )
 
         job_id = str(job.get("job_id") or "job")
         gen = int(job.get("lease_generation") or 0)
+
+        def _put_companion(data: bytes) -> tuple:
+            if in_process or not control_url:
+                return put_blob_with_digest(data)
+            digest = _hashlib.sha256(data).hexdigest()
+            uri = _retry_http(
+                lambda data=data: http_put_blob(
+                    control_url,
+                    data,
+                    token=token or None,
+                    worker_id=worker_id,
+                ),
+                label="companion blob upload",
+            )
+            return uri, digest
+
         refs = {}
         digests = {}
         for port, value in (outputs or {}).items():
-            raw = dump_port_value(value)
+            prepared = prepare_port_value_for_put(value, put_companion=_put_companion)
+            raw = dump_port_value(prepared)
             key = job_output_key(job_id, gen, str(port))
             digests[port] = _hashlib.sha256(raw).hexdigest()
             if in_process or not control_url:
@@ -334,7 +429,6 @@ def cmd_worker_start(args):
         from app.core.paths.write_paths import ensure_node_write_dirs
 
         node_job = _NodeJob.model_validate(job)
-        inputs = _hydrate_inputs(node_job.input_refs or {})
 
         registry = get_registry()
         try:
@@ -350,6 +444,26 @@ def cmd_worker_start(args):
         seed = node_job.seed if node_job.seed is not None else 0
         node = node_class(config=dict(node_job.config or {}), seed=seed)
         ensure_node_write_dirs(node)
+        node_write_dir = None
+        try:
+            cfg = getattr(node, "config", None)
+            for key in ("output_path", "output_dir", "export_dir", "dest_dir"):
+                raw = getattr(cfg, key, None) if cfg is not None else None
+                if isinstance(raw, str) and raw.strip():
+                    from pathlib import Path as _P
+                    from app.core.config import project_dir
+
+                    cand = _P(raw)
+                    if not cand.is_absolute():
+                        text = raw.replace("\\", "/").lstrip("./")
+                        if text.startswith("workspace/"):
+                            text = text[len("workspace/"):]
+                        cand = project_dir() / text
+                    node_write_dir = cand
+                    break
+        except Exception:
+            node_write_dir = None
+        inputs = _hydrate_inputs(node_job.input_refs or {}, node_write_dir=node_write_dir)
         executor = NodeExecutor(node, run_id=node_job.run_id)
         if cancel_check is not None:
             executor.set_cancel_check(cancel_check)
@@ -414,6 +528,7 @@ def cmd_worker_start(args):
                     return
                 continue
             get_job_queue().mark_running(job.job_id)
+            _pause_sleep = 4.0
             while get_job_queue().is_run_paused(str(job.run_id or "")):
                 if get_job_queue().is_cancelled(job.job_id):
                     break
@@ -421,7 +536,8 @@ def cmd_worker_start(args):
                     get_job_queue().renew_lease(job.job_id, worker_id=worker_id)
                 except Exception:
                     pass
-                time.sleep(0.25)
+                time.sleep(_pause_sleep)
+                _pause_sleep = min(10.0, _pause_sleep * 1.5)
             started = time.time()
             import threading as _threading
 
@@ -573,16 +689,91 @@ def cmd_worker_start(args):
                 _http_json("POST", f"/workers/{worker_id}/heartbeat", payload)
 
         def _complete(job_id: str, result: dict) -> None:
-            """POST complete with retry/backoff on transient (network/5xx) errors."""
-            _retry_http(
-                lambda: _http_json("POST", f"/jobs/{job_id}/complete", result),
-                label=f"complete {job_id}",
+            """POST complete with retry/backoff; spool on network failure when enabled."""
+            try:
+                _retry_http(
+                    lambda: _http_json("POST", f"/jobs/{job_id}/complete", result),
+                    label=f"complete {job_id}",
+                )
+            except Exception as exc:
+                from app.core.distributed.worker_spool import (
+                    WorkerSpool,
+                    is_network_error,
+                    spool_enabled,
+                )
+
+                if spool_enabled() and is_network_error(exc):
+                    spool = WorkerSpool()
+                    spool.enqueue_complete(dict(result))
+                    print(
+                        f"[worker] control unreachable — spooled complete for {job_id}",
+                        file=sys.stderr,
+                    )
+                    return
+                raise
+
+        def _flush_spool() -> None:
+            from app.core.distributed.worker_spool import WorkerSpool, spool_enabled
+
+            if not spool_enabled():
+                return
+            spool = WorkerSpool()
+            if not spool.pending():
+                return
+
+            _wid = worker_id
+
+            def _put_blob(data, *, key=None, worker_id=None):
+                from app.core.distributed.transfer import http_put_blob
+
+                return http_put_blob(
+                    control_url,
+                    data,
+                    key=key,
+                    token=token or None,
+                    worker_id=worker_id or _wid,
+                )
+
+            def _do_complete(job_id, result):
+                _http_json("POST", f"/jobs/{job_id}/complete", result)
+
+            def _do_events(job_id, events):
+                _http_json("POST", f"/jobs/{job_id}/events", {"events": events})
+
+            stats = spool.flush(
+                put_blob=_put_blob,
+                complete=_do_complete,
+                post_events=_do_events,
+                is_fenced=lambda exc: getattr(exc, "code", None) == 409
+                or ("409" in str(exc) and "lease" in str(exc).lower()),
             )
+            if stats["flushed"] or stats["dropped"]:
+                print(
+                    f"[worker] spool flush: flushed={stats['flushed']} "
+                    f"dropped={stats['dropped']} remaining={stats['remaining']}",
+                    file=sys.stderr,
+                )
 
         print(f"[worker] registering with {control_url} as {worker_id}")
-        _register()
+        try:
+            _register()
+            _flush_spool()
+        except Exception as exc:
+            from app.core.distributed.worker_spool import is_network_error, spool_enabled
+
+            if spool_enabled() and is_network_error(exc):
+                print(
+                    f"[worker] register failed (control unreachable); will retry: {exc}",
+                    file=sys.stderr,
+                )
+            else:
+                raise
         while True:
             try:
+                try:
+                    _flush_spool()
+                except Exception as flush_exc:
+                    print(f"[worker] spool flush deferred: {flush_exc}", file=sys.stderr)
                 _heartbeat("idle")
                 try:
                     claimed = _http_json("POST", "/jobs/claim", {"worker_id": worker_id})
@@ -633,18 +824,41 @@ def cmd_worker_start(args):
                         return
                     continue
 
-                def _job_status() -> dict:
-                    # Read-only (GET never renews leases; heartbeats do).
-                    return _http_json("GET", f"/jobs/{job['job_id']}") or {}
+                # Cap control-plane GET /jobs/{id} rate. Historically cancel_check
+                # called GET on every isolated-executor poll (~2 Hz) *and* the
+                # cancel-watch thread did the same → tens of GETs/sec, starving
+                # uvicorn so Editor NDJSON / journal hydrate looked "stuck".
+                try:
+                    _job_poll_s = float(
+                        os.environ.get("GRAPHYN_WORKER_JOB_POLL_S", "4.0") or "4.0"
+                    )
+                except ValueError:
+                    _job_poll_s = 4.0
+                _job_poll_s = max(0.5, min(_job_poll_s, 30.0))
+                _status_cache: dict = {"t": 0.0, "st": {}}
 
-                def _job_cancelled() -> bool:
+                def _job_status(*, force: bool = False) -> dict:
+                    # Read-only (GET never renews leases; heartbeats do).
+                    now = time.time()
+                    if (
+                        not force
+                        and _status_cache["st"]
+                        and (now - float(_status_cache["t"])) < _job_poll_s
+                    ):
+                        return dict(_status_cache["st"])
+                    st = _http_json("GET", f"/jobs/{job['job_id']}") or {}
+                    _status_cache["t"] = now
+                    _status_cache["st"] = st
+                    return st
+
+                def _job_cancelled(*, force: bool = False) -> bool:
                     try:
-                        j = _job_status().get("job") or {}
+                        j = _job_status(force=force).get("job") or {}
                         return j.get("status") == "cancelled"
                     except Exception:
                         return False
 
-                if _job_cancelled():
+                if _job_cancelled(force=True):
                     print(f"[worker] job {job.get('job_id')} cancelled before start")
                     with _active_lock:
                         _active.discard(job["job_id"])
@@ -652,9 +866,10 @@ def cmd_worker_start(args):
                         return
                     continue
                 _last_hb = time.time()
+                _pause_sleep = _job_poll_s
                 while True:
                     try:
-                        st = _job_status()
+                        st = _job_status(force=True)
                     except Exception:
                         break
                     if not (st or {}).get("run_paused"):
@@ -668,23 +883,23 @@ def cmd_worker_start(args):
                         except Exception:
                             pass
                         _last_hb = time.time()
-                    time.sleep(0.25)
+                    time.sleep(_pause_sleep)
+                    _pause_sleep = min(10.0, _pause_sleep * 1.5)
                 started = time.time()
                 try:
                     _heartbeat("busy")
-                    if _job_cancelled():
+                    if _job_cancelled(force=True):
                         raise RuntimeError("cancelled by control plane")
-                    # Poll cancel more often during long execute; NodeExecutor /
-                    # isolated subprocess terminate the process group on signal.
+                    # Watch thread owns HTTP cancel polls; cancel_check only reads
+                    # the flag so NodeExecutor / isolated wait cannot stampede GET.
                     _cancel_flag = _threading.Event()
                     _watch_stop = _threading.Event()
                     _lease_stop = _threading.Event()
                     _lease_interval = max(5.0, min(heartbeat_s, 30.0))
 
                     def _cancel_watch() -> None:
-                        # ~2 Hz read-only status poll during execute.
-                        while not _watch_stop.wait(0.5):
-                            if _job_cancelled():
+                        while not _watch_stop.wait(_job_poll_s):
+                            if _job_cancelled(force=True):
                                 _cancel_flag.set()
                                 return
 
@@ -711,9 +926,7 @@ def cmd_worker_start(args):
                     try:
                         outputs, output_refs, output_sha256 = _execute_job(
                             job,
-                            cancel_check=lambda: (
-                                _cancel_flag.is_set() or _job_cancelled()
-                            ),
+                            cancel_check=lambda: _cancel_flag.is_set(),
                         )
                     finally:
                         _watch_stop.set()
@@ -725,12 +938,12 @@ def cmd_worker_start(args):
                         from app.core.plugins.isolated_executor import recast_plugin_types
 
                         if sum(len(repr(v)) for v in (outputs or {}).values()) < 2048:
-                            events = [
-                                {
-                                    "type": "outputs",
-                                    "data": recast_plugin_types(outputs),
-                                }
-                            ]
+                            _preview = recast_plugin_types(outputs)
+                            # Small-repr but non-JSON outputs (e.g. ModelArtifact)
+                            # would make POST /complete fail json.dumps forever;
+                            # skip the preview — output_refs blobs carry them.
+                            json.dumps(_preview)
+                            events = [{"type": "outputs", "data": _preview}]
                     except Exception:
                         events = []
                     result = {

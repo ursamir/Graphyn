@@ -53,7 +53,11 @@ _reg_dataset()
 from app.models.feature_array_serializer import register_feature_array_serializer as _reg_features
 _reg_features()
 from app.core.artifacts.file_tree import register_file_tree_serializer as _reg_file_tree
+from app.models.model_artifact_serializer import register_model_artifact_serializer as _reg_model
+from app.models.deployment_artifact_serializer import register_deployment_artifact_serializer as _reg_deploy
 _reg_file_tree()
+_reg_model()
+_reg_deploy()
 
 # ── Registry initialization ───────────────────────────────────────────────────
 # Explicitly populate the NodeRegistry singleton after the domain serializer

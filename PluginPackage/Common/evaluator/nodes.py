@@ -24,6 +24,7 @@ from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
 from app.models.dataset_artifact import DatasetArtifact
+from app.models.artifact_ref import ArtifactRef
 from app.models.model_artifact import ModelArtifact
 
 log = logging.getLogger(__name__)
@@ -281,14 +282,68 @@ class EvaluatorNode(Node):
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
+    def _resolve_role_path(self, artifact: ModelArtifact, role: str) -> str:
+        """Local path for *role* from hydrated refs, else legacy metrics/fields."""
+        for ref in getattr(artifact, "refs", None) or []:
+            r = getattr(ref, "role", None)
+            if r != role:
+                continue
+            # After hydrate, path fields are rewritten; prefer metrics hand-off
+            # keys and model_path that materialize_refs_onto set.
+            break
+        metrics = artifact.metrics or {}
+        if role == "keras_model":
+            for key in ("keras_model_path",):
+                val = str(metrics.get(key) or "").strip()
+                if val and Path(val).exists():
+                    return val
+            # refs may point at relative layout already written next to model_path
+            mp = str(getattr(artifact, "model_path", "") or "")
+            if mp:
+                sibling = Path(mp)
+                # saved_model dir sibling model.keras, or model_path itself .keras
+                if sibling.is_file() and sibling.suffix.lower() == ".keras":
+                    return str(sibling)
+                cand = sibling.parent / "model.keras"
+                if cand.is_file():
+                    return str(cand)
+                if sibling.is_dir():
+                    cand2 = sibling / "model.keras"
+                    if cand2.is_file():
+                        return str(cand2)
+            for ref in getattr(artifact, "refs", None) or []:
+                if getattr(ref, "role", None) == "keras_model":
+                    sp = str(getattr(ref, "source_path", "") or "")
+                    if sp and Path(sp).exists():
+                        return sp
+        if role == "saved_model":
+            mp = str(getattr(artifact, "model_path", "") or "").strip()
+            if mp and Path(mp).is_dir():
+                return mp
+            val = str(metrics.get("saved_model_path") or "").strip()
+            if val and Path(val).exists():
+                return val
+        if role == "pytorch_model":
+            mp = str(getattr(artifact, "model_path", "") or "").strip()
+            if mp and mp.lower().endswith((".pt", ".pth")) and Path(mp).exists():
+                return mp
+        return ""
+
     def _load_model(self, artifact: ModelArtifact):
         """Load a model from the artifact. Supports Keras (.keras, SavedModel) and
-        PyTorch (.pt / .pth) formats, detected from the model_path extension."""
-        model_path = artifact.model_path
+        PyTorch (.pt / .pth) formats via ArtifactRef roles + local path fields."""
         metrics = artifact.metrics or {}
-        keras_model_path = metrics.get("keras_model_path", "")
+        keras_model_path = self._resolve_role_path(artifact, "keras_model") or str(
+            metrics.get("keras_model_path") or ""
+        )
+        model_path = (
+            self._resolve_role_path(artifact, "pytorch_model")
+            or self._resolve_role_path(artifact, "saved_model")
+            or artifact.model_path
+        )
 
-        # Try Keras first (prefer .keras format)
+        # Try Keras first (prefer .keras format) — Keras 3 loads .keras reliably;
+        # SavedModel directories are the fallback.
         if keras_model_path and Path(keras_model_path).exists():
             try:
                 import keras  # type: ignore
@@ -490,6 +545,7 @@ class EvaluatorNode(Node):
                 labels=labels,
                 history=artifact.history,
                 metrics={"error": "empty test set"},
+                refs=list(getattr(artifact, "refs", None) or []),
             )}
 
         # ── Predict ───────────────────────────────────────────────────────────
@@ -500,6 +556,7 @@ class EvaluatorNode(Node):
                 labels=labels,
                 history=artifact.history,
                 metrics={"error": "PyTorch state dict loaded — architecture required for inference"},
+                refs=list(getattr(artifact, "refs", None) or []),
             )}
 
         _report_progress({"phase": "evaluate", "n_test": int(len(X_test)), "pct": 0.0})
@@ -640,6 +697,7 @@ class EvaluatorNode(Node):
                 labels=labels,
                 history=artifact.history,
                 metrics=metrics,
+                refs=list(getattr(artifact, "refs", None) or []),
             )
         }
 

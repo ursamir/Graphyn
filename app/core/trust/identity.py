@@ -7,13 +7,17 @@ Responsibility:   Bind audit identity to the API bearer token. Loads the
                   carries the per-request identity in a ContextVar so core
                   audit emitters (record_audit) stamp the caller even when
                   they were handed a generic actor ("api" / "system").
-Owns:             parse_token_map(), load_token_map(), lookup_token(),
+                  Mode B WAVE-1: named tokens may be worker-scoped
+                  (kind=worker + optional worker_id) for route ACL.
+Owns:             parse_token_map(), parse_token_entries(), load_token_map(),
+                  load_token_entries(), lookup_token(), lookup_token_info(),
                   token_auth_configured(), token_accepted(),
                   identity_from_credentials(), set_request_identity(),
                   reset_request_identity(), current_identity(), bind_actor(),
-                  GENERIC_ACTORS, UNIDENTIFIED.
+                  worker_route_allowed(), TokenInfo, GENERIC_ACTORS, UNIDENTIFIED.
 Public Surface:   The functions above. Identity dict shape:
-                  ``{actor, actor_verified, token_mapped, claimed_actor}``.
+                  ``{actor, actor_verified, token_mapped, claimed_actor,
+                     kind, worker_id}``.
 Must NOT:         Import app.api / app.domain / execution; log or return
                   token values.
 Dependencies:     stdlib (contextvars, hmac, json, os), app.core.config.api_token.
@@ -25,6 +29,11 @@ Policy:
   * unmapped token (single GRAPHYN_API_TOKEN, or no auth in dev) → ``actor`` =
     X-Actor / body actor, else ``"unidentified"``; ``actor_verified`` = False.
   * ``"system"`` is reserved for internal background jobs (no request context).
+
+Token map formats (backward compatible):
+  * Text: ``name:token`` (operator) or ``name:token:worker[:worker_id]``
+  * JSON: ``{"token": "name"}`` or
+    ``{"token": {"name": "…", "kind": "worker"|"operator", "worker_id": "…"}}``
 """
 from __future__ import annotations
 
@@ -34,6 +43,7 @@ import logging
 import os
 import threading
 from contextvars import ContextVar, Token
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -45,48 +55,128 @@ GENERIC_ACTORS = frozenset({"", "api", "system", "unknown", "human", "anonymous"
 
 _MAX_NAME = 128
 _IDENTITY: ContextVar[dict[str, Any] | None] = ContextVar("graphyn_request_identity", default=None)
-_file_cache: dict[str, tuple[float, dict[str, str]]] = {}
+_file_cache: dict[str, tuple[float, dict[str, "TokenInfo"]]] = {}
 _file_lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class TokenInfo:
+    """Metadata for one accepted bearer token."""
+
+    name: str
+    kind: str = "operator"  # operator | worker
+    worker_id: str | None = None
+
+    @property
+    def is_worker(self) -> bool:
+        return self.kind == "worker"
 
 
 def _clean_name(raw: Any) -> str:
     return str(raw or "").strip()[:_MAX_NAME]
 
 
-def parse_token_map(raw: str | None) -> dict[str, str]:
-    """Parse ``{"token": "name"}`` JSON or ``name:token,name:token`` text.
+def _clean_worker_id(raw: Any) -> str | None:
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    return s[:_MAX_NAME]
 
-    Text form also accepts newlines as separators and ``#`` comment lines.
-    Entries with an empty token or name are dropped. Returns token → name.
+
+def _kind_of(raw: Any) -> str:
+    k = str(raw or "operator").strip().lower()
+    if k in ("worker", "w"):
+        return "worker"
+    return "operator"
+
+
+def _token_info_from_meta(name: Any, meta: Any = None) -> TokenInfo | None:
+    n = _clean_name(name)
+    if not n:
+        return None
+    if meta is None:
+        return TokenInfo(name=n, kind="operator", worker_id=None)
+    if isinstance(meta, dict):
+        # JSON value form: {"name", "kind", "worker_id"} used as the *value*
+        # when key is the token — or as the whole value when token is the key
+        # and value is a string name (handled by caller).
+        nn = _clean_name(meta.get("name")) or n
+        kind = _kind_of(meta.get("kind"))
+        wid = _clean_worker_id(meta.get("worker_id"))
+        return TokenInfo(name=nn, kind=kind, worker_id=wid)
+    return TokenInfo(name=n, kind="operator", worker_id=None)
+
+
+def parse_token_entries(raw: str | None) -> dict[str, TokenInfo]:
+    """Parse token map text/JSON into token → TokenInfo.
+
+    Text form: ``name:token``, ``name:token:worker``, ``name:token:worker:id``
+    (commas or newlines; ``#`` comments). JSON: ``{"token": "name"}`` or
+    ``{"token": {"name", "kind", "worker_id"}}``.
     """
     text = (raw or "").strip()
     if not text:
         return {}
-    out: dict[str, str] = {}
+    out: dict[str, TokenInfo] = {}
     if text.startswith("{"):
         try:
             data = json.loads(text)
         except ValueError:
             log.warning("GRAPHYN_API_TOKENS: invalid JSON — ignored")
             return {}
-        if isinstance(data, dict):
-            for tok, name in data.items():
-                t, n = str(tok or "").strip(), _clean_name(name)
-                if t and n:
-                    out[t] = n
+        if not isinstance(data, dict):
+            return {}
+        for tok, val in data.items():
+            t = str(tok or "").strip()
+            if not t:
+                continue
+            if isinstance(val, dict):
+                # Prefer explicit name inside object; fall back to empty → drop
+                info = _token_info_from_meta(val.get("name") or "", val)
+                if info is None:
+                    # {"token": {"kind": "worker", "worker_id": "s99"}} without name
+                    # — refuse (no anonymous worker tokens)
+                    continue
+                out[t] = info
+            else:
+                info = _token_info_from_meta(val)
+                if info is not None:
+                    out[t] = info
         return out
+    import re as _re
+    _worker_suf = _re.compile(
+        r"^(?P<tok>.+):worker(?::(?P<wid>[A-Za-z0-9_.-]+))?$",
+        _re.IGNORECASE,
+    )
     for chunk in text.replace("\n", ",").split(","):
         item = chunk.strip()
         if not item or item.startswith("#"):
             continue
-        name, sep, tok = item.partition(":")
-        t, n = tok.strip(), _clean_name(name)
-        if sep and t and n:
-            out[t] = n
+        name, sep, rest = item.partition(":")
+        n = _clean_name(name)
+        rest = rest.strip()
+        if not sep or not n or not rest:
+            continue
+        m = _worker_suf.match(rest)
+        if m:
+            tok = m.group("tok").strip()
+            wid = _clean_worker_id(m.group("wid"))
+            if tok:
+                out[tok] = TokenInfo(name=n, kind="worker", worker_id=wid)
+        else:
+            out[rest] = TokenInfo(name=n, kind="operator", worker_id=None)
     return out
 
 
-def _file_map(path_s: str) -> dict[str, str]:
+def parse_token_map(raw: str | None) -> dict[str, str]:
+    """Parse ``{"token": "name"}`` JSON or ``name:token,…`` text → token → name.
+
+    Backward-compatible view of :func:`parse_token_entries` (names only).
+    """
+    return {tok: info.name for tok, info in parse_token_entries(raw).items()}
+
+
+def _file_entries(path_s: str) -> dict[str, TokenInfo]:
     path = Path(path_s).expanduser()
     try:
         mtime = path.stat().st_mtime
@@ -97,7 +187,7 @@ def _file_map(path_s: str) -> dict[str, str]:
         if hit is not None and hit[0] == mtime:
             return hit[1]
     try:
-        parsed = parse_token_map(path.read_text(encoding="utf-8"))
+        parsed = parse_token_entries(path.read_text(encoding="utf-8"))
     except OSError as exc:
         log.warning("GRAPHYN_API_TOKENS_FILE unreadable: %s", exc)
         parsed = {}
@@ -106,17 +196,23 @@ def _file_map(path_s: str) -> dict[str, str]:
     return parsed
 
 
-def load_token_map() -> dict[str, str]:
-    """token → name from GRAPHYN_API_TOKENS_FILE then GRAPHYN_API_TOKENS (env wins).
+def load_token_entries() -> dict[str, TokenInfo]:
+    """token → TokenInfo from GRAPHYN_API_TOKENS_FILE then GRAPHYN_API_TOKENS.
 
     Read on every call (file cached by mtime) so rotation needs no restart.
+    Env entries win on conflicts.
     """
-    merged: dict[str, str] = {}
+    merged: dict[str, TokenInfo] = {}
     fpath = (os.environ.get("GRAPHYN_API_TOKENS_FILE") or "").strip()
     if fpath:
-        merged.update(_file_map(fpath))
-    merged.update(parse_token_map(os.environ.get("GRAPHYN_API_TOKENS")))
+        merged.update(_file_entries(fpath))
+    merged.update(parse_token_entries(os.environ.get("GRAPHYN_API_TOKENS")))
     return merged
+
+
+def load_token_map() -> dict[str, str]:
+    """token → name from GRAPHYN_API_TOKENS_FILE then GRAPHYN_API_TOKENS (env wins)."""
+    return {tok: info.name for tok, info in load_token_entries().items()}
 
 
 def _single_token() -> str:
@@ -128,21 +224,27 @@ def _single_token() -> str:
         return (os.environ.get("GRAPHYN_API_TOKEN") or "").strip()
 
 
-def lookup_token(token: str | None) -> str | None:
-    """Mapped identity name for ``token`` (constant-time compare per entry)."""
+def lookup_token_info(token: str | None) -> TokenInfo | None:
+    """TokenInfo for ``token`` (constant-time compare per entry), or None."""
     tok = str(token or "")
     if not tok:
         return None
-    found: str | None = None
-    for known, name in load_token_map().items():
+    found: TokenInfo | None = None
+    for known, info in load_token_entries().items():
         if hmac.compare_digest(known.encode("utf-8"), tok.encode("utf-8")) and found is None:
-            found = name
+            found = info
     return found
+
+
+def lookup_token(token: str | None) -> str | None:
+    """Mapped identity name for ``token`` (constant-time compare per entry)."""
+    info = lookup_token_info(token)
+    return info.name if info is not None else None
 
 
 def token_auth_configured() -> bool:
     """True when any bearer token (single or mapped) is configured."""
-    return bool(_single_token()) or bool(load_token_map())
+    return bool(_single_token()) or bool(load_token_entries())
 
 
 def token_accepted(token: str | None) -> bool:
@@ -153,7 +255,7 @@ def token_accepted(token: str | None) -> bool:
     single = _single_token()
     if single and hmac.compare_digest(single.encode("utf-8"), tok.encode("utf-8")):
         return True
-    return lookup_token(tok) is not None
+    return lookup_token_info(tok) is not None
 
 
 def bearer_from_header(value: str | None) -> str | None:
@@ -170,19 +272,24 @@ def identity_from_credentials(
 ) -> dict[str, Any]:
     """Identity dict for one request (see module policy)."""
     claim = _clean_name(explicit) or _clean_name(claimed) or None
-    name = lookup_token(token)
-    if name:
+    info = lookup_token_info(token)
+    if info is not None:
         return {
-            "actor": name,
+            "actor": info.name,
             "actor_verified": True,
             "token_mapped": True,
-            "claimed_actor": claim if claim and claim != name else None,
+            "claimed_actor": claim if claim and claim != info.name else None,
+            "kind": info.kind,
+            "worker_id": info.worker_id,
         }
+    # Single shared GRAPHYN_API_TOKEN (or no map hit) → operator, unverified name
     return {
         "actor": claim or UNIDENTIFIED,
         "actor_verified": False,
         "token_mapped": False,
         "claimed_actor": None,
+        "kind": "operator",
+        "worker_id": None,
     }
 
 
@@ -201,6 +308,62 @@ def current_identity() -> dict[str, Any] | None:
     """Identity of the HTTP request being served, or None (background job)."""
     ident = _IDENTITY.get()
     return dict(ident) if isinstance(ident, dict) else None
+
+
+def current_token_info() -> TokenInfo | None:
+    """TokenInfo for the current request bearer, if mapped."""
+    ident = current_identity()
+    if not ident or not ident.get("token_mapped"):
+        return None
+    kind = str(ident.get("kind") or "operator")
+    return TokenInfo(
+        name=str(ident.get("actor") or UNIDENTIFIED),
+        kind=kind if kind in ("operator", "worker") else "operator",
+        worker_id=_clean_worker_id(ident.get("worker_id")),
+    )
+
+
+def is_operator_identity(ident: dict[str, Any] | None = None) -> bool:
+    """True when the caller is not a worker-scoped mapped token / mTLS cert."""
+    ident = ident if ident is not None else current_identity()
+    if not ident:
+        return True  # no request / unauthenticated-dev → treat as operator
+    # mTLS worker cert (even without a mapped bearer) is not an operator.
+    if ident.get("mtls_worker_id") and str(ident.get("kind") or "") == "worker":
+        return False
+    if not ident.get("token_mapped"):
+        return True  # shared single token or unverified → operator
+    return str(ident.get("kind") or "operator") != "worker"
+
+
+def worker_route_allowed(
+    requested_worker_id: str | None,
+    *,
+    ident: dict[str, Any] | None = None,
+) -> bool:
+    """Route ACL for worker-scoped tokens and/or mTLS client certs.
+
+    Operator / unmapped / unauthenticated-dev → always True.
+    When ``mtls_worker_id`` is present, ``requested_worker_id`` must match it
+    (cert identity). When a worker-scoped token binds a ``worker_id``, the
+    request must match that too (cert AND token when both present — middleware
+    already rejects mismatches). Tokens with ``kind=worker`` and no bound id
+    accept any non-empty requested id (lab convenience).
+    """
+    ident = ident if ident is not None else current_identity()
+    if is_operator_identity(ident):
+        return True
+    req = str(requested_worker_id or "").strip()
+    if not req:
+        return False
+    mtls_wid = _clean_worker_id((ident or {}).get("mtls_worker_id"))
+    if mtls_wid is not None:
+        if not hmac.compare_digest(mtls_wid.encode("utf-8"), req.encode("utf-8")):
+            return False
+    bound = _clean_worker_id((ident or {}).get("worker_id"))
+    if bound is None:
+        return True
+    return hmac.compare_digest(bound.encode("utf-8"), req.encode("utf-8"))
 
 
 def bind_actor(
@@ -231,17 +394,24 @@ def bind_actor(
 
 
 __all__ = [
+    "TokenInfo",
     "bind_actor",
     "GENERIC_ACTORS",
     "UNIDENTIFIED",
     "bearer_from_header",
     "current_identity",
+    "current_token_info",
     "identity_from_credentials",
+    "is_operator_identity",
+    "load_token_entries",
     "load_token_map",
     "lookup_token",
+    "lookup_token_info",
+    "parse_token_entries",
     "parse_token_map",
     "reset_request_identity",
     "set_request_identity",
     "token_accepted",
     "token_auth_configured",
+    "worker_route_allowed",
 ]

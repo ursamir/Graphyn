@@ -5,7 +5,7 @@ Responsibility:   Public API surface for platform-core data models. Re-exports
                   all PortDataType subclasses so callers use a single import
                   path (``from app.models import AudioSample``).
 Owns:             Re-export declarations for all platform-core types.
-Public Surface:   AudioSample, DataSample, DeploymentArtifact, FeatureArray,
+Public Surface:   ArtifactRef, AudioSample, DataSample, DeploymentArtifact, FeatureArray,
                   DatasetArtifact, ModelArtifact, PredictionResult, TensorBatch,
                   TFLiteArtifact.
 Must NOT:         Define plugin-specific types here — those belong in the
@@ -17,6 +17,7 @@ Dependencies:     app.models.{audio_sample, data_sample, deployment_artifact,
 Reason To Change: New platform-core data type is added, or an existing type
                   is renamed or removed.
 """
+from app.models.artifact_ref import ArtifactRef
 from app.models.audio_sample import AudioSample
 from app.models.data_sample import DataSample
 from app.models.dataset_artifact import DatasetArtifact
@@ -28,6 +29,7 @@ from app.models.tensor_batch import TensorBatch
 from app.models.tflite_artifact import TFLiteArtifact
 
 __all__ = [
+    "ArtifactRef",
     "AudioSample",
     "DataSample",
     "DatasetArtifact",

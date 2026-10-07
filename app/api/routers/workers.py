@@ -4,12 +4,16 @@ Bounded Context:  REST API Layer
 Responsibility:   HTTP endpoints for distributed worker registration,
                   heartbeats, job claim/complete/events/cancel, and optional
                   HTTP artifact blob put/get for cross-machine transfer.
+                  Mode B WAVE-1/2: worker-scoped token ACL, blob GET authz +
+                  signed URLs, admin PATCH for plugin ACL / trust / max_claimed,
+                  usage counters, encrypt-at-rest blob GET, audit hooks.
 Owns:             Routes under /workers, /jobs, and /artifacts/blob.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py.
 Must NOT:         Contain scheduling policy — delegate to
                   app.core.distributed.*.
 Dependencies:     fastapi, starlette.concurrency, pydantic,
-                  app.core.distributed.*, app.core.config, stdlib (pathlib, hashlib).
+                  app.core.distributed.*, app.core.config, app.core.trust.*,
+                  stdlib (pathlib, hashlib).
 Reason To Change: New worker/job endpoints, heartbeat protocol (active_job_ids),
                   or artifact transfer protocol (blob key authz / integrity).
 """
@@ -18,7 +22,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
@@ -49,6 +52,71 @@ def _validate_worker_id(worker_id: str) -> None:
         raise HTTPException(status_code=400, detail="Invalid worker_id")
 
 
+def _audit(action: str, *, resource_type: str, resource_id: str, meta: dict | None = None) -> None:
+    try:
+        from app.core.trust.audit import record_audit
+
+        record_audit(
+            actor="api",
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            meta=meta or {},
+        )
+    except Exception as exc:
+        log.warning("workers.audit %s failed for %s: %s", action, resource_id, exc)
+
+
+def _enforce_worker_acl(request: Request, worker_id: str | None) -> None:
+    """Fail closed: worker-scoped tokens / mTLS certs may only act as their id.
+
+    When neither token auth nor an mTLS worker identity is present (plain lab
+    HTTP), ACL is a no-op. When mTLS cert identity is bound, enforce even
+    without bearer tokens.
+    """
+    from app.core.trust.identity import (
+        current_identity,
+        token_auth_configured,
+        worker_route_allowed,
+    )
+
+    ident = current_identity()
+    mtls_bound = bool(ident and ident.get("mtls_worker_id"))
+    if not token_auth_configured() and not mtls_bound:
+        return
+    if not worker_route_allowed(worker_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Worker-scoped token/cert cannot act as this worker_id",
+        )
+
+
+def _require_operator(request: Request) -> None:
+    """Admin mutations require a non-worker token when auth is configured."""
+    from app.core.trust.identity import is_operator_identity, token_auth_configured
+
+    if not token_auth_configured():
+        return
+    if not is_operator_identity():
+        raise HTTPException(status_code=403, detail="Operator token required")
+
+
+def _worker_id_from_request(
+    request: Request,
+    *,
+    body_worker_id: str | None = None,
+    query_worker_id: str | None = None,
+    path_worker_id: str | None = None,
+) -> str | None:
+    return (
+        path_worker_id
+        or body_worker_id
+        or query_worker_id
+        or request.headers.get("x-graphyn-worker-id")
+        or None
+    )
+
+
 # ── Request bodies ────────────────────────────────────────────────────────────
 
 
@@ -63,6 +131,10 @@ class HeartbeatBody(BaseModel):
             "these leases are renewed; omitted = legacy renew-all (deprecated)."
         ),
     )
+    content_hashes: dict[str, str] | None = Field(
+        None,
+        description="Optional node_type → sha256 advertisement refresh.",
+    )
 
 
 class ClaimBody(BaseModel):
@@ -71,6 +143,16 @@ class ClaimBody(BaseModel):
 
 class JobEventsBody(BaseModel):
     events: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class WorkerPatchBody(BaseModel):
+    allowed_plugins: list[str] | None = None
+    plugin_hashes: dict[str, str] | None = None
+    trusted: bool | None = None
+    labels: list[str] | None = None
+    pools: list[str] | None = None
+    node_types: list[str] | None = None
+    max_claimed: int | None = None
 
 
 # ── Workers ───────────────────────────────────────────────────────────────────
@@ -82,6 +164,7 @@ def _split_ids(raw: Optional[str]) -> list[str]:
 
 @router.post("/workers/register", summary="Register or refresh a worker")
 def register_worker(
+    request: Request,
     info: WorkerInfo,
     active_job_ids: Optional[str] = Query(
         None,
@@ -99,6 +182,7 @@ def register_worker(
     released back to the queue unless listed in ``active_job_ids``.
     """
     _validate_worker_id(info.worker_id)
+    _enforce_worker_acl(request, info.worker_id)
     stored = get_worker_registry().register(info)
     released: list[str] = []
     try:
@@ -111,25 +195,16 @@ def register_worker(
             info.worker_id,
             exc,
         )
-    try:
-        from app.core.trust.audit import record_audit
-
-        record_audit(
-            actor="worker",
-            action="worker.register",
-            resource_type="worker",
-            resource_id=info.worker_id,
-            meta={
-                "labels": list(getattr(info, "labels", None) or []),
-                "pools": list(getattr(info, "pools", None) or []),
-            },
-        )
-    except Exception as exc:
-        log.warning(
-            "workers.register: audit record failed for %s: %s",
-            info.worker_id,
-            exc,
-        )
+    _audit(
+        "worker.register",
+        resource_type="worker",
+        resource_id=info.worker_id,
+        meta={
+            "labels": list(getattr(info, "labels", None) or []),
+            "pools": list(getattr(info, "pools", None) or []),
+            "trusted": bool(getattr(stored, "trusted", True)),
+        },
+    )
     out = stored.model_dump(mode="json")
     if released:
         out["released_job_ids"] = released
@@ -137,8 +212,11 @@ def register_worker(
 
 
 @router.post("/workers/{worker_id}/heartbeat", summary="Worker heartbeat")
-def worker_heartbeat(worker_id: str, body: HeartbeatBody = HeartbeatBody()):
+def worker_heartbeat(
+    request: Request, worker_id: str, body: HeartbeatBody = HeartbeatBody()
+):
     _validate_worker_id(worker_id)
+    _enforce_worker_acl(request, worker_id)
     try:
         stored = get_worker_registry().heartbeat(
             worker_id,
@@ -146,12 +224,14 @@ def worker_heartbeat(worker_id: str, body: HeartbeatBody = HeartbeatBody()):
             status=body.status,
             active_jobs=body.active_jobs,
         )
+        if body.content_hashes is not None:
+            stored = get_worker_registry().patch(
+                worker_id, content_hashes=dict(body.content_hashes)
+            )
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown worker {worker_id}")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    # Heartbeat renews leases: only ``active_job_ids`` when sent (v2), else
-    # every job claimed by this worker id (legacy, logs a deprecation).
     try:
         queue = get_job_queue()
         if body.active_job_ids is None:
@@ -173,16 +253,70 @@ def worker_heartbeat(worker_id: str, body: HeartbeatBody = HeartbeatBody()):
 
 @router.get("/workers", summary="List workers")
 def list_workers(include_stale: bool = Query(False)):
+    from app.core.distributed.quotas import parse_pool_max_claimed, usage_snapshot
+
     workers = get_worker_registry().list(include_stale=include_stale)
-    return [w.model_dump(mode="json") for w in workers]
+    pool_limits = parse_pool_max_claimed()
+    out = []
+    for w in workers:
+        row = w.model_dump(mode="json")
+        row["usage"] = usage_snapshot(w)
+        if pool_limits:
+            row["pool_max_claimed"] = {
+                p: pool_limits[p] for p in (w.pools or []) if p in pool_limits
+            }
+        out.append(row)
+    return out
+
+
+@router.get("/workers/remote-node-types", summary="List remote-advertised node types")
+def list_remote_node_types(include_stale: bool = Query(False)):
+    """Type names advertised by registered workers (plugins ∪ node_types)."""
+    from app.core.distributed.registry import known_remote_node_types
+
+    return {"node_types": sorted(known_remote_node_types(include_stale=include_stale))}
+
+
+@router.patch("/workers/{worker_id}", summary="Update worker ACL / trust fields")
+def patch_worker(request: Request, worker_id: str, body: WorkerPatchBody):
+    _validate_worker_id(worker_id)
+    _require_operator(request)
+    # exclude_unset so omitted fields stay untouched; explicit null clears ACL lists.
+    fields = body.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(status_code=400, detail="No fields to patch")
+    try:
+        prev = get_worker_registry().get(worker_id)
+        stored = get_worker_registry().patch(worker_id, **fields)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown worker {worker_id}")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if "trusted" in fields and prev is not None and bool(prev.trusted) != bool(stored.trusted):
+        _audit(
+            "worker.trust",
+            resource_type="worker",
+            resource_id=worker_id,
+            meta={"trusted": bool(stored.trusted), "previous": bool(prev.trusted)},
+        )
+    else:
+        _audit(
+            "worker.patch",
+            resource_type="worker",
+            resource_id=worker_id,
+            meta={"fields": sorted(fields.keys())},
+        )
+    return stored.model_dump(mode="json")
 
 
 @router.delete("/workers/{worker_id}", summary="Deregister a worker")
-def delete_worker(worker_id: str):
+def delete_worker(request: Request, worker_id: str):
     _validate_worker_id(worker_id)
+    _require_operator(request)
     removed = get_worker_registry().remove(worker_id)
     if not removed:
         raise HTTPException(status_code=404, detail=f"Unknown worker {worker_id}")
+    _audit("worker.deregister", resource_type="worker", resource_id=worker_id)
     return {"ok": True, "worker_id": worker_id}
 
 
@@ -190,48 +324,102 @@ def delete_worker(worker_id: str):
 
 
 @router.post("/jobs/claim", summary="Claim next eligible job")
-def claim_job(body: ClaimBody):
+def claim_job(request: Request, body: ClaimBody):
     _validate_worker_id(body.worker_id)
+    _enforce_worker_acl(request, body.worker_id)
     worker = get_worker_registry().get(body.worker_id)
     if worker is None:
         raise HTTPException(status_code=404, detail=f"Unknown worker {body.worker_id}")
     if get_worker_registry().is_stale(worker):
         raise HTTPException(status_code=409, detail="Worker is stale; heartbeat first")
+    # Fail fast on quota before scanning (claim also skips under CAS).
+    from app.core.distributed.quotas import QuotaExceeded, assert_claim_quota, record_usage
+
+    try:
+        assert_claim_quota(worker)
+    except QuotaExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     job = get_job_queue().claim(worker)
     if job is None:
         return {"job": None}
+    record_usage(body.worker_id, claims=1)
+    _audit(
+        "job.claim",
+        resource_type="job",
+        resource_id=job.job_id,
+        meta={
+            "worker_id": body.worker_id,
+            "node_type": job.node_type,
+            "run_id": job.run_id,
+        },
+    )
     return {"job": job.model_dump(mode="json")}
 
 
 @router.post("/jobs/{job_id}/complete", summary="Report job result")
-def complete_job(job_id: str, result: JobResult):
+def complete_job(request: Request, job_id: str, result: JobResult):
     if result.job_id and result.job_id != job_id:
         raise HTTPException(status_code=400, detail="job_id mismatch")
-    result = result.model_copy(update={"job_id": job_id})
+    wid = _worker_id_from_request(request, body_worker_id=result.worker_id)
+    _enforce_worker_acl(request, wid)
+    from app.core.distributed.security import redact_job_result_payload
+
+    result = redact_job_result_payload(result.model_copy(update={"job_id": job_id}))
     try:
         job = get_job_queue().complete(result)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown job {job_id}")
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    if result.worker_id:
+        from app.core.distributed.quotas import record_usage
+
+        record_usage(result.worker_id, completes=1)
+    _audit(
+        "job.complete",
+        resource_type="job",
+        resource_id=job_id,
+        meta={
+            "worker_id": result.worker_id,
+            "status": result.status,
+            "run_id": getattr(job, "run_id", None),
+        },
+    )
     return {"job": job.model_dump(mode="json"), "result": result.model_dump(mode="json")}
 
 
 @router.post("/jobs/{job_id}/events", summary="Append job log events")
-def job_events(job_id: str, body: JobEventsBody):
+def job_events(request: Request, job_id: str, body: JobEventsBody):
+    job = get_job_queue().get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Unknown job {job_id}")
+    wid = _worker_id_from_request(
+        request, body_worker_id=getattr(job, "claimed_by", None)
+    )
+    _enforce_worker_acl(request, wid)
+    from app.core.distributed.security import redact_job_events
+
+    events = redact_job_events(body.events)
     try:
-        count = get_job_queue().append_events(job_id, body.events)
+        count = get_job_queue().append_events(job_id, events)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown job {job_id}")
     return {"job_id": job_id, "event_count": count}
 
 
 @router.post("/jobs/{job_id}/cancel", summary="Cancel a job")
-def cancel_job(job_id: str):
+def cancel_job(request: Request, job_id: str):
+    _require_operator(request)
     try:
         job = get_job_queue().cancel(job_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown job {job_id}")
+    _audit(
+        "job.cancel",
+        resource_type="job",
+        resource_id=job_id,
+        meta={"run_id": getattr(job, "run_id", None)},
+    )
     return job.model_dump(mode="json")
 
 
@@ -313,6 +501,57 @@ def _authorize_blob_key(key: Optional[str], worker_id: Optional[str]) -> None:
         )
 
 
+def _authorize_blob_get(
+    request: Request,
+    key: str,
+    *,
+    exp: Optional[str],
+    sig: Optional[str],
+    worker_id: Optional[str],
+) -> None:
+    """GET authz: operator OR claim holder (job keys) OR valid signed URL."""
+    from app.core.distributed.transfer import (
+        parse_job_output_key,
+        verify_signed_blob_url,
+    )
+    from app.core.trust.identity import (
+        is_operator_identity,
+        token_auth_configured,
+    )
+
+    if verify_signed_blob_url(key, exp=exp, sig=sig, method="GET"):
+        return
+
+    if not token_auth_configured():
+        # Unauthenticated-dev: keep lab Mode B working without signed URLs.
+        return
+
+    if is_operator_identity():
+        return
+
+    # Worker-scoped: only job-scoped keys while holding the claim.
+    parsed = parse_job_output_key(key)
+    if parsed is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Blob GET requires operator token or a valid signed URL",
+        )
+    job_seg, gen = parsed
+    wid = worker_id or request.headers.get("x-graphyn-worker-id")
+    _enforce_worker_acl(request, wid)
+    job = get_job_queue().get(job_seg)
+    if (
+        job is None
+        or job.status not in ("claimed", "running")
+        or job.claimed_by != wid
+        or int(job.lease_generation or 0) != gen
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Worker does not hold claim for this blob key",
+        )
+
+
 @router.post("/artifacts/blob", summary="Upload an artifact blob")
 async def put_artifact_blob(
     request: Request,
@@ -332,6 +571,7 @@ async def put_artifact_blob(
     from app.core.distributed.transfer import put_blob_with_digest
 
     worker_id = worker_id or request.headers.get("x-graphyn-worker-id") or None
+    _enforce_worker_acl(request, worker_id)
     content_length = request.headers.get("content-length")
     if content_length:
         try:
@@ -367,28 +607,110 @@ async def put_artifact_blob(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     parsed = parse_artifact_uri(uri)
+    if worker_id:
+        from app.core.distributed.quotas import record_usage
+
+        record_usage(worker_id, bytes_out=size)
+    _audit(
+        "blob.put",
+        resource_type="blob",
+        resource_id=parsed.key[:128],
+        meta={
+            "sha256": digest,
+            "bytes": size,
+            "worker_id": worker_id,
+            "job_id": (parse_job_id_from_key(parsed.key) if key else None),
+        },
+    )
     return {"uri": uri, "key": parsed.key, "sha256": digest, "bytes": size}
 
 
+def parse_job_id_from_key(key: str) -> str | None:
+    from app.core.distributed.transfer import parse_job_output_key
+
+    parsed = parse_job_output_key(key)
+    return parsed[0] if parsed else None
+
+
 @router.get("/artifacts/blob/{key:path}", summary="Download an artifact blob")
-def get_artifact_blob(key: str):
-    """Serve a blob; ``sha256/`` keys are verified before serving (409 on mismatch)."""
-    from app.core.distributed.transfer import sha256_from_key, blob_root
+def get_artifact_blob(
+    request: Request,
+    key: str,
+    exp: Optional[str] = Query(None),
+    sig: Optional[str] = Query(None),
+    worker_id: Optional[str] = Query(None),
+):
+    """Serve plaintext blob bytes; ``sha256/`` keys verified after decrypt.
+
+    On-disk files may be GBE1 envelopes when ``GRAPHYN_BLOB_ENCRYPTION_KEY``
+    is set; callers always receive plaintext. Authz (when auth configured):
+    operator bearer, OR worker holding the job-scoped claim, OR a valid HMAC
+    signed URL (``exp`` + ``sig``).
+    """
+    from fastapi.responses import Response
+
+    from app.core.artifacts.artifact_uri import LOCAL_STORE_ID, build_artifact_uri
+    from app.core.distributed.blob_crypto import BlobCryptoError
+    from app.core.distributed.transfer import (
+        BlobIntegrityError,
+        get_blob,
+        sha256_from_key,
+    )
 
     key = (key or "").lstrip("/")
     if not key or not _BLOB_KEY_RE.match(key) or ".." in key.split("/"):
         raise HTTPException(status_code=400, detail="Invalid blob key")
-    path = blob_root() / key
-    if not path.is_file():
+    _authorize_blob_get(request, key, exp=exp, sig=sig, worker_id=worker_id)
+    uri = build_artifact_uri(LOCAL_STORE_ID, key)
+    try:
+        data = get_blob(uri)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Blob not found")
+    except BlobIntegrityError as exc:
+        log.error("get_artifact_blob: corrupt blob %s: %s", key, exc)
+        raise HTTPException(status_code=409, detail="Blob content hash mismatch") from exc
+    except BlobCryptoError as exc:
+        raise HTTPException(status_code=500, detail=f"Blob decrypt failed: {exc}") from exc
+    wid = worker_id or request.headers.get("x-graphyn-worker-id")
+    if wid:
+        from app.core.distributed.quotas import record_usage
+
+        record_usage(str(wid), bytes_in=len(data))
     expected = sha256_from_key(key)
-    if expected:
-        hasher = hashlib.sha256()
-        with open(path, "rb") as fh:
-            for chunk in iter(lambda: fh.read(_BLOB_CHUNK_BYTES), b""):
-                hasher.update(chunk)
-        actual = hasher.hexdigest()
-        if not actual.startswith(expected):
-            log.error("get_artifact_blob: corrupt blob %s (sha256 %s)", key, actual)
-            raise HTTPException(status_code=409, detail="Blob content hash mismatch")
-    return FileResponse(path, filename=path.name)
+    _audit(
+        "blob.get",
+        resource_type="blob",
+        resource_id=key[:128],
+        meta={
+            "sha256": expected,
+            "bytes": len(data),
+            "worker_id": wid,
+            "job_id": parse_job_id_from_key(key),
+            "signed": bool(sig),
+        },
+    )
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={"Content-Length": str(len(data))},
+    )
+
+
+@router.post("/artifacts/blob/sign", summary="Mint a short-lived signed blob URL")
+def sign_artifact_blob(
+    request: Request,
+    key: str = Query(..., description="Blob key to sign"),
+    ttl_s: Optional[int] = Query(None),
+):
+    """Operator helper: mint ``exp``+``sig`` for GET (or return relative URL)."""
+    _require_operator(request)
+    from app.core.distributed.transfer import mint_signed_blob_url
+
+    k = (key or "").lstrip("/")
+    if not k or not _BLOB_KEY_RE.match(k) or ".." in k.split("/"):
+        raise HTTPException(status_code=400, detail="Invalid blob key")
+    try:
+        url = mint_signed_blob_url(k, method="GET", ttl_s=ttl_s)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"key": k, "signed_path": url}

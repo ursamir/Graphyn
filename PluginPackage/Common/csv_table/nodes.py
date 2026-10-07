@@ -58,6 +58,30 @@ def _rows_of(value: Any) -> list[dict]:
     return rows
 
 
+
+def _csv_result_with_refs(*, path: str, operation: str, rows: list, row_count: int, metadata: dict | None = None) -> CsvTableResult:
+    refs = []
+    if path and Path(path).is_file():
+        refs.append(
+            ArtifactRef(
+                role="other",
+                kind="file",
+                filename=Path(path).name,
+                relative_path=Path(path).name,
+                source_path=str(path),
+                media_type="text/csv",
+            )
+        )
+    return CsvTableResult(
+        path=path,
+        operation=operation,
+        rows=rows,
+        row_count=row_count,
+        metadata=dict(metadata or {}),
+        refs=refs,
+    )
+
+
 class CsvTableNode(Node):
     node_type: ClassVar[str] = "csv_table"
     metadata: ClassVar[NodeMetadata] = NodeMetadata(
@@ -114,7 +138,7 @@ class CsvTableNode(Node):
                 for row in rows:
                     writer.writerow({k: row.get(k, "") for k in fieldnames})
             self.publish_files(path.parent, [{"path": path.name, "size": path.stat().st_size}])
-            return {"output": CsvTableResult(
+            return {"output": _csv_result_with_refs(
                 path=str(path),
                 operation="write",
                 rows=rows,
@@ -126,7 +150,7 @@ class CsvTableNode(Node):
         with path.open("r", encoding=encoding, newline="") as fh:
             reader = csv.DictReader(fh)
             rows = [dict(r) for r in reader]
-        return {"output": CsvTableResult(
+        return {"output": _csv_result_with_refs(
             path=str(path),
             operation="read",
             rows=rows,

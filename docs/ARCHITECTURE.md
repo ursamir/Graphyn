@@ -136,6 +136,7 @@ A package's public names are the ones without a leading underscore, exported fro
 │                               domain-side ArtifactTypeHandler impl  │
 │  app/models/feature_array.py      FeatureArray (PortDataType)       │
 │  app/models/tensor_batch.py       TensorBatch (PortDataType)        │
+│  app/models/artifact_ref.py       ArtifactRef (content-addressed)  │
 │  app/models/model_artifact.py     ModelArtifact (PortDataType)      │
 │  app/models/tflite_artifact.py    TFLiteArtifact (PortDataType)     │
 │  app/models/prediction_result.py  PredictionResult (PortDataType)   │
@@ -279,6 +280,9 @@ User Input (IR JSON / SDK nodes)
 ---
 
 ## 4. Data Flow: Artifact Lifecycle
+
+Mode B distributed transfer uses **ArtifactRef** manifests (role + sha256 + `artifact://` URI) so file bytes cross hosts without shared volumes; see `docs/DISTRIBUTED_EXECUTION.md` §3.2.
+
 
 ```
 Node produces output

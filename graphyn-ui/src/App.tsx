@@ -564,7 +564,7 @@ export default function App() {
         // isRunning/lastRunId deps below never change again to re-trigger it).
         const status = (first?.status || '').toLowerCase()
         if (!cancelled && NON_TERMINAL.has(status)) {
-          timer = window.setTimeout(fetchLatest, 4000)
+          timer = window.setTimeout(fetchLatest, 12000)
         }
       } catch {
         if (!cancelled) setProjectLatest(null)

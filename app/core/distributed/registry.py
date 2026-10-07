@@ -152,20 +152,106 @@ class WorkerRegistry:
         return result
 
     def register(self, info: WorkerInfo) -> WorkerInfo:
-        """Register or refresh a worker. Updates ``heartbeat_at`` to now."""
-        with self._lock:
-            if self._store is not None:
-                updated = info.model_copy(update={"heartbeat_at": _utcnow()})
+        """Register or refresh a worker. Updates ``heartbeat_at`` to now.
 
+        Control-side ACL fields (``allowed_plugins``, ``plugin_hashes``,
+        ``trusted``) are preserved from an existing record when the incoming
+        payload leaves them unset / default — so a worker re-register cannot
+        clear an admin pin. Explicit non-default values in the payload win
+        (admin register / PATCH path).
+        """
+        with self._lock:
+            def _merge(existing: WorkerInfo | None, incoming: WorkerInfo) -> WorkerInfo:
+                updates: dict[str, Any] = {"heartbeat_at": _utcnow()}
+                if existing is not None:
+                    # Preserve admin ACL when worker omits them (None / default trusted).
+                    if incoming.allowed_plugins is None and existing.allowed_plugins is not None:
+                        updates["allowed_plugins"] = existing.allowed_plugins
+                    if incoming.plugin_hashes is None and existing.plugin_hashes is not None:
+                        updates["plugin_hashes"] = existing.plugin_hashes
+                    # trusted default True — only preserve False when incoming is still True
+                    # and existing was explicitly False (worker cannot self-trust).
+                    if incoming.trusted is True and existing.trusted is False:
+                        updates["trusted"] = False
+                    # Preserve admin quota + usage counters across worker re-register.
+                    if incoming.max_claimed is None and existing.max_claimed is not None:
+                        updates["max_claimed"] = existing.max_claimed
+                    for usage_f in (
+                        "usage_claims",
+                        "usage_completes",
+                        "usage_bytes_in",
+                        "usage_bytes_out",
+                    ):
+                        inc_v = getattr(incoming, usage_f, 0) or 0
+                        prev_v = getattr(existing, usage_f, 0) or 0
+                        if inc_v == 0 and prev_v:
+                            updates[usage_f] = prev_v
+                return incoming.model_copy(update=updates)
+
+            if self._store is not None:
                 def mut(workers: dict[str, Any]):
                     workers = dict(workers or {})
+                    prev = None
+                    raw = workers.get(info.worker_id)
+                    if raw is not None:
+                        try:
+                            prev = WorkerInfo.model_validate(raw)
+                        except Exception:
+                            prev = None
+                    updated = _merge(prev, info)
                     workers[updated.worker_id] = updated.model_dump(mode="json")
                     return workers, updated
 
                 return self._durable_mutate_workers(mut)
 
-            updated = info.model_copy(update={"heartbeat_at": _utcnow()})
+            prev = self._workers.get(info.worker_id)
+            updated = _merge(prev, info)
             self._workers[updated.worker_id] = updated
+            return updated
+
+    def patch(self, worker_id: str, **fields: Any) -> WorkerInfo:
+        """Update durable control fields on a registered worker.
+
+        Allowed keys: ``allowed_plugins``, ``plugin_hashes``, ``trusted``,
+        ``labels``, ``pools``, ``node_types``. Raises ``KeyError`` if missing,
+        ``ValueError`` for unknown keys.
+        """
+        allowed = {
+            "allowed_plugins",
+            "plugin_hashes",
+            "trusted",
+            "labels",
+            "pools",
+            "node_types",
+            "content_hashes",
+            "max_claimed",
+            "usage_claims",
+            "usage_completes",
+            "usage_bytes_in",
+            "usage_bytes_out",
+        }
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f"unsupported patch fields: {sorted(unknown)}")
+        with self._lock:
+            if self._store is not None:
+                def mut(workers: dict[str, Any]):
+                    workers = dict(workers or {})
+                    payload = workers.get(worker_id)
+                    if payload is None:
+                        raise KeyError(worker_id)
+                    existing = WorkerInfo.model_validate(payload)
+                    updated = existing.model_copy(update=fields)
+                    workers[worker_id] = updated.model_dump(mode="json")
+                    return workers, updated
+
+                return self._durable_mutate_workers(mut)
+
+            existing = self._workers.get(worker_id)
+            if existing is None:
+                raise KeyError(worker_id)
+            updated = existing.model_copy(update=fields)
+            self._workers[worker_id] = updated
             return updated
 
     def heartbeat(
@@ -288,6 +374,34 @@ class WorkerRegistry:
                 self._durable_mutate_workers(mut)
                 return
             self._workers.clear()
+
+
+
+def known_remote_node_types(*, include_stale: bool = False) -> set[str]:
+    """Union of worker-advertised plugin / node_type names (control catalog).
+
+    Used by validation when ``GRAPHYN_BACKEND=distributed`` so remote-only
+    types advertised by workers can pass VAL-UNK-TYPE without being installed
+    on the control plane. Returns type *names only* — never code.
+    """
+    names: set[str] = set()
+    try:
+        reg = get_worker_registry()
+        workers = reg.list(include_stale=include_stale)
+    except Exception as exc:
+        log.warning("known_remote_node_types: registry unavailable: %s", exc)
+        return names
+    for w in workers:
+        for p in list(getattr(w, "plugins", None) or []):
+            s = str(p or "").strip()
+            if s:
+                names.add(s)
+        for p in list(getattr(w, "node_types", None) or []):
+            s = str(p or "").strip()
+            if s:
+                names.add(s)
+    return names
+
 
 
 _REGISTRY: WorkerRegistry | None = None

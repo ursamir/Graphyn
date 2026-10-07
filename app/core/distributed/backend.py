@@ -175,17 +175,95 @@ def _cache_load(
     return key, rescope_cached_outputs(cache.load(key), run_id)
 
 
-def _wait_remote_result(queue: Any, run: Any, job_id: str, *, timeout_s: float) -> Any:
+def _flush_run_logs(run: Any, logger: Any) -> None:
+    """Persist PipelineLogger events so GET /runs/{id} shows live Mode B progress."""
+    if logger is None or not hasattr(logger, "logs"):
+        return
+    try:
+        run.save_logs(logger.logs)
+    except Exception:
+        log.debug("DistributedBackend: save_logs failed", exc_info=True)
+
+
+def _forward_job_events(
+    queue: Any,
+    job_id: str,
+    *,
+    logger: Any,
+    run: Any,
+    node_id: str,
+    seen: set[int],
+) -> None:
+    """Copy worker job events into the run journal / NDJSON stream (best-effort)."""
+    if logger is None:
+        return
+    list_fn = getattr(queue, "list_events", None)
+    if not callable(list_fn):
+        return
+    try:
+        events = list_fn(job_id) or []
+    except Exception:
+        return
+    for idx, ev in enumerate(events):
+        if idx in seen or not isinstance(ev, dict):
+            continue
+        seen.add(idx)
+        et = str(ev.get("type") or ev.get("event") or "")
+        if et in ("outputs",):
+            continue
+        if et == "node_progress" and hasattr(logger, "node_progress"):
+            payload = dict(ev)
+            payload.setdefault("node_id", node_id)
+            try:
+                logger.node_progress(payload)
+            except Exception:
+                pass
+        else:
+            msg = ev.get("message") or ev.get("error") or et or "worker event"
+            try:
+                logger.info(f"[worker/{node_id}] {msg}")
+            except Exception:
+                pass
+    _flush_run_logs(run, logger)
+
+
+def _wait_remote_result(
+    queue: Any,
+    run: Any,
+    job_id: str,
+    *,
+    timeout_s: float,
+    logger: Any = None,
+    node_id: str | None = None,
+) -> Any:
     """Wait for a remote job, propagating run pause as a claim hold.
 
     In-flight ``process()`` on a worker is not frozen (same cooperative limit
     as in-process cancel). New claims for this run are held until resume.
     Cancel still aborts the job.
+
+    When ``logger`` is given, worker job events and a periodic waiting note are
+    flushed into the run journal so the Editor Execution log is not blank while
+    Mode B remote nodes execute.
     """
     import time as _time
 
     deadline = _time.monotonic() + float(timeout_s)
     noted = False
+    seen_events: set[int] = set()
+    # Emit the first "Waiting for worker…" immediately so Editor hydrate / NDJSON
+    # is never blank while Mode B remote nodes sit in claim/execute.
+    last_note = -1e9
+    # Back off the result poll: a tight 0.5s loop + worker GET /jobs spam fought
+    # for uvicorn capacity and made the Execution log look stuck.
+    import os as _os
+
+    try:
+        wait_slice = float(_os.environ.get("GRAPHYN_JOB_WAIT_POLL_S", "4.0") or "4.0")
+    except ValueError:
+        wait_slice = 4.0
+    wait_slice = max(0.25, min(wait_slice, 5.0))
+    wait_slice_cap = max(wait_slice, min(5.0, wait_slice * 5.0))
     while True:
         if getattr(run, "is_cancelled", False):
             try:
@@ -207,18 +285,44 @@ def _wait_remote_result(queue: Any, run: Any, job_id: str, *, timeout_s: float) 
             run.wait_if_paused()
             if not getattr(run, "is_paused", False):
                 queue.set_run_paused(run.run_id, False)
+        if logger is not None and node_id:
+            _forward_job_events(
+                queue, job_id, logger=logger, run=run, node_id=node_id, seen=seen_events
+            )
+            now = _time.monotonic()
+            if now - last_note >= 5.0:
+                last_note = now
+                try:
+                    logger.info(
+                        f"Waiting for worker on node {node_id} (job={job_id[:8]}…)"
+                    )
+                    _flush_run_logs(run, logger)
+                except Exception:
+                    pass
         remaining = deadline - _time.monotonic()
         if remaining <= 0:
             result = queue.wait_for_result(job_id, timeout_s=0)
             if result is not None:
                 _ack(queue, job_id)
             return result
-        result = queue.wait_for_result(job_id, timeout_s=min(0.5, remaining))
+        slice_s = min(wait_slice, remaining)
+        try:
+            result = queue.wait_for_result(
+                job_id, timeout_s=slice_s, poll_interval_s=slice_s
+            )
+        except TypeError:
+            # Test doubles / older queue stubs may not take poll_interval_s.
+            result = queue.wait_for_result(job_id, timeout_s=slice_s)
         if result is not None:
             if not getattr(run, "is_paused", False):
                 queue.set_run_paused(run.run_id, False)
+            if logger is not None and node_id:
+                _forward_job_events(
+                    queue, job_id, logger=logger, run=run, node_id=node_id, seen=seen_events
+                )
             _ack(queue, job_id)
             return result
+        wait_slice = min(wait_slice_cap, wait_slice * 1.5)
 
 
 def _ack(queue: Any, job_id: str) -> None:
@@ -518,8 +622,19 @@ class DistributedBackend(RuntimeBackend):
                     getattr(node, "placement", None), capability=cap
                 ):
                     raise RuntimeError(
-                        f"No eligible worker for node {node.id!r} "
-                        f"(type={node.node_type!r}, placement={node.placement!r})"
+                        (
+                            f"No eligible worker for node {node.id!r} "
+                            f"(type={node.node_type!r}, placement={node.placement!r})"
+                        )
+                        + (
+                            " Hint: placement.mode=worker requires a non-empty "
+                            "worker id — set worker to a registered id (Deploy → "
+                            "Workers) or switch to mode=auto/pool with tags/pool."
+                            if node.placement is not None
+                            and node.placement.mode == "worker"
+                            and not node.placement.worker
+                            else ""
+                        )
                     )
 
         if needs_remote:
@@ -619,6 +734,13 @@ class DistributedBackend(RuntimeBackend):
             run_manager = RunManager()
         run = run_manager
 
+        # Editor / Observe read logs.json; Mode B must always journal even when
+        # the caller (e.g. /run-async) did not pass a PipelineLogger for NDJSON.
+        if logger is None:
+            from app.core.logger import PipelineLogger
+
+            logger = PipelineLogger()
+
         # Logical vs materialized graph (same contract as the local orchestrator):
         # graph_hash, per-node seeds and cache keys come from the logical
         # (pre-run-scoping) graph; execution / jobs use the run-scoped configs.
@@ -675,6 +797,25 @@ class DistributedBackend(RuntimeBackend):
         # (no shared graph-wide deadline).
 
         execution_order = [nid for wave in waves for nid in wave]
+        node_index = {nid: i for i, nid in enumerate(execution_order)}
+        total_active = len([nid for nid in execution_order if nid in active_nodes])
+
+        # Mode A parity: pending → running + lifecycle events for the Editor log.
+        try:
+            run.mark_running()
+        except Exception:
+            log.debug("mark_running failed for %s", run.run_id, exc_info=True)
+        if logger is not None:
+            try:
+                logger.pipeline_start(
+                    total_nodes=total_active,
+                    partial=active_nodes != all_node_ids,
+                    included_nodes=sorted(active_nodes) if active_nodes != all_node_ids else None,
+                    run_id=run_id,
+                )
+            except Exception:
+                log.debug("pipeline_start emit failed", exc_info=True)
+            _flush_run_logs(run, logger)
 
         enqueued_job_ids: list[str] = []
         run_job_ids: list[str] = []
@@ -695,6 +836,15 @@ class DistributedBackend(RuntimeBackend):
                 if run.is_cancelled:
                     terminal_status = "cancelled"
                     run.mark_cancelled()
+                    if logger is not None:
+                        try:
+                            done = len(node_stats)
+                            logger.pipeline_cancelled(
+                                run.run_id, done, max(total_active - done, 0)
+                            )
+                        except Exception:
+                            pass
+                        _flush_run_logs(run, logger)
                     break
                 log.info("DistributedBackend wave %s: %s", wave_idx, wave)
                 for node_id in wave:
@@ -717,6 +867,15 @@ class DistributedBackend(RuntimeBackend):
 
                     if target in (None, "local"):
                         _node_start = _time.time()
+                        idx = node_index.get(node_id, 0)
+                        if logger is not None:
+                            try:
+                                logger.node_start(
+                                    ir_node.node_type, idx, total_active, node_id=node_id
+                                )
+                            except Exception:
+                                pass
+                            _flush_run_logs(run, logger)
                         cfg = dict(ir_node.config) if ir_node.config else {}
                         node_seed = node_seeds[node_id]
                         cache_key, cached = _cache_load(
@@ -728,28 +887,55 @@ class DistributedBackend(RuntimeBackend):
                             run_id=run_id,
                             ir_node=ir_node,
                         )
-                        if cached is not None:
-                            outputs = cached
-                        else:
-                            outputs, failure_policy = _run_local_node(
-                                node_id=node_id,
-                                node_type=ir_node.node_type,
-                                config=cfg,
-                                seed=node_seed,
-                                inputs=inputs,
-                                run_id=run_id,
-                                ir_node=ir_node,
-                            )
-                            if use_cache and not failure_policy:
-                                _cache_save(cache_key, ir_node.node_type, outputs or {})
+                        try:
+                            if cached is not None:
+                                outputs = cached
+                            else:
+                                outputs, failure_policy = _run_local_node(
+                                    node_id=node_id,
+                                    node_type=ir_node.node_type,
+                                    config=cfg,
+                                    seed=node_seed,
+                                    inputs=inputs,
+                                    run_id=run_id,
+                                    ir_node=ir_node,
+                                )
+                                if use_cache and not failure_policy:
+                                    _cache_save(cache_key, ir_node.node_type, outputs or {})
+                        except Exception as exc:
+                            if logger is not None:
+                                try:
+                                    logger.node_error(
+                                        ir_node.node_type, idx, exc, node_id=node_id
+                                    )
+                                except Exception:
+                                    pass
+                                _flush_run_logs(run, logger)
+                            raise
                         node_outputs[node_id] = outputs or {}
                         node_workers[node_id] = "local"
+                        dur = round(_time.time() - _node_start, 4)
                         node_stats.append({
                             "node_id": node_id,
                             "node_type": ir_node.node_type,
-                            "duration_s": round(_time.time() - _node_start, 4),
+                            "duration_s": dur,
                         })
                         run._write_meta_field("node_stats", node_stats)
+                        if logger is not None:
+                            try:
+                                from app.core.logger import port_item_counts
+
+                                logger.node_end(
+                                    ir_node.node_type,
+                                    idx,
+                                    dur,
+                                    node_id=node_id,
+                                    output_counts=port_item_counts(outputs or {}),
+                                    extra={"worker_id": "local"},
+                                )
+                            except Exception:
+                                pass
+                            _flush_run_logs(run, logger)
                         continue
 
                     node_seed = node_seeds[node_id]
@@ -763,6 +949,25 @@ class DistributedBackend(RuntimeBackend):
                         ir_node=ir_node,
                     )
                     if cached is not None:
+                        idx = node_index.get(node_id, 0)
+                        if logger is not None:
+                            try:
+                                logger.node_start(
+                                    ir_node.node_type, idx, total_active, node_id=node_id
+                                )
+                                from app.core.logger import port_item_counts
+
+                                logger.node_end(
+                                    ir_node.node_type,
+                                    idx,
+                                    0.0,
+                                    node_id=node_id,
+                                    output_counts=port_item_counts(cached or {}),
+                                    extra={"worker_id": "cache", "cache_hit": True},
+                                )
+                            except Exception:
+                                pass
+                            _flush_run_logs(run, logger)
                         node_outputs[node_id] = cached
                         node_workers[node_id] = "cache"
                         node_stats.append({
@@ -818,12 +1023,17 @@ class DistributedBackend(RuntimeBackend):
                     default_timeout = float(
                         os.environ.get("GRAPHYN_DISTRIBUTED_JOB_TIMEOUT", "120") or "120"
                     )
+                    from app.core.distributed.security import assert_remote_config_safe
+
+                    safe_cfg = assert_remote_config_safe(
+                        dict(ir_node.config) if ir_node.config else {}
+                    )
                     job = NodeJob(
                         job_id=str(uuid.uuid4()),
                         run_id=run_id,
                         node_id=node_id,
                         node_type=ir_node.node_type,
-                        config=dict(ir_node.config) if ir_node.config else {},
+                        config=safe_cfg,
                         seed=node_seed,
                         input_refs=input_refs,
                         placement=job_placement,
@@ -834,6 +1044,19 @@ class DistributedBackend(RuntimeBackend):
                         timeout_s=default_timeout,
                     )
                     _remote_start = _time.time()
+                    idx = node_index.get(node_id, 0)
+                    if logger is not None:
+                        try:
+                            logger.node_start(
+                                ir_node.node_type, idx, total_active, node_id=node_id
+                            )
+                            logger.info(
+                                f"Enqueued {node_id} → worker target={target!r} "
+                                f"(job={job.job_id[:8]}…)"
+                            )
+                        except Exception:
+                            pass
+                        _flush_run_logs(run, logger)
                     stored = queue.enqueue(job)
                     enqueued_job_ids.append(stored.job_id)
                     run_job_ids.append(stored.job_id)
@@ -851,19 +1074,35 @@ class DistributedBackend(RuntimeBackend):
                     job_timeout = float(
                         stored.timeout_s if stored.timeout_s is not None else default_timeout
                     )
-                    result = _wait_remote_result(
-                        queue, run, stored.job_id, timeout_s=job_timeout
-                    )
-                    if result is None:
-                        raise TimeoutError(
-                            f"Timed out waiting for distributed job {stored.job_id} "
-                            f"(node={node_id})"
+                    try:
+                        result = _wait_remote_result(
+                            queue,
+                            run,
+                            stored.job_id,
+                            timeout_s=job_timeout,
+                            logger=logger,
+                            node_id=node_id,
                         )
-                    if result.status != "succeeded":
-                        raise RuntimeError(
-                            f"Distributed job {stored.job_id} (node={node_id}) "
-                            f"ended with status={result.status}: {result.error}"
-                        )
+                        if result is None:
+                            raise TimeoutError(
+                                f"Timed out waiting for distributed job {stored.job_id} "
+                                f"(node={node_id})"
+                            )
+                        if result.status != "succeeded":
+                            raise RuntimeError(
+                                f"Distributed job {stored.job_id} (node={node_id}) "
+                                f"ended with status={result.status}: {result.error}"
+                            )
+                    except Exception as exc:
+                        if logger is not None:
+                            try:
+                                logger.node_error(
+                                    ir_node.node_type, idx, exc, node_id=node_id
+                                )
+                            except Exception:
+                                pass
+                            _flush_run_logs(run, logger)
+                        raise
                     try:
                         enqueued_job_ids.remove(stored.job_id)
                     except ValueError:
@@ -897,26 +1136,39 @@ class DistributedBackend(RuntimeBackend):
 
                     run._write_meta_field("distributed_node_workers", dict(node_workers))
 
+                    dur = round(_time.time() - _remote_start, 4)
                     if logger is not None:
                         try:
-                            logger.info(
-                                "distributed_node_done",
+                            from app.core.logger import port_item_counts
+
+                            logger.node_end(
+                                ir_node.node_type,
+                                idx,
+                                dur,
                                 node_id=node_id,
-                                worker_id=node_workers[node_id],
+                                output_counts=port_item_counts(outputs or {}),
+                                extra={"worker_id": node_workers[node_id]},
                             )
                         except Exception:
                             pass
+                        _flush_run_logs(run, logger)
 
                     node_stats.append({
                         "node_id": node_id,
                         "node_type": ir_node.node_type,
-                        "duration_s": round(_time.time() - _remote_start, 4),
+                        "duration_s": dur,
                     })
                     run._write_meta_field("node_stats", node_stats)
 
         except Exception as exc:
             _cancel_enqueued_jobs()
             terminal_status = "failed"
+            if logger is not None:
+                try:
+                    logger.pipeline_error(str(exc) or type(exc).__name__)
+                except Exception:
+                    pass
+                _flush_run_logs(run, logger)
             run.mark_failed(str(exc), node_stats=node_stats)
             raise
         finally:
@@ -934,21 +1186,22 @@ class DistributedBackend(RuntimeBackend):
         except Exception:
             pass
 
-        if logger is not None and hasattr(logger, "logs"):
-            try:
-                run.save_logs(logger.logs)
-            except Exception:
-                pass
-
         if terminal_status is None:
+            if logger is not None:
+                try:
+                    logger.summary()
+                    logger.pipeline_done(run.run_id, _time.time() - start_time)
+                except Exception:
+                    pass
+            _flush_run_logs(run, logger)
             run.save_metadata({
                 "num_nodes": len(active_nodes),
                 "node_stats": node_stats,
                 "duration_s": round(_time.time() - start_time, 4),
                 "distributed": True,
             })
-        elif terminal_status == "cancelled":
-            pass  # mark_cancelled() already written in the wave loop
+        else:
+            _flush_run_logs(run, logger)
 
         if not execution_order:
             return {}
@@ -1012,6 +1265,7 @@ def run_loopback_worker_once(
         return True
 
     queue.mark_running(job.job_id)
+    _pause_sleep = 4.0
     while queue.is_run_paused(job.run_id):
         if queue.is_cancelled(job.job_id):
             return True
@@ -1019,7 +1273,8 @@ def run_loopback_worker_once(
             queue.renew_lease(job.job_id, worker_id=worker_id)
         except Exception:
             pass
-        time.sleep(0.25)
+        time.sleep(_pause_sleep)
+        _pause_sleep = min(10.0, _pause_sleep * 1.5)
     started = time.monotonic()
     error = None
     outputs: dict[str, Any] = {}

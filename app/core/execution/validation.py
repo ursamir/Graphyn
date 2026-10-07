@@ -455,6 +455,23 @@ def validate_graph_ir_result(graph: Any, registry: Any) -> dict:
             node_class = registry.get_class(node.node_type)
             node_classes[node.id] = node_class
         except Exception:
+            # Mode B: accept types advertised by registered workers when the
+            # control plane runs distributed (remote-only catalog). Mode A
+            # (local_python) is unchanged.
+            remote_ok = False
+            try:
+                import os as _os
+
+                backend = (_os.environ.get("GRAPHYN_BACKEND") or "local_python").strip()
+                if backend == "distributed":
+                    from app.core.distributed.registry import known_remote_node_types
+
+                    if str(node.node_type) in known_remote_node_types():
+                        remote_ok = True
+            except Exception:
+                remote_ok = False
+            if remote_ok:
+                continue
             try:
                 available = sorted(m.node_type for m in registry.list_nodes())
             except Exception:
@@ -486,6 +503,38 @@ def validate_graph_ir_result(graph: Any, registry: Any) -> dict:
                         f"[{node.id}] Config error at '{loc}': {e['msg']}",
                         node_ids=[node.id],
                         field=loc or None,
+                    )
+                )
+
+        # VAL-PLACE: mode=worker requires worker id; mode=pool requires pool name.
+        # UI historically allowed Mode=worker with an empty Worker field, which
+        # resolve_worker() fail-closes as "No eligible worker". Catch at validate.
+        placement = getattr(node, "placement", None)
+        if placement is not None:
+            pmode = str(getattr(placement, "mode", None) or "auto")
+            pworker = getattr(placement, "worker", None)
+            ppool = getattr(placement, "pool", None)
+            if pmode == "worker" and not (isinstance(pworker, str) and pworker.strip()):
+                errors.append(
+                    _finding(
+                        "VAL-PLACE",
+                        "error",
+                        f"[{node.id}] placement.mode=worker requires a non-empty "
+                        f"worker id (got worker={pworker!r}). Pick a worker, or use "
+                        f"mode=auto/pool with tags/pool instead.",
+                        node_ids=[node.id],
+                        field="placement.worker",
+                    )
+                )
+            if pmode == "pool" and not (isinstance(ppool, str) and ppool.strip()):
+                errors.append(
+                    _finding(
+                        "VAL-PLACE",
+                        "error",
+                        f"[{node.id}] placement.mode=pool requires a non-empty "
+                        f"pool name (got pool={ppool!r}).",
+                        node_ids=[node.id],
+                        field="placement.pool",
                     )
                 )
 

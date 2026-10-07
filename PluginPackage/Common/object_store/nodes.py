@@ -12,6 +12,7 @@ from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
+from app.models.artifact_ref import ArtifactRef
 
 try:
     _pkg = __name__.rsplit(".", 1)[0] if "." in __name__ else __name__
@@ -103,6 +104,27 @@ def _paths_from(value: Any) -> list[Path]:
                     out.append(p)
         return out
     return []
+
+
+
+def _object_ref_with_refs(*, key: str, uri: str, backend: str, size: int = 0, metadata: dict | None = None) -> "ObjectRef":
+    from .types import ObjectRef
+    refs = []
+    backend_l = (backend or "").lower()
+    if backend_l in {"", "local", "file"} and uri and not str(uri).startswith(("s3://", "artifact://", "http://", "https://")):
+        src = Path(uri)
+        if src.exists():
+            kind = "dir" if src.is_dir() else "file"
+            refs.append(
+                ArtifactRef(
+                    role="other",
+                    kind=kind,  # type: ignore[arg-type]
+                    filename=src.name or key or "object",
+                    relative_path=src.name or key or "object",
+                    source_path=str(src),
+                )
+            )
+    return ObjectRef(key=key, uri=uri, backend=backend, size=size, metadata=dict(metadata or {}), refs=refs)
 
 
 class ObjectStoreNode(Node):
@@ -207,7 +229,7 @@ class ObjectStoreNode(Node):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dest)
                 self._publish(dest.parent, [dest])
-            return ObjectRef(key=key, uri=str(dest), backend="local", size=src.stat().st_size)
+            return _object_ref_with_refs(key=key, uri=str(dest), backend="local", size=src.stat().st_size)
         if op != "put":
             raise RuntimeError(f"ObjectStoreNode: unknown operation {op!r}. Use get, put, or list.")
 
@@ -224,7 +246,7 @@ class ObjectStoreNode(Node):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(text, encoding="utf-8")
                 written.append(dest)
-                refs.append(ObjectRef(key=key, uri=str(dest), backend="local", size=dest.stat().st_size))
+                refs.append(_object_ref_with_refs(key=key, uri=str(dest), backend="local", size=dest.stat().st_size))
             self._publish(root, written)
             return refs
 
@@ -246,7 +268,7 @@ class ObjectStoreNode(Node):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(value, encoding="utf-8")
                 self._publish(root, [dest])
-                return ObjectRef(key=key_cfg, uri=str(dest), backend="local", size=dest.stat().st_size)
+                return _object_ref_with_refs(key=key_cfg, uri=str(dest), backend="local", size=dest.stat().st_size)
         if not files:
             return []
         prefix = (self.config.prefix or "").rstrip("/")
@@ -259,7 +281,7 @@ class ObjectStoreNode(Node):
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest)
             written.append(dest)
-            refs.append(ObjectRef(key=key, uri=str(dest), backend="local", size=dest.stat().st_size))
+            refs.append(_object_ref_with_refs(key=key, uri=str(dest), backend="local", size=dest.stat().st_size))
         self._publish(root, written)
         return refs[0] if len(refs) == 1 else refs
 
@@ -301,7 +323,7 @@ class ObjectStoreNode(Node):
             dest.parent.mkdir(parents=True, exist_ok=True)
             client.download_file(bucket, key, str(dest))
             self._publish(dest.parent, [dest])
-            return ObjectRef(key=key, uri=f"s3://{bucket}/{key}", backend="s3", size=dest.stat().st_size)
+            return _object_ref_with_refs(key=key, uri=f"s3://{bucket}/{key}", backend="s3", size=dest.stat().st_size)
         files = [_jail_input(p) for p in _paths_from(value)]
         if not files:
             raise RuntimeError("ObjectStoreNode: s3 put requires file input")
@@ -310,5 +332,5 @@ class ObjectStoreNode(Node):
         for src in files:
             key = f"{prefix}/{src.name}" if prefix else (self.config.key or src.name)
             client.upload_file(str(src), bucket, key)
-            refs.append(ObjectRef(key=key, uri=f"s3://{bucket}/{key}", backend="s3", size=src.stat().st_size))
+            refs.append(_object_ref_with_refs(key=key, uri=f"s3://{bucket}/{key}", backend="s3", size=src.stat().st_size))
         return refs[0] if len(refs) == 1 else refs

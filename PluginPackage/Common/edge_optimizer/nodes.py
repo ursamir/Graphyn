@@ -30,6 +30,7 @@ from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
+from app.models.artifact_ref import ArtifactRef
 from app.models.deployment_artifact import DeploymentArtifact
 from app.models.model_artifact import ModelArtifact
 
@@ -124,6 +125,79 @@ def _tflite_tensor_details(tf: Any, model_content: bytes) -> dict | None:
 def _first_shape(details: dict | None, key: str) -> list[int]:
     rows = (details or {}).get(key) or []
     return list(rows[0].get("shape") or []) if rows else []
+
+
+
+def _deployment_artifact_with_refs(
+    *,
+    artifact_path: str,
+    model_format: str,
+    target_hardware: str = "cpu",
+    quantization: str = "none",
+    labels: list | None = None,
+    input_shape: list | None = None,
+    output_shape: list | None = None,
+    file_size_bytes: int = 0,
+    benchmark=None,
+    metadata: dict | None = None,
+    labels_path: str = "",
+) -> DeploymentArtifact:
+    """Build DeploymentArtifact with an explicit ArtifactRef role manifest.
+
+    Roles: ``deployment_bundle`` (model file/dir) + ``labels`` when present.
+    Local path fields remain for same-host execution; Mode B packs refs only.
+    """
+    labels = list(labels or [])
+    metadata = dict(metadata or {})
+    refs: list[ArtifactRef] = []
+    ap = Path(artifact_path) if artifact_path else None
+    if ap is not None and ap.exists():
+        kind = "dir" if ap.is_dir() else "file"
+        media = None
+        if kind == "file" and ap.suffix.lower() == ".tflite":
+            media = "application/x-tflite"
+        elif kind == "file" and ap.suffix.lower() == ".onnx":
+            media = "application/onnx"
+        refs.append(
+            ArtifactRef(
+                role="deployment_bundle",
+                kind=kind,  # type: ignore[arg-type]
+                filename=ap.name or "bundle",
+                relative_path=ap.name or "bundle",
+                source_path=str(ap),
+                media_type=media,
+            )
+        )
+    lp = labels_path or str(metadata.get("labels_path") or "")
+    if not lp and ap is not None:
+        sibling = (ap if ap.is_dir() else ap.parent) / "labels.txt"
+        if sibling.is_file():
+            lp = str(sibling)
+    if lp and Path(lp).is_file():
+        metadata.setdefault("labels_path", lp)
+        refs.append(
+            ArtifactRef(
+                role="labels",
+                kind="file",
+                filename="labels.txt",
+                relative_path="labels.txt",
+                source_path=str(lp),
+                media_type="text/plain",
+            )
+        )
+    return DeploymentArtifact(
+        artifact_path=artifact_path,
+        model_format=model_format,
+        target_hardware=target_hardware,
+        quantization=quantization,
+        labels=labels,
+        input_shape=list(input_shape or []),
+        output_shape=list(output_shape or []),
+        file_size_bytes=file_size_bytes,
+        benchmark=benchmark,
+        metadata=metadata,
+        refs=refs,
+    )
 
 
 class EdgeOptimizerNode(Node):
@@ -230,6 +304,59 @@ class EdgeOptimizerNode(Node):
 
     # ── TFLite export ─────────────────────────────────────────────────────────
 
+
+    @staticmethod
+    def _resolve_role_path(artifact: ModelArtifact, role: str) -> str:
+        """Local path for *role* from hydrated refs / metrics (Mode B)."""
+        metrics = getattr(artifact, "metrics", None) or {}
+        if role == "keras_model":
+            val = str(metrics.get("keras_model_path") or "").strip()
+            if val and Path(val).exists():
+                return val
+            mp = str(getattr(artifact, "model_path", "") or "")
+            if mp:
+                p = Path(mp)
+                if p.is_file() and p.suffix.lower() == ".keras":
+                    return str(p)
+                for cand in (p.parent / "model.keras", p / "model.keras"):
+                    if cand.is_file():
+                        return str(cand)
+            for ref in getattr(artifact, "refs", None) or []:
+                if getattr(ref, "role", None) == "keras_model":
+                    sp = str(getattr(ref, "source_path", "") or "")
+                    if sp and Path(sp).exists():
+                        return sp
+            return ""
+        if role == "saved_model":
+            mp = str(getattr(artifact, "model_path", "") or "").strip()
+            if mp and Path(mp).is_dir():
+                return mp
+            val = str(metrics.get("saved_model_path") or "").strip()
+            if val and Path(val).exists():
+                return val
+            for ref in getattr(artifact, "refs", None) or []:
+                if getattr(ref, "role", None) == "saved_model":
+                    sp = str(getattr(ref, "source_path", "") or "")
+                    if sp and Path(sp).is_dir():
+                        return sp
+            return ""
+        if role == "pytorch_model":
+            mp = str(getattr(artifact, "model_path", "") or "").strip()
+            if mp and mp.lower().endswith((".pt", ".pth")) and Path(mp).exists():
+                return mp
+            for ref in getattr(artifact, "refs", None) or []:
+                if getattr(ref, "role", None) == "pytorch_model":
+                    sp = str(getattr(ref, "source_path", "") or "")
+                    if sp and Path(sp).is_file():
+                        return sp
+            return ""
+        for ref in getattr(artifact, "refs", None) or []:
+            if getattr(ref, "role", None) == role:
+                sp = str(getattr(ref, "source_path", "") or "")
+                if sp and Path(sp).exists():
+                    return sp
+        return ""
+
     @staticmethod
     def _int8_repr_path(artifact: ModelArtifact) -> Path:
         """Locate X_train_repr.npy next to a SavedModel dir or a .keras file."""
@@ -283,7 +410,7 @@ class EdgeOptimizerNode(Node):
             tensor_details = _tflite_tensor_details(tf, dest.read_bytes())
         except Exception:
             tensor_details = None
-        return DeploymentArtifact(
+        return _deployment_artifact_with_refs(
             artifact_path=str(dest),
             model_format="tflite",
             target_hardware="cpu",
@@ -301,6 +428,7 @@ class EdgeOptimizerNode(Node):
                 "labels_path": str(labels_path),
                 "display_name": _export_display_name(artifact, "tflite", quant),
             },
+            labels_path=str(labels_path),
         )
 
     def _export_tflite(self, artifact: ModelArtifact, out_path: Path) -> DeploymentArtifact:
@@ -410,7 +538,7 @@ class EdgeOptimizerNode(Node):
             "message": f"Saved model.tflite ({max(1, file_size // 1024)} KB, {effective_quant})",
         })
 
-        return DeploymentArtifact(
+        return _deployment_artifact_with_refs(
             artifact_path=tflite_path,
             model_format="tflite",
             target_hardware="cpu",
@@ -427,6 +555,7 @@ class EdgeOptimizerNode(Node):
                 "labels_path": str(labels_path),
                 "display_name": _export_display_name(artifact, "tflite", effective_quant),
             },
+            labels_path=str(labels_path),
         )
 
     # ── ONNX export ───────────────────────────────────────────────────────────
@@ -516,7 +645,7 @@ class EdgeOptimizerNode(Node):
             "message": f"Saved model.onnx ({max(1, file_size // 1024)} KB)",
         })
 
-        return DeploymentArtifact(
+        return _deployment_artifact_with_refs(
             artifact_path=onnx_path,
             model_format="onnx",
             target_hardware="cpu",
@@ -528,6 +657,7 @@ class EdgeOptimizerNode(Node):
                 "labels_path": str(labels_path),
                 "display_name": _export_display_name(artifact, "onnx", "float32"),
             },
+            labels_path=str(labels_path),
         )
 
     @staticmethod
@@ -628,17 +758,32 @@ class EdgeOptimizerNode(Node):
                 "implemented. Proceeding without pruning."
             )
 
-        resolved = self._resolve_model_path(getattr(artifact, "model_path", "") or "")
+        # Prefer hydrated ArtifactRef roles (Mode B) before legacy model_path.
+        role_path = self._resolve_role_path(artifact, "saved_model") or self._resolve_role_path(
+            artifact, "keras_model"
+        ) or self._resolve_role_path(artifact, "pytorch_model")
+        raw_mp = role_path or (getattr(artifact, "model_path", "") or "")
+        resolved = self._resolve_model_path(raw_mp)
         trainable = self._prefer_trainable_source(resolved)
         if not trainable.exists():
             raise FileNotFoundError(
                 f"EdgeOptimizerNode: model not found at '{artifact.model_path}'"
             )
+        updates: dict = {}
         if str(trainable) != (artifact.model_path or ""):
+            updates["model_path"] = str(trainable)
+        # Keep keras_model_path metrics in sync with hydrated layout for int8 repr lookup.
+        metrics = dict(getattr(artifact, "metrics", None) or {})
+        keras_role = self._resolve_role_path(artifact, "keras_model")
+        if keras_role and metrics.get("keras_model_path") != keras_role:
+            metrics["keras_model_path"] = keras_role
+            updates["metrics"] = metrics
+        if updates:
             try:
-                artifact = artifact.model_copy(update={"model_path": str(trainable)})
+                artifact = artifact.model_copy(update=updates)
             except Exception:
-                artifact.model_path = str(trainable)
+                for k, v in updates.items():
+                    setattr(artifact, k, v)
 
         out_path = Path(self.config.output_path)
         out_path.mkdir(parents=True, exist_ok=True)
@@ -692,7 +837,8 @@ class EdgeOptimizerNode(Node):
         labels = _artifact_labels(artifact)
         if labels:
             (dest / "labels.txt").write_text("\n".join(labels), encoding="utf-8")
-        return DeploymentArtifact(
+        labels_file = dest / "labels.txt"
+        return _deployment_artifact_with_refs(
             artifact_path=str(dest),
             model_format=backend,
             target_hardware="mcu" if backend in ("tflm", "executorch") else "cpu",
@@ -705,4 +851,5 @@ class EdgeOptimizerNode(Node):
                 "labels": list(labels),
                 "display_name": _export_display_name(artifact, backend, str(self.config.quantization)),
             },
+            labels_path=str(labels_file) if labels_file.is_file() else "",
         )
