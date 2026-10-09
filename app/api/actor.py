@@ -35,11 +35,13 @@ def resolve_identity(request: Any = None, explicit: str | None = None) -> dict[s
     """Identity for audit: ``{actor, actor_verified, token_mapped, claimed_actor}``."""
     token = None
     claimed = None
+    org_hdr = None
     if request is not None:
         token = bearer_from_header(_header(request, "authorization"))
         claimed = _header(request, "x-actor")
+        org_hdr = _header(request, "x-graphyn-org-id")
     exp = explicit.strip() if isinstance(explicit, str) and explicit.strip() else None
-    return identity_from_credentials(token, claimed, exp)
+    return identity_from_credentials(token, claimed, exp, header_org_id=org_hdr)
 
 
 def resolve_actor(request: Any = None, explicit: str | None = None) -> str:

@@ -7,92 +7,66 @@
 
 ## Design rules
 
-1. **Catalog JSON is authoritative** — do not hand-type hundreds of near-duplicates in markdown.
-2. **Materialize on demand** into Graph IR `schema_version` **1.1** (`metadata`, `nodes[{id,node_type,config}]`, `edges[{src_id,src_port,dst_id,dst_port}]`, `parameters`). **Out-of-box contract:** materialize always (a) seeds bundled example datasets into `workspace/datasets/input/*` using **relative** symlinks (absolute host paths break inside Docker), (b) rewrites ingest `config.path` onto those real seeds (speech-commands / wake-word / environmental-sounds / doc-rag-ingest / vision-demo / video-demo — never fictional `…/security-kws`), (c) remaps/sanitizes config keys against live node Config (`sample_rate`→`target_sample_rate`, drops extras), (d) sets a small default `dataset_ingest.limit` for smoke-safe Runs, (e) linear edge wiring prefers primary `output` over side-channels like `rejected` when types tie (quality-gate → next node), (f) sets `dataset_builder.fixed_length=100` and caps trainer/yolo/mcu `epochs` for smoke, (g) binds `http_request.url`→`https://httpbin.org/get`, `csv_table.path`→csv seed, `tool_router.tools`→`["echo"]`, stubs `mcp_tool_call` / ship packagers / yolo_train+val when demo seeds are not full detect corpora, and relaxes `eval_gate` empty-transcript checks for non-ASR chains.
-3. **Seed only ~20–40** representative `.graph.json` under `examples/templates/marketplace/` (not all templates).
-4. **Console Templates page** loads a slim index at `graphyn-ui/public/marketplace-catalog.json` for browse/filter/pagination; materialize still hits `POST /pipelines/marketplace/materialize`. Regenerate the slim file when the full catalog changes (same fields as the generator summary).
-5. **Deduplicate** by stable `id` (`tpl-<family>-…`). Reject rename-only variants.
-6. **Honesty**: MCU flash/OTA templates → `status: needs-api` + `honesty_banner` in metadata. Medical/EHR → generic triage/docs only; no clinical claims.
-7. Keep FaceRecognition / unrelated services untouched.
+1. **Catalog JSON is authoritative** and generated — never hand-edit it. Every entry comes from an explicit *base pipeline* in the generator (node chain, explicit `edges_hint`, working configs). Industry variants (`tpl-<base>-<industry>`) reuse the base graph unchanged and carry `metadata_extra.base_template`.
+2. **Only shipped packs are advertised**: Audio, Common, Agents, Video, WakeWord (plus `cross` composites of those). RAG, Vision, TinyML and MLOps are not shipped and have no templates.
+3. **The generator refuses to write an invalid catalog.** Every entry is materialized and validated against the registry built from the shipped `PluginPackage/` tree; one failure aborts the write (`--check` reports without writing).
+4. **Every base pipeline is run live** before release. Run ids live in `docs/PIPELINE_TEMPLATE_VERIFICATION.json` and are merged into each entry as `metadata_extra.verified_run`.
+5. **One seed graph per base pipeline** is written to `examples/templates/marketplace/tpl-<base>.graph.json` (stale seeds are deleted on regenerate).
+6. **Materialize on demand** into Graph IR `schema_version` 1.1 via `POST /pipelines/marketplace/materialize` (or `app/core/templates/pipeline_template_materializer.py`). The materializer binds ingest paths to bundled seed data under `workspace/datasets/input/*`, drops config keys the live node does not accept, caps smoke epochs, and uses `edges_hint` when present.
+7. **Console Templates page** loads a slim index at `graphyn-ui/public/marketplace-catalog.json`; regenerate it whenever the full catalog changes.
+8. Keep FaceRecognition / unrelated services untouched.
 
 ## Taxonomy
 
-### Packs (primary)
-
-| Pack | Template families |
+| Pack | Template families (base pipelines) |
 |---|---|
-| Audio | KWS, SED, enhancement, diarization, captions, call analytics, podcast, meeting CRM, compliance, edge |
-| WakeWord | data-gen → feature → train → export → infer → e2e × languages |
-| TinyML | KWS / IMU anomaly / tiny vision / audio event × MCU × PTQ/QAT × TFLM/ExecuTorch/CMSIS/Vela |
-| Vision | YOLO detect/seg/pose/obb/classify × industries × train/val/export/infer/track |
-| RAG | ingest / query / hybrid / HyDE / parent-doc / eval / agentic |
-| Video | scene-caption, action classify, AV-align ASR, safety monitor, video-RAG |
-| Agents | run-pipeline, ship-promote, schedule, webhook, HITL, tool-router, memory chat |
-| MLOps | train-eval-ship, canary, drift, feature-store, dataset-diff |
-| Common | HTTP/JSON, control-flow, doc bridge, multimodal embed, realtime |
-| Cross | composites across packs |
+| Audio | KWS train + TFLite edge, speaker ID, sound-event train/detect, YAMNet classify, rule annotate, quality gate export, speech enhancement, podcast leveling, room-simulation augment, TTS dataset, speaker separation, voice conversion, embeddings, stream monitor, sound generation, dataset balance + version |
+| WakeWord | data gen, features, train + export, train + INT8 + detect, detect |
+| Video | scene clips, zero-shot tagging, action recognition, frame captions (local VLM), transcribe + captions |
+| Agents | local LLM chat, guarded reply + memory, guardrail approval + memory, tool router + memory, structured extract + validate, tool router via MCP, agent loop, email alert |
+| Common | ASR captions, ASR PII redact, word alignment, doc chunk store, CSV transform, HTTP poll transform, branch/merge/error, train + track experiment, speaker embeddings, dataset report email |
+| Cross | call analytics, meeting notes + memory, TTS → ASR round trip, video + audio fusion |
 
-### Filters (marketplace / MCP)
-
-- `pack`, `packs_used[]`
-- `industry`
-- `modality[]` (audio, vision, video, text, imu)
-- `lifecycle[]`: `ingest` | `prep` | `train` | `eval` | `deploy` | `observe` | `agent`
-- `tags[]`, `family`, `status`
+Filters (marketplace / MCP `search_templates`): `pack`, `packs_used[]`, `industry`, `modality[]`, `lifecycle[]`, `tags[]`, `family`, `status`.
 
 ### Status values
 
 | status | Meaning |
 |---|---|
-| `proposed` | Design catalog entry |
-| `seeded` | Representative `.graph.json` written under examples |
-| `needs-api` | Blocked on missing platform API (e.g. MCU flash) |
-| `alter-existing` | Builds on Existing/Alter production nodes |
+| `ready` | Runs out of the box on the bundled seed data (verified live). |
+| `needs-credentials` | Validates; the run stops with a clear "configure credential X" / missing dependency error until the operator adds it (e.g. `tool-router-mcp` needs a `graphyn_mcp` credential). |
+| `needs-endpoint` | Validates; runs once the named local service is reachable (Ollama at the configured host, allowed by the HTTP egress policy). Until then the run fails with the egress/connection error. |
+| `needs-upstream` | Runs once the named upstream template has produced its artifact (e.g. `wakeword-detect` needs the model from `wakeword-train-export`). |
 
 ## Catalog entry shape
 
-Each template **must** include:
-
-- `id`, `name`, `description`
-- `pack`, `packs_used[]`, `industry`, `modality[]`, `lifecycle[]`, `tags[]`
-- `node_chain`: ordered `{node_type, role?, config_overrides?}`
-- `edges_hint` (optional; default linear `n{i}.output → n{i+1}.input`)
-- `parameters`
-- `mcp`: `{instantiate, required_tools, agent_brief}`
-- `status`, `value_prop`
-
-## How packs map to template families
-
-Packs ship nodes **and** a marketplace slice. Example: Vision pack → `tpl-vision-yolo-detect-train-retail-shelf`, export variants, track/hard-neg loops. TinyML pack → MCU×quant×export matrix + honest flash companions.
+`id`, `name`, `description`, `pack`, `packs_used[]`, `family`, `industry`, `modality[]`, `lifecycle[]`, `tags[]`,
+`node_chain` (`{node_type, role, config_overrides}`), `edges_hint`, `parameters`, `mcp`, `status`, `value_prop`,
+`metadata_extra` (`base_template`, `requires`, `verified_run`).
 
 ## MCP usage (agents)
 
-1. `search_templates` (pack/industry/tags/lifecycle) → pick `id`
-2. `materialize_template` / materializer → Graph IR
+1. `search_templates` (pack/industry/tags/lifecycle/status) → pick `id`
+2. `materialize_template` → Graph IR
 3. `validate_graph` → `save_pipeline` → `execute_pipeline`
 4. `inspect_run` / `list_artifacts` / `get_artifact_lineage`
-5. Ship path: `create_ship_package` → HITL → `promote_ship_package`
-6. Secrets only via `secrets_list` / `secrets_set` — never raw keys in graphs
+5. Secrets only via `secrets_list` / `secrets_set` — never raw keys in graphs
 
-See [`MCP_AGENT_PACK_COVERAGE.md`](./MCP_AGENT_PACK_COVERAGE.md) for journey map, gaps, and playbooks.
+See [`MCP_AGENT_PACK_COVERAGE.md`](./MCP_AGENT_PACK_COVERAGE.md) for the journey map.
 
 ## Regenerate
 
 ```bash
-python scripts/generate_pipeline_template_catalog.py
-python scripts/generate_pipeline_template_catalog.py --min 950 --seed-graphs 32
-python scripts/materialize_pipeline_template.py tpl-vision-yolo-detect-train-retail-shelf \
-  -o /tmp/retail.graph.json
-# Family-sample OOB execute smoke (live API :8001; needs GRAPHYN_API_TOKEN):
-venv/bin/python scripts/smoke_marketplace_templates.py
-# All 3032: materialize+validate only (no execute):
-venv/bin/python scripts/smoke_marketplace_templates.py --all --validate-only
-# Broader execute: N per family/pack:
-venv/bin/python scripts/smoke_marketplace_templates.py --per-family 5 --timeout 420
-# Offline full-catalog validate (no API):
+venv/bin/python scripts/generate_pipeline_template_catalog.py          # catalog + seed graphs (refuses invalid entries)
+venv/bin/python scripts/generate_pipeline_template_catalog.py --check  # validate only
+venv/bin/python scripts/generate_plugin_node_platform_catalog.py       # PLUGIN_NODE_PLATFORM_CATALOG.json from the shipped registry
+venv/bin/python scripts/materialize_pipeline_template.py tpl-audio-kws-train-smart-home -o /tmp/kws.graph.json
+# Offline full-catalog materialize + validate (no API):
 venv/bin/python scripts/validate_all_marketplace_templates.py
+# Live execute of one template per family (needs GRAPHYN_API_TOKEN):
+venv/bin/python scripts/smoke_marketplace_templates.py
 ```
 
 ## Coverage
 
-The generator asserts every catalog + refinement `node_type` appears in ≥1 template (or is explicitly deprecated in refinements). See `coverage` object in the JSON catalog.
+The catalog's `coverage` object lists shipped node types and the ones no template uses yet (trigger / utility nodes such as `webhook_trigger`, `http_webhook`, `credential_probe`, `set_map`, `realtime_inference`).

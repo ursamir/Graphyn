@@ -118,7 +118,7 @@ def test_resolve_llm_credentials_allowlisted_internal_name(cred_home, monkeypatc
 def test_http_request_auth_env_internal_refused(cred_home):
     cls = _load_plugin_class("Common/http_request", "http_request")
     node = cls(config={"url": "https://api.example.com/x", "auth_env": INTERNAL}, seed=0)
-    with patch("httpx.request") as req, patch("httpx.get") as get, patch("httpx.post") as post:
+    with patch("httpx.request") as req, patch("httpx.get") as get, patch("app.core.trust.egress.egress_post") as post:
         with pytest.raises(RuntimeError, match="empty"):
             node.process({"input": None})
     req.assert_not_called()
@@ -133,27 +133,6 @@ def test_http_request_auth_env_secret_shaped_ok(cred_home, monkeypatch):
     assert resolve_secret("SERVICE_TOKEN") == "tok"
 
 
-@pytest.mark.parametrize(
-    "rel,node_type",
-    [
-        ("RAG/rag_slack_connector", "rag_slack_connector"),
-        ("RAG/rag_notion_connector", "rag_notion_connector"),
-    ],
-)
-def test_rag_connectors_refuse_internal_env(cred_home, rel, node_type):
-    cls = _load_plugin_class(rel, node_type)
-    node = cls(config={"secret_name": INTERNAL}, seed=0)
-    with patch("httpx.get") as get, patch("httpx.post") as post:
-        with pytest.raises(RuntimeError, match="requires env/secret"):
-            node.process({})
-    get.assert_not_called()
-    post.assert_not_called()
-
-
-def test_vector_store_write_dsn_secret_internal_refused(cred_home, monkeypatch):
-    monkeypatch.delenv("PGVECTOR_DSN", raising=False)
-    cls = _load_plugin_class("RAG/vector_store_write", "vector_store_write")
-    node = cls(config={"pg_dsn_secret": INTERNAL}, seed=0)
-    assert node._resolve_pg_dsn() == ""
-    monkeypatch.setenv("PGVECTOR_DSN", "postgresql://x")
-    assert node._resolve_pg_dsn() == "postgresql://x"
+# F20: the RAG pack (rag_slack_connector, rag_notion_connector, vector_store_write)
+# stays out of the product (F8 3cc62d7: "RAG/Vision/TinyML/MLOps stay out"), so its
+# internal-secret refusal tests were removed with it.

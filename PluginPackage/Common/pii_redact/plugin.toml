@@ -1,0 +1,25 @@
+[plugin]
+name             = "pii-redact"
+version          = "1.1.0"
+description      = "Redact PII from transcripts with Presidio (spaCy NER) or regex; optionally silence the matching audio spans."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["pii", "privacy", "redaction", "common"]
+
+dependencies = [
+    "numpy>=1.24",
+    "presidio-analyzer>=2.2",
+    "huggingface_hub>=0.20",
+]
+
+runtime = "isolated"
+node_types = ["pii_redact"]
+
+[config_schema.pii_redact]
+placeholder = { type = "string", title = "Placeholder", default = "", description = "Replacement text inserted for redacted PII spans." }
+engine = { type = "string", title = "Engine", default = "auto", description = "presidio: NER + pattern recognizers (names, places, IDs…); regex: email/phone/card patterns only; auto: presidio when installed, else regex (the audit records which ran).", enum = ["auto", "regex", "presidio"] }
+spacy_model = { type = "string", title = "spaCy model", default = "en_core_web_sm", description = "spaCy pipeline for Presidio NER (installed package, else downloaded from huggingface.co/spacy/<name>)." }
+min_score = { type = "number", title = "Min score", default = 0.4, description = "Drop Presidio findings below this confidence." }

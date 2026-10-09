@@ -36,6 +36,19 @@ services:
       GRAPHYN_ENV: production
       GRAPHYN_AUTH_REQUIRED: "1"
       GRAPHYN_API_TOKEN: ${GRAPHYN_API_TOKEN:-}
+      # F19 (F-20): audit principal for requests authenticated by the shared token
+      GRAPHYN_API_TOKEN_ACTOR: ${GRAPHYN_API_TOKEN_ACTOR:-operator}
+      # Optional OIDC/SSO (Wave 1). Off unless ENABLED=1 and issuer+client set.
+      GRAPHYN_OIDC_ENABLED: ${GRAPHYN_OIDC_ENABLED:-0}
+      GRAPHYN_OIDC_ISSUER: ${GRAPHYN_OIDC_ISSUER:-}
+      GRAPHYN_OIDC_CLIENT_ID: ${GRAPHYN_OIDC_CLIENT_ID:-}
+      GRAPHYN_OIDC_CLIENT_SECRET: ${GRAPHYN_OIDC_CLIENT_SECRET:-}
+      GRAPHYN_OIDC_REDIRECT_URI: ${GRAPHYN_OIDC_REDIRECT_URI:-}
+      GRAPHYN_OIDC_UI_ORIGIN: ${GRAPHYN_OIDC_UI_ORIGIN:-}
+      GRAPHYN_OIDC_SCOPES: ${GRAPHYN_OIDC_SCOPES:-openid profile email}
+      GRAPHYN_OIDC_AUTO_PROVISION: ${GRAPHYN_OIDC_AUTO_PROVISION:-1}
+      GRAPHYN_OIDC_DEFAULT_ROLES: ${GRAPHYN_OIDC_DEFAULT_ROLES:-viewer}
+      GRAPHYN_OIDC_PASSWORD_LOGIN: ${GRAPHYN_OIDC_PASSWORD_LOGIN:-1}
       GRAPHYN_HOME: /data/graphyn-home
       GRAPHYN_PROJECT_DIR: /app/workspace
       GRAPHYN_PLUGINS_DIR: /app/plugins
@@ -64,6 +77,10 @@ services:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://172.17.0.1:11434/v1}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-tinyllama:1.1b}
       OLLAMA_NUM_GPU: ${OLLAMA_NUM_GPU:-0}
+      # SSRF (F19): restricted egress is the default; the host Ollama is the
+      # only trusted internal target. Metadata IPs can never be allowlisted.
+      GRAPHYN_HTTP_EGRESS_MODE: ${GRAPHYN_HTTP_EGRESS_MODE:-restricted}
+      GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW: ${GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW:-172.17.0.1:11434,host.docker.internal:11434}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}

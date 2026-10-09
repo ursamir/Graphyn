@@ -93,7 +93,7 @@ def make_run(ws: Path, run_id: str, acc_a: float, acc_b: float, created: str, **
     _write(art / "trainer_0" / "saved_model" / "saved_model.pb", b"p" * 5)
     _write(art / "trainer_0" / "checkpoints" / "best.keras", b"c")
     _write(art / "evaluator_0" / "metrics.json", {"test_accuracy": acc_a, "per_class": {}, "roc_auc": 0.8})
-    _write(art / "tflite" / "model.tflite", b"t" * 7)
+    _write(art / "tflite" / "model.tflite", b"\x1c\x00\x00\x00TFL3" + b"t" * 7)  # TFLite magic (ship checks content)
     _write(art / "tflite" / "labels.txt", "\n".join(LABELS) + "\n")
     _write(art / "model_builder_b" / "compiled_def.keras", b"k")
     _write(art / "trainer_b" / "model.keras", b"k" * 3)
@@ -265,8 +265,8 @@ def test_request_approve_prod_carries_artifact(ux_ws):
     from app.core.mlops.model_registry import approve_prod, register_model, request_prod
 
     register_model("kws", run_id=RUN, slug="", stage="staging", node_id="trainer_0")
-    request_prod("kws")
-    done = approve_prod("kws")
+    request_prod("kws", actor="alice")
+    done = approve_prod("kws", actor="bob")
     assert done["stages"]["prod"]["artifact_path"].endswith("trainer_0/model.keras")
 
 

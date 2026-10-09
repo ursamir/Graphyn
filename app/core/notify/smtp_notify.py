@@ -19,6 +19,27 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def smtp_dry_run_forced() -> bool:
+    """True when the operator forces SMTP dry-run server-wide (GRAPHYN_SMTP_DRY_RUN)."""
+    return (os.environ.get("GRAPHYN_SMTP_DRY_RUN") or "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+class _PinnedSMTP(smtplib.SMTP):
+    """smtplib.SMTP that dials a pre-validated IP; STARTTLS still verifies the hostname."""
+
+    def __init__(self, host: str = "", port: int = 0, *, pinned_ip: str | None = None, **kw: Any):
+        self._pinned_ip = pinned_ip
+        super().__init__(host, port, **kw)
+
+    def _get_socket(self, host, port, timeout):  # type: ignore[override]
+        import socket
+
+        target = self._pinned_ip or host
+        if timeout is not None and not timeout:
+            raise ValueError("Non-blocking socket (timeout=0) is not supported")
+        return socket.create_connection((target, port), timeout, self.source_address)
+
+
 def smtp_config_from_env() -> dict[str, Any]:
     host = (os.environ.get("GRAPHYN_SMTP_HOST") or "").strip()
     port_raw = (os.environ.get("GRAPHYN_SMTP_PORT") or "587").strip()
@@ -130,6 +151,10 @@ def send_email(
     cfg = smtp_config_from_credentials(connection_id=connection_id, credentials=credentials)
     if dry_run is None:
         dry_run = bool(cfg.get("dry_run"))
+    # F19: GRAPHYN_SMTP_DRY_RUN=1 is a server-wide kill switch — it forces
+    # preview mode even when a connection payload says dry_run=false.
+    if smtp_dry_run_forced():
+        dry_run = True
     recipients = [to] if isinstance(to, str) else list(to or [])
     recipients = [r.strip() for r in recipients if r and str(r).strip()]
     sender = (from_addr or cfg.get("from_addr") or "").strip()
@@ -174,8 +199,18 @@ def send_email(
     msg["To"] = ", ".join(recipients)
     msg.set_content(str(body))
 
+    # F19 (F-02): SMTP is network egress too — resolve + validate the relay
+    # against the egress policy and connect to the validated IP only.
+    from app.core.trust.egress import HttpEgressError, check_egress_host
+
     try:
-        with smtplib.SMTP(cfg["host"], int(cfg["port"]), timeout=30) as smtp:
+        target = check_egress_host(str(cfg["host"]), int(cfg["port"]), purpose="SMTP")
+    except HttpEgressError as exc:
+        raise RuntimeError(f"send_email: {exc}") from exc
+    pinned_ip = target.ips[0] if target.ips else None
+
+    try:
+        with _PinnedSMTP(cfg["host"], int(cfg["port"]), timeout=30, pinned_ip=pinned_ip) as smtp:
             if cfg.get("tls"):
                 smtp.starttls()
             if cfg.get("user"):

@@ -1,0 +1,23 @@
+[plugin]
+name             = "video-ingest"
+version          = "1.0.0"
+description      = "Find video files (file or folder) and probe duration, fps, resolution, codec and audio with ffprobe."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+tags = ["video", "ingest", "ffprobe"]
+
+# Needs the ffmpeg/ffprobe binaries on PATH (present in the Graphyn image).
+dependencies = ["numpy>=1.24"]
+
+runtime = "inprocess"
+node_types = ["video_ingest"]
+
+[config_schema.video_ingest]
+path = { type = "string", title = "Path", default = "", description = "Video file or folder (workspace-relative or absolute)." }
+recursive = { type = "boolean", title = "Recursive", default = true, description = "Walk sub-folders." }
+extensions = { type = "array", title = "Extensions", default = [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".ogv"], description = "File extensions to keep (with or without the dot).", items = { type = "string" } }
+label_from_parent = { type = "boolean", title = "Label from parent folder", default = false, description = "Use the parent folder name as each video's label." }
+max_files = { type = "integer", title = "Max files", default = 0, minimum = 0, description = "Stop after this many files (0 = all)." }
+on_error = { type = "string", title = "On unreadable file", default = "skip", enum = ["skip", "raise"], description = "skip = log and continue; raise = fail the node." }

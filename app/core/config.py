@@ -36,8 +36,9 @@ Reason To Change: New environment variables are added, directory layout
   GRAPHYN_PLUGIN_ISOLATED_TIMEOUT Default: 3600 (seconds; isolated worker subprocess)
   GRAPHYN_ISOLATED_DETERMINISTIC  Default: true (seed-derived PYTHONHASHSEED + TF determinism env in isolated workers)
   GRAPHYN_REDIS_URL               Default: "" (use in-process store)
-  GRAPHYN_HTTP_EGRESS_MODE        Default: trusted (workflow HTTP nodes; use restricted for SSRF hardening)
-  GRAPHYN_HTTP_EGRESS_ALLOWLIST   Default: "" (comma-separated hosts/domains; used in restricted mode)
+  GRAPHYN_HTTP_EGRESS_MODE        Default: restricted (SSRF-safe; private/loopback/link-local denied). trusted = explicit opt-out
+  GRAPHYN_HTTP_EGRESS_ALLOWLIST   Default: "" (comma-separated hosts/domains; when set, only these public hosts)
+  GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW Default: "" (host[:port] / IP[:port] / CIDR trusted internal targets, e.g. Ollama)
   GRAPHYN_MCP_HUMAN_APPROVAL      Default: "" (set 1 to expose MCP accept_proposal)
 
 ## Three-tier directory model
@@ -596,17 +597,20 @@ def redis_url() -> str:
 def http_egress_mode() -> str:
     """Return HTTP egress policy mode for workflow HTTP nodes.
 
-    Override: ``GRAPHYN_HTTP_EGRESS_MODE`` — ``trusted`` (default) or
-    ``restricted``.
+    Override: ``GRAPHYN_HTTP_EGRESS_MODE`` — ``restricted`` (default since
+    F19) or ``trusted``.
 
-    * ``trusted`` — current behaviour; any http(s) URL is permitted (operators
-      are assumed trusted). Suitable for single-tenant / shared-bearer setups.
-    * ``restricted`` — block private/link-local/loopback/metadata destinations
-      and optionally require hosts on ``GRAPHYN_HTTP_EGRESS_ALLOWLIST``.
+    * ``restricted`` — SSRF-safe default: block private / loopback /
+      link-local / ULA / metadata destinations (resolve-then-connect, IP
+      pinned, every redirect re-checked). Trusted internal services (e.g. a
+      local Ollama) must be listed in ``GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW``.
+      ``GRAPHYN_HTTP_EGRESS_ALLOWLIST`` optionally limits public hosts too.
+    * ``trusted`` — explicit operator opt-out: private destinations allowed;
+      cloud-metadata / link-local addresses are still always denied.
 
     Unknown values raise ``ValueError`` (fail-closed).
     """
-    raw = _env("GRAPHYN_HTTP_EGRESS_MODE", default="trusted").lower()
+    raw = _env("GRAPHYN_HTTP_EGRESS_MODE", default="restricted").lower()
     if raw in ("trusted", "unrestricted", "off", "allow"):
         # Aliases map to trusted for ops convenience; canonical name is trusted.
         return "trusted"
@@ -614,8 +618,22 @@ def http_egress_mode() -> str:
         return "restricted"
     raise ValueError(
         f"GRAPHYN_HTTP_EGRESS_MODE={raw!r} is invalid; "
-        "use 'trusted' (default) or 'restricted'."
+        "use 'restricted' (default) or 'trusted'."
     )
+
+
+def http_egress_internal_allowlist() -> list[str]:
+    """Trusted internal egress targets allowed even when they resolve privately.
+
+    Override: ``GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW`` — comma-separated entries:
+    ``host``, ``host:port``, ``IP``, ``IP:port``, ``[v6]:port`` or a CIDR
+    (``10.0.0.0/8``). Example: ``ollama:11434,172.17.0.1:11434``. Cloud
+    metadata / link-local addresses can never be allowlisted.
+    """
+    raw = _env("GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW")
+    if not raw:
+        return []
+    return [entry.strip().lower() for entry in raw.split(",") if entry.strip()]
 
 
 def mcp_human_approval_enabled() -> bool:

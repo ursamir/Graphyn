@@ -311,10 +311,7 @@ _PORT_ALIASES = {
 _INGEST_NODE_TYPES = frozenset(
     {
         "dataset_ingest",
-        "vision_dataset_ingest",
         "video_ingest",
-        "mcu_dataset_ingest",
-        "rag_fs_connector",
     }
 )
 
@@ -347,10 +344,6 @@ def _oob_seed_path(entry: dict[str, Any], node_type: str) -> str:
     modality = {str(m).strip().lower() for m in (entry.get("modality") or [])}
     blob = " ".join([pack, family, *tags, *modality, str(entry.get("id") or "").lower()])
 
-    if node_type == "rag_fs_connector" or pack == "rag" or "rag" in tags or "rag" in blob:
-        return "workspace/datasets/input/doc-rag-ingest"
-    if node_type in {"vision_dataset_ingest"} or pack == "vision" or "vision" in modality:
-        return "workspace/datasets/input/vision-demo"
     if node_type == "video_ingest" or pack == "video" or "video" in modality:
         return "workspace/datasets/input/video-demo"
     if pack == "wakeword" or "wakeword" in tags or "wake-word" in blob or family == "wakeword":
@@ -361,9 +354,6 @@ def _oob_seed_path(entry: dict[str, Any], node_type: str) -> str:
         return "workspace/datasets/input/speech-enhancement"
     if "speaker" in tags or "diarization" in tags or "verify" in blob:
         return "workspace/datasets/input/speaker-verification"
-    if node_type == "mcu_dataset_ingest" or pack == "tinyml":
-        # TinyML KWS demos reuse speech-commands wavs as MCU features upstream.
-        return "workspace/datasets/input/speech-commands"
     # Default audio / KWS / captions / ASR / unknown → speech-commands
     return "workspace/datasets/input/speech-commands"
 
@@ -376,12 +366,7 @@ def _bind_oob_ingest_and_params(nodes: list[dict[str, Any]], entry: dict[str, An
         nt = str(node.get("node_type") or "")
         cfg = node.setdefault("config", {})
         if nt in _INGEST_NODE_TYPES:
-            path_val = _oob_seed_path(entry, nt)
-            if nt == "rag_fs_connector":
-                cfg["path"] = path_val
-                cfg.pop("root", None)
-            else:
-                cfg["path"] = path_val
+            cfg["path"] = _oob_seed_path(entry, nt)
             if nt == "dataset_ingest" and int(cfg.get("limit") or 0) == 0:
                 cfg["limit"] = _OOB_INGEST_LIMIT
         if nt == "dataset_builder" and int(cfg.get("fixed_length") or 0) == 0:
@@ -392,28 +377,12 @@ def _bind_oob_ingest_and_params(nodes: list[dict[str, Any]], entry: dict[str, An
                 cfg["epochs"] = 1
             cfg.setdefault("batch_size", 8)
             cfg.setdefault("device", "cpu")
-        if nt == "yolo_train":
-            epochs = int(cfg.get("epochs") or 0)
-            if epochs <= 0 or epochs > 3:
-                cfg["epochs"] = 1
-            cfg.setdefault("batch", 1)
-            cfg.setdefault("imgsz", 64)
-            cfg.setdefault("device", "cpu")
-        if nt == "yolo_val":
-            cfg.setdefault("device", "cpu")
-        if nt == "mcu_train":
-            epochs = int(cfg.get("epochs") or 0)
-            if epochs <= 0 or epochs > 3:
-                cfg["epochs"] = 1
         if nt == "http_request" and not str(cfg.get("url") or "").strip():
             # Safe public echo endpoint for OOB marketplace smoke (no secrets).
             cfg["url"] = "https://httpbin.org/get"
             cfg.setdefault("method", "GET")
         if nt == "csv_table" and not str(cfg.get("path") or "").strip():
             cfg["path"] = "workspace/datasets/input/csv-data-processing/sample.csv"
-        if nt == "mcp_tool_call":
-            # Host image may not ship the optional ``mcp`` package; OOB stubs.
-            cfg.setdefault("stub", True)
         if nt == "tool_router" and not (cfg.get("tools") or []):
             cfg["tools"] = ["echo"]
             cfg.setdefault("strict", False)
@@ -421,15 +390,6 @@ def _bind_oob_ingest_and_params(nodes: list[dict[str, Any]], entry: dict[str, An
             # Marketplace ingest/MLOps chains often feed non-transcript payloads.
             cfg.setdefault("check_empty_transcript", False)
             cfg.setdefault("fail_if_empty_list", False)
-        if nt == "ship_package_create":
-            # Marketplace OOB graphs rarely have a registry model; stub the packager.
-            cfg.setdefault("stub", True)
-            if not str(cfg.get("model_name") or "").strip():
-                cfg["model_name"] = "demo_model"
-            cfg.setdefault("project", "tpl-smoke")
-            cfg.setdefault("unsigned_allowed", True)
-        if nt == "ship_package_transition":
-            cfg.setdefault("stub", True)
         if nt == "hitl_approve":
             cfg["unattended_approve"] = True
         if nt == "stream_ingest":
@@ -453,7 +413,6 @@ def _bind_oob_ingest_and_params(nodes: list[dict[str, Any]], entry: dict[str, An
             "csv_table",
             "http_request",
             "object_store",
-            "rag_fs_connector",
         }:
             # Leave alone only if a later sanitize-with-registry keeps it;
             # without registry, drop unknown-looking path on non-ingest nodes.

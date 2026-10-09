@@ -320,10 +320,15 @@ class TestTrainEvaluateExportInfer:
         assert interp.get_input_details()[0]["dtype"] == in_dtype
         assert list(interp.get_input_details()[0]["shape"]) == [1, 101, 40, 1]
 
-    def test_edge_optimizer_stub_backend(self, chain, tmp_path):
+    def test_edge_optimizer_tflm_backend(self, chain, tmp_path):
+        # F19 / F-05: tflm is a real export (.tflite + C arrays), not a stub marker.
         eo = _load("edge_optimizer")
-        dep = eo(config={"backend": "tflm", "output_path": str(tmp_path)}).process({"input": chain["evaluated"]})["output"]
-        assert dep.metadata.get("stub") is True
+        dep = eo(config={"backend": "tflm", "output_path": str(tmp_path), "representative_samples": 20}).process({"input": chain["evaluated"]})["output"]
+        assert dep.model_format == "tflm" and dep.target_hardware == "mcu"
+        assert "stub" not in dep.metadata
+        assert Path(dep.artifact_path).read_bytes()[4:8] == b"TFL3"
+        assert Path(dep.metadata["tflm"]["source"]).is_file()
+        assert "CONV_2D" in dep.metadata["tflm"]["operators"]
 
     @pytest.fixture(scope="class")
     def int8_model(self, chain, tmp_path_factory):

@@ -49,7 +49,7 @@ class ScheduleTriggerNode(Node):
     )
     input_ports: ClassVar[dict] = {}
     output_ports: ClassVar[dict[str, OutputPort]] = {
-        "output": OutputPort(name="output", data_type=object, description="TickEvent"),
+        "output": OutputPort(name="output", data_type=TickEvent, description="TickEvent"),
     }
 
     class Config(NodeConfig):

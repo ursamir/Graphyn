@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-wakeword-data-gen",
+    "seed": 42,
+    "description": "Generate TTS positives for the wake phrase plus phonetically-similar adversarial negatives and background clips (Piper VITS when espeak-ng is present, else MMS-TTS).",
+    "created_at": null,
+    "tags": [
+      "wakeword",
+      "synthetic"
+    ],
+    "pack": "WakeWord",
+    "industry": "general",
+    "marketplace_id": "tpl-wakeword-data-gen",
+    "status": "ready",
+    "source_example": "marketplace/tpl-wakeword-data-gen.graph.json",
+    "base_template": "tpl-wakeword-data-gen"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "wakeword_data_gen",
+      "config": {
+        "model_name": "hey_graphyn_gen",
+        "output_dir": "workspace/models/wakeword",
+        "target_phrases": [
+          "hey graphyn"
+        ],
+        "n_samples": 24,
+        "n_samples_val": 8,
+        "n_background_samples": 8,
+        "n_background_samples_val": 2,
+        "tts_backend": "auto"
+      },
+      "label": "generate",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [],
+  "parameters": {}
+}

@@ -1,7 +1,7 @@
 [plugin]
 name             = "merge"
-version          = "1.0.0"
-description      = "Append lists or combine dicts/lists by key."
+version          = "1.1.0"
+description      = "Append inputs into a list, combine list items by key, or merge two objects with explicit conflict handling."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
@@ -15,5 +15,6 @@ runtime = "inprocess"
 node_types = ["merge"]
 
 [config_schema.merge]
-mode = {  type = "string", title = "Mode", default = "append", description = "Operating mode. One of: append, combine_by_key.", enum = ["append", "combine_by_key"]  }
-key = { type = "string", title = "Merge key", default = "id", description = "Dict key used to correlate items when merging lists." }
+mode = {  type = "string", title = "Mode", default = "append", description = "append: concatenate a and b into one list (two objects become a two-item list — nothing is overwritten). combine_by_key: correlate list items on the merge key. merge_dicts: shallow-merge two objects; key conflicts follow on_conflict.", enum = ["append", "combine_by_key", "merge_dicts"]  }
+key = { type = "string", title = "Merge key", default = "id", description = "Field used to correlate items in combine_by_key mode." }
+on_conflict = { type = "string", title = "On key conflict", default = "error", description = "merge_dicts only: what to do when both objects set the same key to different values. error (default) fails the node; prefer_a / prefer_b keep that side. Conflicts are always listed in the output metadata.", enum = ["error", "prefer_a", "prefer_b"] }

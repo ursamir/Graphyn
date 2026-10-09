@@ -107,6 +107,22 @@ class TypeCatalogue:
                 )
             return self._types[type_name]
 
+    def resolve_expr(self, label: str) -> type:
+        """Resolve a port type *label* — registered types plus builtins,
+        generics (``builtins.list[...]``) and unions (``X | None``).
+
+        Raises:
+            PortTypeNotFoundError: if any name in the label is unknown.
+        """
+        from app.core.nodes.type_names import parse_type_label
+
+        try:
+            return parse_type_label(label, self.resolve)
+        except PortTypeNotFoundError:
+            raise
+        except (LookupError, ValueError, TypeError) as exc:
+            raise PortTypeNotFoundError(str(exc)) from exc
+
     def list_types(self) -> list[str]:
         """Return a sorted list of all registered fully-qualified type names."""
         with self._lock:

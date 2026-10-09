@@ -21,15 +21,26 @@ def ship_project(tmp_workspace: Path):
     run_dir = tmp_workspace / "runs" / "run-ship-1"
     run_dir.mkdir(parents=True)
     (run_dir / "meta.json").write_text(json.dumps({"run_id": "run-ship-1", "status": "succeeded"}))
+    (run_dir / "graph.json").write_text(json.dumps({
+        "schema_version": 2,
+        "metadata": {"name": "ship-graph"},
+        "nodes": [{"id": "edge_optimizer_0", "node_type": "edge_optimizer",
+                   "config": {"output_path": "workspace/artifacts/edge-slug/runs/run-ship-1"}}],
+        "edges": [],
+    }))
     art = tmp_workspace / "artifacts" / "edge-slug" / "runs" / "run-ship-1"  # artifact_slug()
     art.mkdir(parents=True)
-    (art / "model.bin").write_bytes(b"x")
+    # F19 / F-14: ship validates the model file against target.runtime, so the
+    # registered artifact must be a real TFLite flatbuffer.
+    fixture = Path(__file__).resolve().parents[1] / "f19" / "fixtures" / "tiny_int8.tflite"
+    (art / "model.tflite").write_bytes(fixture.read_bytes())
     register_model(
         "edge-model",
         run_id="run-ship-1",
         slug="edge_slug",
         stage="staging",
         actor="tester",
+        node_id="edge_optimizer_0",
     )
     return "ship-demo"
 
@@ -57,7 +68,6 @@ class TestShipPackagesRest:
             "model_stage_or_version": "staging",
             "target": {"runtime": "tflite", "arch": "arm"},
             "env": "draft",
-            "unsigned_allowed": True,
         }
         r = api_client.post(
             f"/api/v1/projects/{ship_project}/ship/packages",
@@ -163,11 +173,11 @@ class TestShipPackagesRest:
             model_name="edge-model",
             model_stage_or_version="staging",
             target={"runtime": "tflite", "arch": "arm"},
-            unsigned_allowed=True,
             actor="tester",
         )
         pid = created["package_id"]
-        # create ends at signed when unsigned_allowed
+        # create ends at signed (real Ed25519 signature)
+        assert created["manifest"]["signatures"][0]["alg"] == "ed25519"
         assert next_status("signed", "publish") == "published"
         with pytest.raises(InvalidPackageTransition):
             next_status("draft", "publish")

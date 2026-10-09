@@ -1179,11 +1179,24 @@ def _collect_configured_write_files(
     attribution: dict[str, str],
     node_ids: list[str],
     per_root_cap: int = 64,
+    ctx: "_ListingContext | None" = None,
+    input_filter: "_InputFilter | None" = None,
 ) -> None:
-    """Merge allowed files from graph-declared write dirs into the listing."""
+    """Merge allowed files from graph-declared write dirs into the listing.
+
+    When *ctx* is given, the node's full file total under the declared root is
+    recorded in ``ctx.summarized_totals`` so truncation metadata is honest.
+    """
     for nid, root in _iter_configured_write_roots(graph):
         if nid not in node_ids:
             node_ids.append(nid)
+        if ctx is not None:
+            ctx.add_root(nid, root)
+            total = _count_allowed_files_fast([root], this_run_id=None, cap=_MAX_NODE_SCAN)
+            if total:
+                ctx.summarized_totals[nid] = max(ctx.summarized_totals.get(nid, 0), total)
+                if total > per_root_cap:
+                    ctx.capped = True
         count = 0
         try:
             children = sorted(root.rglob("*"), key=natural_sort_key)
@@ -1202,6 +1215,8 @@ def _collect_configured_write_files(
                 continue
             if not is_under_jail(resolved) or not _allowed_file(resolved):
                 continue
+            if input_filter is not None and input_filter.input_owner(resolved):
+                continue
             key = str(resolved)
             if key in seen_keys:
                 attribution.setdefault(key, nid)
@@ -1212,7 +1227,9 @@ def _collect_configured_write_files(
             count += 1
 
 
-def _dedupe_files(paths: Iterable[Path], *, limit: int = _MAX_LISTED_FILES) -> list[Path]:
+def _dedupe_files(paths: Iterable[Path], *, limit: int | None = None) -> list[Path]:
+    if limit is None:
+        limit = _MAX_LISTED_FILES
     seen: set[str] = set()
     out: list[Path] = []
     for path in paths:
@@ -1661,7 +1678,7 @@ def _list_run_outputs(
     run_id: str,
     run_dir: Path,
     *,
-    max_files: int = _MAX_LISTED_FILES,
+    max_files: int | None = None,
     sample_cap: int | None = 32,
 ) -> tuple[list[dict[str, Any]], _ListingContext]:
     """Build the downloadable listing from ArtifactStore inventories.
@@ -1696,10 +1713,29 @@ def _list_run_outputs(
         seen_keys.add(key)
         collected.append(resolved)
 
+    graph = _load_run_graph(run_dir)
+    in_filter = _InputFilter(graph, run_dir)
     index = ensure_outputs_index(run_id, run_dir)
     for entry in artifacts_from_index(index):
         paths, total, node_id = _expand_artifact_entry(entry, sample_cap=sample_cap)
-        if node_id:
+        if node_id and in_filter.roots:
+            # Pre-existing input files a source node passed through are not outputs.
+            kept: list[Path] = []
+            skipped = 0
+            for pth in paths:
+                try:
+                    res = pth.resolve()
+                except OSError:
+                    continue
+                if in_filter.input_owner(res):
+                    skipped += 1
+                    continue
+                kept.append(pth)
+            if skipped:
+                ctx.input_counts[node_id] = ctx.input_counts.get(node_id, 0) + skipped
+                total = max(0, total - skipped) if len(kept) < len(paths) else total
+                paths = kept
+        if node_id and total:
             ctx.summarized_totals[node_id] = max(
                 ctx.summarized_totals.get(node_id, 0), total
             )
@@ -1735,16 +1771,17 @@ def _list_run_outputs(
             if node_id:
                 attribution.setdefault(key, node_id)
 
-        if total > 32:
+        if sample_cap is not None and total > sample_cap:
             ctx.capped = True
 
-    graph = _load_run_graph(run_dir)
     _collect_configured_write_files(
         graph,
         seen_keys=seen_keys,
         collected=collected,
         attribution=attribution,
         node_ids=node_ids,
+        ctx=ctx,
+        input_filter=in_filter,
     )
 
     order = [
@@ -1760,7 +1797,9 @@ def _list_run_outputs(
         node_of[key] = _resolve_attributed_node(
             path, attribution.get(key), all_nodes, graph
         )
-    cap = max(1, int(max_files))
+    # F19 (F-12): resolve the cap at call time (a default bound at import time
+    # ignored runtime overrides of _MAX_LISTED_FILES).
+    cap = max(1, int(_MAX_LISTED_FILES if max_files is None else max_files))
     selected = _select_listing(collected, node_of, order, run_dir, cap)
     if len(selected) < len(collected):
         ctx.capped = True
@@ -1840,12 +1879,31 @@ def list_node_output_files(
     from app.core.runs.outputs_index import artifacts_from_index, ensure_outputs_index
 
     index = ensure_outputs_index(run_id, run_dir)
+    graph = _load_run_graph(run_dir)
+    in_filter = _InputFilter(graph, run_dir)
     files: list[Path] = []
     seen: set[str] = set()
+    sources: list[list[Path]] = []
     for entry in artifacts_from_index(index):
         if str(entry.get("node_id") or "") != node_id:
             continue
         paths, _total, _nid = _expand_artifact_entry(entry, sample_cap=None)
+        sources.append(list(paths))
+    # F19 (F-12): same graph-declared write roots the run listing uses.
+    for nid, root in _iter_configured_write_roots(graph):
+        if nid != node_id:
+            continue
+        found: list[Path] = []
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIR_NAMES and not d.startswith(".")]
+            for name in filenames:
+                found.append(Path(dirpath) / name)
+                if len(found) >= _MAX_NODE_SCAN:
+                    break
+            if len(found) >= _MAX_NODE_SCAN:
+                break
+        sources.append(found)
+    for paths in sources:
         for path in paths:
             try:
                 resolved = path.resolve()
@@ -1858,6 +1916,8 @@ def list_node_output_files(
             if not is_under_jail(resolved):
                 continue
             if resolved.is_file() and not _allowed_file(resolved):
+                continue
+            if in_filter.input_owner(resolved):
                 continue
             key = str(resolved)
             if key in seen:

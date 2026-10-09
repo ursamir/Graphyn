@@ -3,7 +3,7 @@
   "metadata": {
     "name": "meeting_crm_live",
     "seed": 42,
-    "description": "Live meeting CRM: openai_compat ASR + LLM. Needs OPENAI_API_KEY.",
+    "description": "Meeting CRM extract with hosted providers (OpenAI-compatible ASR + LLM) and a webhook. Needs OPENAI_API_KEY and http_webhook.url; fails clearly until they are set.",
     "created_at": null,
     "tags": [
       "example",
@@ -102,7 +102,7 @@
       "id": "http_webhook_5",
       "node_type": "http_webhook",
       "config": {
-        "url": "https://example.com/webhooks/meeting-crm",
+        "url": "",
         "timeout_s": 10.0,
         "provider": "http"
       },

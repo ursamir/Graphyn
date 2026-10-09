@@ -23,6 +23,6 @@ allowed_recipient_domains = { type = "array", title = "Allowed recipient domains
 allow_payload_recipients = { type = "boolean", title = "Allow payload recipients", default = false, description = "Use to/from from the input payload when config `to` is empty. Default false: upstream data (e.g. LLM output) cannot choose recipients." }
 subject = { type = "string", title = "Subject", default = "Graphyn notification", description = "Email subject." }
 body_template = { type = "string", title = "Body template", default = "", description = "Optional body override; else input body/text/content." }
-from_addr = { type = "string", title = "From", default = "", description = "Override From. Default: smtp connection from_addr / GRAPHYN_SMTP_FROM." }
-dry_run = { type = "boolean", title = "Dry run", default = false, description = "Skip SMTP dial. Also honors GRAPHYN_SMTP_DRY_RUN=1." }
+from_addr = { type = "string", title = "From", default = "", description = "Override the sender address. Default: the SMTP connection's sender, then the server default sender." }
+dry_run = { type = "boolean", title = "Dry run", default = false, description = "Preview only: build the message but do not connect to the mail server. The server can also force preview mode for every send." }
 connection_id = { type = "string", title = "Credential connection id", default = "", description = "SMTP connection id from Graphyn credential store." }

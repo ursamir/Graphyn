@@ -1,0 +1,33 @@
+[plugin]
+name             = "multimodal-fusion"
+version          = "1.1.0"
+description      = "Parameter-free fusion of audio embeddings with text/video embeddings (fixed random projection + concat, attention, late, or cross-attention)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "multimodal",
+    "fusion",
+    "embeddings",
+    "audio",
+    "text",
+    "video",
+    "clap",
+    "generative"
+]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["multimodal_fusion"]
+
+[config_schema.multimodal_fusion]
+fusion_type = { type = "string", title = "Fusion Type", default = "concat", description = "Fusion Type. One of: concat, attention, late, cross_attention.", enum = ["concat", "attention", "late", "cross_attention"] }
+audio_dim = { type = "integer", title = "Audio dim", default = 768, description = "Expected audio embedding dimensionality." }
+text_dim = { type = "integer", title = "Text dim", default = 768, description = "Expected text embedding dimensionality." }
+output_dim = { type = "integer", title = "Output dim", default = 512, description = "Fused output embedding dimensionality." }
+normalize = { type = "boolean", title = "Normalize", default = true, description = "Normalize feature or audio amplitude (On/Off)." }

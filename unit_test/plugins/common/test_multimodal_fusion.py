@@ -178,3 +178,14 @@ def test_empty_audio_returns_empty(installed_cls):
     node = installed_cls(config={"fusion_type": "concat"}, seed=0)
     result = node.process({"audio": []})
     assert result["output"] == []
+
+
+def test_accepts_dict_embeddings_from_isolated_plugins(installed_cls):
+    """Isolated embedding nodes can hand over plain dicts; fusion must read them."""
+    rng = np.random.default_rng(0)
+    audio = [{"embedding": rng.standard_normal(768).astype(np.float32).tolist(), "label": "a"}]
+    video = [{"embedding": rng.standard_normal(512).astype(np.float32).tolist()}]
+    node = installed_cls(config={"fusion_type": "concat", "output_dim": 64}, seed=0)
+    node.setup()
+    result = node.process({"audio": audio, "video": video})
+    assert len(result["output"]) == 1

@@ -4891,7 +4891,8 @@ Plus project lifecycle routes under `/api/v1/projects` (CRUD, clone, taxonomy, c
 | `GRAPHYN_BACKEND` | `distributed` enables Mode B |
 | `GRAPHYN_HOME` | Platform home |
 | `GRAPHYN_PROJECT_DIR` | Workspace data root |
-| `GRAPHYN_HTTP_EGRESS_MODE` | `trusted` \| `restricted` |
+| `GRAPHYN_HTTP_EGRESS_MODE` | `restricted` (default) \| `trusted` |
+| `GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW` | Trusted internal targets (host[:port] / IP / CIDR) |
 | `GRAPHYN_HTTP_EGRESS_ALLOWLIST` | Hosts when restricted |
 | `GRAPHYN_PLUGIN_ALLOWED_SOURCES` | Remote plugin allowlist |
 | `GRAPHYN_MCP_HUMAN_APPROVAL` | Enable MCP `accept_proposal` |

@@ -1,0 +1,93 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-agents-guardrail-approval-memory",
+    "seed": 42,
+    "description": "Screen a drafted message for PII/secrets, pass an approval gate (unattended in templates; set unattended_approve=false for a human decision) and persist it to agent memory.",
+    "created_at": null,
+    "tags": [
+      "agents",
+      "guardrails",
+      "hitl",
+      "memory"
+    ],
+    "pack": "Agents",
+    "industry": "general",
+    "marketplace_id": "tpl-agents-guardrail-approval-memory",
+    "status": "ready",
+    "source_example": "marketplace/tpl-agents-guardrail-approval-memory.graph.json",
+    "base_template": "tpl-agents-guardrail-approval-memory"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "prompt_template",
+      "config": {
+        "template": "Your order 1042 shipped today and arrives Friday."
+      },
+      "label": "draft",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "guardrail_filter",
+      "config": {
+        "policies": [
+          "pii",
+          "secret"
+        ],
+        "action": "block"
+      },
+      "label": "guard",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "hitl_approve",
+      "config": {
+        "unattended_approve": true,
+        "reason_required": false
+      },
+      "label": "approve",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "memory_store",
+      "config": {
+        "namespace": "approved-messages",
+        "key": "last_approved"
+      },
+      "label": "remember",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "approved",
+      "dst_id": "n3",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

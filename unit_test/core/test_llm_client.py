@@ -51,7 +51,7 @@ def test_anthropic_httpx_mocked(monkeypatch):
         "content": [{"type": "text", "text": "anthropic-hi"}],
         "usage": {"input_tokens": 1, "output_tokens": 2},
     }
-    with patch("httpx.post", return_value=mock_resp) as mocked:
+    with patch("app.core.trust.egress.egress_post", return_value=mock_resp) as mocked:
         out = chat_completion(
             messages=[
                 {"role": "system", "content": "be brief"},
@@ -77,7 +77,7 @@ def test_gemini_httpx_mocked(monkeypatch):
         "candidates": [{"content": {"parts": [{"text": "gemini-hi"}]}}],
         "usageMetadata": {"totalTokenCount": 3},
     }
-    with patch("httpx.post", return_value=mock_resp) as mocked:
+    with patch("app.core.trust.egress.egress_post", return_value=mock_resp) as mocked:
         out = chat_completion(
             messages=[{"role": "user", "content": "hi"}],
             provider="gemini",
@@ -91,13 +91,14 @@ def test_gemini_httpx_mocked(monkeypatch):
 
 def test_ollama_no_auth_header(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW", "127.0.0.1:11434")
     monkeypatch.setenv("OLLAMA_MODEL", "tinyllama")
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
     mock_resp.json.return_value = {
         "choices": [{"message": {"content": "local"}}],
     }
-    with patch("httpx.post", return_value=mock_resp) as mocked:
+    with patch("app.core.trust.egress.egress_post", return_value=mock_resp) as mocked:
         out = chat_completion(
             messages=[{"role": "user", "content": "ping"}],
             provider="ollama",

@@ -1,12 +1,17 @@
 # Example 24 — Captions
 
-dataset_ingest → asr_transcribe (mock word timings) → caption_export (SRT + VTT + JSON)
+dataset_ingest → asr_transcribe (word timings) → caption_export (SRT + VTT + JSON)
+
+| Graph | ASR | Needs |
+|---|---|---|
+| `pipeline.graph.json` | local Whisper (`tiny`) | nothing — runs offline |
+| `pipeline.live.graph.json` | Deepgram `nova-2` | `DEEPGRAM_API_KEY` |
 
 ## Output
 
-`workspace/artifacts/captions/` (SRT/VTT/JSON from `pipeline.graph.json` `output_dir`)
+`workspace/artifacts/captions/` — `captions.srt`, `captions.vtt`, `captions.json`.
 
-## Run with mock ASR
+## Run
 
 ```bash
 python -m app.cli.main plugin install PluginPackage/Audio/dataset_ingest/ --upgrade
@@ -16,6 +21,4 @@ python -m app.cli.main plugin install PluginPackage/Common/caption_export/ --upg
 python -m app.cli.main run --graph examples/24_captions/pipeline.graph.json
 ```
 
-## Live vs mock
-
-Live: `pipeline.live.graph.json` uses Deepgram (`DEEPGRAM_API_KEY`). Mock CI: `pipeline.graph.json`.
+Live: `python -m app.cli.main secrets set DEEPGRAM_API_KEY`, then run `pipeline.live.graph.json`.

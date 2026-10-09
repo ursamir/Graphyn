@@ -1,26 +1,27 @@
 # Example 23 — Meeting CRM extract
 
-asr_transcribe → pii_redact → structured_llm (pain, objections, next_step, owner) → eval_gate → http_webhook
+dataset_ingest → asr_transcribe → pii_redact → structured_llm (pain, objections, next_step, owner) → eval_gate → store / deliver
 
-`dataset_ingest` is included so the graph is runnable; it feeds audio into ASR.
+| Graph | Providers | Needs |
+|---|---|---|
+| `pipeline.graph.json` | local Whisper (`tiny`), rule-based extract (`rule_based`), local `object_store` | nothing — runs offline |
+| `pipeline.live.graph.json` | OpenAI-compatible ASR + LLM, `http_webhook` | `OPENAI_API_KEY`, a webhook URL |
 
-## Env vars
-
-Same as example 22 (`OPENAI_API_KEY`, `ASSEMBLYAI_API_KEY`, `DEEPGRAM_API_KEY`). Mock providers need none.
+Offline output: one JSON record per meeting under `workspace/artifacts/meeting-crm/store/meetings/`.
+The rule-based extract only fills fields it can find in the transcript text; use the live graph for real CRM fields.
 
 ## Run
 
 ```bash
-python -m app.cli.main plugin install PluginPackage/Common/asr_transcribe/ --upgrade
-python -m app.cli.main plugin install PluginPackage/Common/pii_redact/ --upgrade
-python -m app.cli.main plugin install PluginPackage/Common/structured_llm/ --upgrade
-python -m app.cli.main plugin install PluginPackage/Common/eval_gate/ --upgrade
-python -m app.cli.main plugin install PluginPackage/Common/http_webhook/ --upgrade
+for p in asr_transcribe pii_redact structured_llm eval_gate object_store http_webhook; do
+  python -m app.cli.main plugin install "PluginPackage/Common/${p}/" --upgrade
+done
 python -m app.cli.main plugin install PluginPackage/Audio/dataset_ingest/ --upgrade
 
 python -m app.cli.main run --graph examples/23_meeting_crm/pipeline.graph.json
 ```
 
-## Live vs mock
+## Live
 
-Live: `pipeline.live.graph.json` uses openai_compat ASR+LLM (`OPENAI_API_KEY`). Keep `pipeline.graph.json` for mock CI.
+`python -m app.cli.main secrets set OPENAI_API_KEY`, set `http_webhook_5.config.url`, then run `pipeline.live.graph.json`.
+Missing key or URL fails clearly at that node.

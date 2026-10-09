@@ -394,6 +394,15 @@ class DatasetIngestNode(Node):
         )
 
         s3 = boto3.client("s3")
+        # F19 (F-02): validate the S3 endpoint against the egress policy.
+        from app.core.trust.egress import HttpEgressError, validate_http_egress_url
+
+        _endpoint = str(getattr(getattr(s3, "meta", None), "endpoint_url", "") or "")
+        if _endpoint:
+            try:
+                validate_http_egress_url(_endpoint)
+            except HttpEgressError as exc:
+                raise RuntimeError(f"DatasetIngestNode: S3 endpoint refused: {exc}") from exc
         paginator = s3.get_paginator("list_objects_v2")
 
         already_processed = self._load_checkpoint()

@@ -122,3 +122,44 @@ def test_embedding_is_normalized(installed_cls, make_audio_sample):
     emb = result["output"][0].embedding
     norm = float(np.linalg.norm(emb))
     assert abs(norm - 1.0) < 1e-4, f"Normalized embedding should have norm ~1.0, got {norm}"
+
+
+# ── v2 schema: dead options removed ───────────────────────────────────────────
+
+def test_schema_has_no_dead_options(installed_cls):
+    fields = installed_cls.Config.model_fields
+    # `backend` was never read; openl3 cannot install on Python 3.12 (kapre/TF pins).
+    assert "backend" not in fields
+    from typing import get_args
+    models = set(get_args(fields["model"].annotation))
+    assert models == {"wav2vec2", "hubert", "clap", "xvector", "ecapa", "yamnet"}
+
+
+def test_empty_audio_is_an_error(installed_cls):
+    from app.models.audio_sample import AudioSample
+
+    node = installed_cls(config={"model": "xvector"}, seed=0)
+    with pytest.raises(ValueError, match="empty audio"):
+        node.process({"input": [AudioSample(path="/e.wav", sample_rate=16000, data=np.zeros(0, np.float32))]})
+
+
+def test_pooling_modes(installed_cls):
+    hidden = np.arange(12, dtype=np.float32).reshape(3, 4)
+    for pooling, expect in [("mean", hidden.mean(0)), ("max", hidden[2]), ("first", hidden[0]),
+                            ("last", hidden[2]), ("none", hidden.reshape(-1))]:
+        node = installed_cls(config={"pooling": pooling}, seed=0)
+        assert np.allclose(node._pool(hidden), expect)
+
+
+@pytest.mark.heavy
+@pytest.mark.parametrize("model,dim", [("clap", 512), ("xvector", 512), ("ecapa", 192)])
+def test_projection_models(installed_cls, make_audio_sample, model, dim):
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    pytest.importorskip("speechbrain")
+    node = installed_cls(config={"model": model}, seed=0)
+    node.setup()
+    out = node.process({"input": [make_audio_sample(sr=16000, n=16000)]})["output"]
+    assert out[0].embedding.shape == (dim,)
+    assert out[0].pooling == "projection"
+    assert abs(float(np.linalg.norm(out[0].embedding)) - 1.0) < 1e-4

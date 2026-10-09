@@ -3,7 +3,7 @@
   "metadata": {
     "name": "nightly_compliance",
     "seed": 42,
-    "description": "Nightly compliance: schedule tick + ingest/openai_compat ASR/PII/eval, then IF to Slack http_request or CSV. Requires OPENAI_API_KEY; Slack branch needs SLACK_BOT_TOKEN via auth_env.",
+    "description": "Nightly compliance, offline: schedule tick + ingest -> local Whisper ASR -> PII redact -> eval gate -> if_switch: transcripts with text go to flagged.csv, empty ones to compliance.csv. No API keys. pipeline.live.graph.json posts flagged items to Slack (SLACK_BOT_TOKEN) and uses OpenAI-compatible ASR.",
     "created_at": null,
     "tags": [
       "example",
@@ -47,8 +47,9 @@
       "id": "asr",
       "node_type": "asr_transcribe",
       "config": {
-        "provider": "openai_compat",
-        "language": "en"
+        "provider": "local_whisper",
+        "language": "en",
+        "model": "tiny"
       },
       "label": null,
       "capability_metadata": null,
@@ -68,7 +69,7 @@
       "id": "gate",
       "node_type": "eval_gate",
       "config": {
-        "check_empty_transcript": true,
+        "check_empty_transcript": false,
         "required_keys": [],
         "pii_regex": ""
       },
@@ -87,13 +88,11 @@
       "event_trigger": null
     },
     {
-      "id": "slack",
-      "node_type": "http_request",
+      "id": "flagged",
+      "node_type": "csv_table",
       "config": {
-        "provider": "http",
-        "method": "POST",
-        "url": "https://slack.com/api/chat.postMessage",
-        "auth_env": "SLACK_BOT_TOKEN"
+        "operation": "write",
+        "path": "artifacts/nightly-compliance/flagged.csv"
       },
       "label": null,
       "capability_metadata": null,
@@ -104,7 +103,7 @@
       "node_type": "csv_table",
       "config": {
         "operation": "write",
-        "path": "workspace/artifacts/nightly-compliance/compliance.csv"
+        "path": "artifacts/nightly-compliance/compliance.csv"
       },
       "label": null,
       "capability_metadata": null,
@@ -143,7 +142,7 @@
     {
       "src_id": "branch",
       "src_port": "true",
-      "dst_id": "slack",
+      "dst_id": "flagged",
       "dst_port": "input",
       "condition": null
     },

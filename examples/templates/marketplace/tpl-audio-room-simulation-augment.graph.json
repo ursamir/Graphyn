@@ -1,0 +1,92 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-audio-room-simulation-augment",
+    "seed": 42,
+    "description": "Convolve clips with simulated room impulse responses (pyroomacoustics) plus gain/noise augmentation and export a far-field training set.",
+    "created_at": null,
+    "tags": [
+      "audio",
+      "kws",
+      "augmentation",
+      "far-field"
+    ],
+    "pack": "Audio",
+    "industry": "general",
+    "marketplace_id": "tpl-audio-room-simulation-augment",
+    "status": "ready",
+    "source_example": "marketplace/tpl-audio-room-simulation-augment.graph.json",
+    "base_template": "tpl-audio-room-simulation-augment"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "source_type": "filesystem",
+        "recursive": true,
+        "limit": 8,
+        "path": "workspace/datasets/input/speech-commands"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "environment_simulator",
+      "config": {
+        "preset": "room",
+        "copies_per_sample": 1
+      },
+      "label": "simulate",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "augmentation_pipeline",
+      "config": {
+        "copies_per_sample": 1
+      },
+      "label": "augment",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "audio_exporter",
+      "config": {
+        "format": "wav",
+        "overwrite": true
+      },
+      "label": "export",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

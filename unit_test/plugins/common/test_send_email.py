@@ -97,7 +97,7 @@ def test_smtp_send_recorded(installed_cls, monkeypatch):
     monkeypatch.setenv("GRAPHYN_SMTP_HOST", "smtp.example.com")
     monkeypatch.setenv("GRAPHYN_SMTP_FROM", "bot@example.com")
     node = installed_cls(config={"to": "ops@example.com"}, seed=0)
-    with patch("smtplib.SMTP", MagicMock()):
+    with patch("app.core.notify.smtp_notify._PinnedSMTP", MagicMock()):
         node.process({"input": {"body": "x"}})
     calls = node.take_external_calls()
     assert calls and calls[0]["kind"] == "smtp" and calls[0]["url"].startswith("smtp://smtp.example.com")

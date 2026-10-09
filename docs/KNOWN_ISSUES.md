@@ -260,6 +260,14 @@ From [Audit runtime failures](ebaf6289-81f1-4bde-bd4a-b03a942034ff). Durable `ca
 
 ## Open — Distributed / cancel limits
 
+### DIST-ORPHAN-1 — Mode B run stays `running` after a control-plane restart (F19, 2026-10-08)
+
+If the API process dies while a worker holds a job, the restarted control plane keeps the job but no backend thread owns the run any more; the run stays `running` until the abandoned-run reconcile (`GRAPHYN_STALE_RUN_HOURS`, at startup or `POST /system/cleanup`) or `POST /runs/{id}/cancel`. Seen live with run `35d43e94` (cancelled by hand).
+
+### SEG-DIAR-1 — `speaker_turn` diarization is classical, not neural (F19, 2026-10-08)
+
+Offline MFCC + pitch embeddings with agglomerative clustering. No overlapping-speech handling; automatic speaker count can over-split a single voice — set `num_speakers` when known.
+
 ### DIST-CANCEL-1 — In-process `node.process()` cannot be forcibly interrupted mid-call
 
 **Files:** `app/core/execution/node_executor.py`, `app/core/execution/orchestrator.py`, `app/core/distributed/backend.py`, worker CLI  
@@ -339,7 +347,7 @@ From [Audit runtime failures](ebaf6289-81f1-4bde-bd4a-b03a942034ff). Durable `ca
 **Files:** `graphyn-ui/src/**`  
 **Detail:** Phase 7+ added focus-visible outlines, `role="alert"` on ErrorBanner, page `h1` via PageHeader, icon-button labels, Settings dialog focus restore/Tab trap, ConfirmButton Escape-to-disarm, toast container `aria-live="polite"`, and a `?` keyboard-help overlay. Remaining gaps (not claimed fixed):
 - No full screen-reader audit of every route; React Flow canvas/handles remain weakly announced.
-- Some muted/meta text still uses `text-ink-400` (~3.4:1 on white) for non-critical chrome.
+- ~~Muted text `text-ink-400` ~3.4:1 on white~~ — fixed in F19: ink-400 `#5e7387` (4.9:1 on white, 4.5:1 on ink-50), ink-500 `#506679`; enforced by `graphyn-ui/src/lib/contrast.test.ts` (palette + no muted text on dark ink surfaces). Colour contrast of other tokens is not audited.
 - Dropdown/action menus (plugins/templates/builder “more”) are not full ARIA menus with arrow-key roving tabindex.
 - ConfirmButton is two-click arming, not a modal dialog.
 **Do not claim** full WCAG 2.x AA compliance in product or trust docs.
@@ -357,11 +365,17 @@ From [Audit runtime failures](ebaf6289-81f1-4bde-bd4a-b03a942034ff). Durable `ca
 **Detail:** Correct for single-worker; under high concurrency prefer an in-memory status cache coordinated with `run_control.py`.  
 **Workaround:** Poll status at ≥500ms.
 
-### RBAC-1 — Role-based access control not shipped
+### RBAC-1 — Role-based access control (local users) — **resolved (F11)**
 
-**Detail:** Auth is shared Bearer / optional local unlock (unauthenticated-dev when `GRAPHYN_API_TOKEN` unset). No per-user roles, tenants, or OIDC. Resource capabilities for the current model are documented in `docs/TRUST_MODEL.md` §2 — that matrix is **not** RBAC.  
-**Future:** when multi-user is supported, cross-project access must be prevented by default.  
-**Do not claim done** in market/vision docs until implemented.
+**Was:** shared Bearer only; no per-user roles.  
+**Now:** local users + global roles + per-project membership ACL (`app.core.trust.users` / `rbac`) and Access UI. Shared bearer remains break-glass.  
+**Still open:** multi-org tenancy — see **ORG-1**. OIDC/SSO — see Wave 1 in `docs/ENTERPRISE_READINESS.md` (shipped when `GRAPHYN_OIDC_ENABLED=1`).
+
+### ORG-1 — Multi-tenant org / workspace boundaries — **resolved (F13 / Wave 2)**
+
+**Was:** no `org_id`; project membership only.  
+**Now:** orgs + membership roles + active org; projects/credentials/workers scoped; default-org migration; Access → Organizations.  
+**Still open:** full SaaS productization (Checkout/invoices UI); Wave 3 ships quota + metering + webhook seam.
 
 ### UI-BUILD-EACCES-1 — `npm run build` may fail on root-owned `graphyn-ui` artifacts
 
@@ -410,7 +424,7 @@ Chose **Option A — trusted workflows only**. UI/docs/metadata no longer call A
 
 ### (resolved 2026-09-07) SEC-003 HTTP egress policy
 
-`http_request` / `http_webhook` share `app/core/trust/egress.py`. Default `GRAPHYN_HTTP_EGRESS_MODE=trusted` (no behaviour change). `restricted` blocks private/link-local/loopback/metadata ranges and optional `GRAPHYN_HTTP_EGRESS_ALLOWLIST`. ASR/LLM keep provider clients (documented; not wired). See `docs/TRUST_MODEL.md`.
+`http_request` / `http_webhook` share `app/core/trust/egress.py`. **Update F19:** default is now `restricted` (SSRF-safe, IP-pinned, redirects re-checked; trusted internal targets via `GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW`); LLM providers, URL ingest, SMTP and S3 endpoints are wired too. Original note: default `GRAPHYN_HTTP_EGRESS_MODE=trusted`. `restricted` blocks private/link-local/loopback/metadata ranges and optional `GRAPHYN_HTTP_EGRESS_ALLOWLIST`. ASR/LLM keep provider clients (documented; not wired). See `docs/TRUST_MODEL.md`.
 
 ### (resolved 2026-09-07) SEC-001 plugin source allowlist prefix matching
 

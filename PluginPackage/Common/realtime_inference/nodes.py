@@ -23,6 +23,7 @@ import warnings
 from pathlib import Path
 from typing import ClassVar, Literal
 from pydantic import Field
+import pydantic
 
 import numpy as np
 
@@ -63,7 +64,7 @@ class RealtimeInferenceNode(Node):
             "Supports classification, wake word, streaming ASR, and adaptive frame-skipping."
         ),
         category="Inference",
-        version="1.1.0",
+        version="1.2.0",
         tags=["ml", "inference", "tflite", "pytorch", "onnx", "realtime", "streaming", "common"],
         requires_gpu=False,
         supports_cpu=True,
@@ -95,8 +96,26 @@ class RealtimeInferenceNode(Node):
 
     class Config(NodeConfig):
         model_path: str = Field(default="", title="Model path", description="Model file to run (.tflite, .pt or .onnx); its labels.txt must be in the same folder.")
-        backend: Literal["tflite", "pytorch", "onnx", "ultralytics", "tflm_host", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: tflite, pytorch, onnx, ultralytics, tflm_host, auto.")
-        mode: Literal["classification", "wake_word", "streaming_asr", "detect", "segment"] = Field(default='classification', title="Mode", description="classification | wake_word | streaming_asr (detect / segment currently behave like classification).")
+        backend: Literal["tflite", "pytorch", "onnx", "tflm_host", "auto"] = Field(default='auto', title="Backend", description="tflite, pytorch (TorchScript), onnx, tflm_host (TFLite interpreter on host), or auto (from the model file extension: .tflite / .pt / .pth / .onnx). Every backend scores audio feature inputs.")
+        mode: Literal["classification", "wake_word", "streaming_asr"] = Field(default='classification', title="Mode", description="classification = top-1 label per input; wake_word = flag when the top-1 probability reaches the threshold; streaming_asr = average probabilities over a buffer of inputs.")
+
+        @pydantic.model_validator(mode="before")
+        @classmethod
+        def _route_removed_options(cls, data):
+            """F19 (F-18): vision-only options are not offered for audio inference."""
+            if isinstance(data, dict):
+                if str(data.get("backend") or "").lower() == "ultralytics":
+                    raise ValueError(
+                        "backend 'ultralytics' runs vision (image) models and cannot score audio "
+                        "features. Export the model to .tflite / .onnx / TorchScript and use that "
+                        "backend, or use a vision pipeline node for images."
+                    )
+                if str(data.get("mode") or "").lower() in ("detect", "segment"):
+                    raise ValueError(
+                        f"mode '{data.get('mode')}' is a vision task; realtime_inference scores audio "
+                        "features (classification, wake_word, streaming_asr)."
+                    )
+            return data
         wake_word_threshold: float = Field(default=0.8, ge=0, le=1, title="Wake-word threshold", description="Top-1 probability threshold in [0, 1]; higher = fewer false accepts.")
         batch_size: int = Field(default=1, ge=1, title="Batch size", description="Informational: inputs are run one at a time (batch 1).")
         adaptive: bool = Field(default=False, title="Adaptive", description="Randomly skip a fraction (adaptive_skip_ratio) of inputs; seeded by the node seed (On/Off).")
@@ -176,13 +195,13 @@ class RealtimeInferenceNode(Node):
             self._setup_pytorch(model_path)
         elif self._backend == "onnx":
             self._setup_onnx(model_path)
-        elif self._backend in ("ultralytics", "tflm_host"):
-            # Additive backends — defer to optional deps; keep audio path intact.
-            self._setup_additive_backend(model_path, self._backend)
+        elif self._backend == "tflm_host":
+            self._setup_tflite(model_path)
+            self._predict_fn = "tflm_host"
         else:
             raise ValueError(
                 f"RealtimeInferenceNode: unknown backend '{self._backend}'. "
-                "Must be 'tflite', 'pytorch', 'onnx', 'ultralytics', or 'tflm_host'."
+                "Must be 'tflite', 'pytorch', 'onnx', or 'tflm_host'."
             )
 
         log.info("RealtimeInferenceNode: loaded model from %s", model_path)
@@ -217,23 +236,6 @@ class RealtimeInferenceNode(Node):
             except OSError:
                 continue
         return path
-
-    def _setup_additive_backend(self, model_path: Path, backend: str) -> None:
-        """Load ultralytics / tflm_host when optional deps exist; else clear message."""
-        if backend == "ultralytics":
-            try:
-                from ultralytics import YOLO  # type: ignore
-            except ImportError as exc:
-                raise ImportError(
-                    "RealtimeInferenceNode: backend=ultralytics requires ultralytics. "
-                    "venv/bin/pip install ultralytics"
-                ) from exc
-            self._model = YOLO(str(model_path))
-            self._predict_fn = "ultralytics"
-            return
-        # tflm_host — reuse TFLite interpreter path
-        self._setup_tflite(model_path)
-        self._predict_fn = "tflm_host"
 
     def _setup_tflite(self, model_path: Path) -> None:
         """Load TFLite interpreter and allocate tensors."""
@@ -442,11 +444,8 @@ class RealtimeInferenceNode(Node):
                 probs = self._infer_pytorch(inp)
             elif self._backend == "onnx":
                 probs = self._infer_onnx(inp)
-            else:
-                raise NotImplementedError(
-                    f"RealtimeInferenceNode: backend '{self._backend}' cannot score audio "
-                    "FeatureArray inputs; use tflite, tflm_host, pytorch or onnx."
-                )
+            else:  # pragma: no cover - setup() rejects every other backend
+                raise ValueError(f"RealtimeInferenceNode: unsupported backend '{self._backend}'")
             elapsed_ms = (time.monotonic() - t0) * 1000
             log.debug("RealtimeInferenceNode: inference %.1f ms", elapsed_ms)
 

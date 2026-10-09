@@ -33,7 +33,7 @@ def get_me(request: Request):
 
     ident = resolve_identity(request)
     kind = ident.get("kind")
-    if kind == "user":
+    if kind in ("user", "agent"):
         roles = list(ident.get("roles") or [])
         perms = sorted(permissions_for(roles))
     elif kind == "worker":
@@ -51,9 +51,14 @@ def get_me(request: Request):
         "kind": kind,
         "auth_method": ident.get("auth_method"),
         "user_id": ident.get("user_id"),
+        "agent_id": ident.get("agent_id"),
+        "agent_slug": ident.get("agent_slug"),
         "credential_id": ident.get("credential_id"),
         "roles": roles,
         "approver_roles": list(ident.get("approver_roles") or []),
         "permissions": perms,
         "memberships": dict(ident.get("memberships") or {}),
+        "org_id": ident.get("org_id"),
+        "org_role": ident.get("org_role"),
+        "orgs": list(ident.get("orgs") or []),
     }

@@ -69,26 +69,6 @@ export const paths = {
 
   libraryPlugins: () => '/library/plugins',
 
-  /** Removed — Library Artifacts UI deleted; use Runs → Run outputs / Lineage. */
-  libraryArtifacts: (_q?: { artifactId?: string }): never => {
-    throw new Error(
-      'paths.libraryArtifacts removed — use paths.runPanel(workspaceId, runId, "outputs"|"lineage")',
-    )
-  },
-
-  /** Removed global Models/Ship — use paths.models / paths.ship with a workspace id. */
-  libraryModels: (): never => {
-    throw new Error('paths.libraryModels removed — use paths.models(workspaceId)')
-  },
-
-  deployShip: (): never => {
-    throw new Error('paths.deployShip removed — use paths.ship(workspaceId)')
-  },
-
-  deployShipDevices: (): never => {
-    throw new Error('paths.deployShipDevices removed — use paths.shipDevices(workspaceId)')
-  },
-
   deployWorkers: () => '/deploy/workers',
 
   deployQueue: () => '/deploy/workers/queue',

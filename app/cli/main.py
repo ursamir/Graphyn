@@ -51,10 +51,23 @@ from app.models.serializers import register_builtin_serializers as _reg_serializ
 _reg_serializers()
 
 # ── Registry initialization ───────────────────────────────────────────────────
-# Explicitly populate the NodeRegistry singleton after the domain serializer
-# is registered so node imports that reference AudioSample work correctly.
+# F19 / F-25: the NodeRegistry (PluginManager install/load, possibly minutes of
+# isolated-venv work) is populated lazily in main() *after* argument parsing, so
+# ``graphyn --help`` / ``graphyn <cmd> --help`` / argument errors return
+# instantly and commands that never touch nodes don't pay for it.
 from app.core.nodes import initialize_registry as _init_registry
-_init_registry()
+
+# Top-level commands that never resolve node types.
+_REGISTRY_FREE_COMMANDS = frozenset({"runs", "secrets", "data", "users"})
+
+
+def _needs_registry(args) -> bool:
+    cmd = getattr(args, "command", None)
+    if not cmd or cmd in _REGISTRY_FREE_COMMANDS:
+        return False
+    if cmd == "nodes" and getattr(args, "api_url", None):
+        return False  # remote listing reads the server's registry
+    return True
 
 
 from app.cli.cmd_artifacts import (
@@ -745,6 +758,8 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
     _apply_global_env(args)
+    if _needs_registry(args):
+        _init_registry()
 
     # Optional remote mode for low-risk list commands
     if getattr(args, "api_url", None) and getattr(args, "command", None) == "nodes":

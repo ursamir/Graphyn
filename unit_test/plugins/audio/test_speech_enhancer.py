@@ -86,3 +86,19 @@ def test_process_output_shape_preserved(installed_cls, make_audio_sample):
     sample = make_audio_sample(sr=16000, n=8000)
     result = node.process({"input": [sample]})
     assert result["output"][0].sample_rate == 16000
+
+
+def test_output_is_plain_ndarray_not_memmap(installed_cls, make_audio_sample, monkeypatch, tmp_path):
+    """Isolated runs refuse numpy.memmap payloads; the denoiser may return one."""
+    import numpy as np
+    node = installed_cls(config={"backend": "spectral", "denoise": True}, seed=0)
+    node.setup()
+
+    def _fake_denoise(y, sr):
+        mm = np.memmap(tmp_path / "denoised.dat", dtype=np.float32, mode="w+", shape=y.shape)
+        mm[:] = y
+        return mm
+
+    monkeypatch.setattr(node, "_denoise_spectral", _fake_denoise)
+    out = node.process({"input": [make_audio_sample()]})["output"][0]
+    assert type(out.data) is np.ndarray

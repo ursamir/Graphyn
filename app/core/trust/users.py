@@ -35,12 +35,12 @@ from typing import Any, Iterable
 
 ROLE_NAMES: tuple[str, ...] = ("admin", "operator", "builder", "approver", "auditor", "viewer")
 PROJECT_ROLES: tuple[str, ...] = ("owner", "builder", "approver", "viewer")
-CREDENTIAL_KINDS: tuple[str, ...] = ("session", "api", "worker")
+CREDENTIAL_KINDS: tuple[str, ...] = ("session", "api", "worker", "agent")
 
 _USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
 _LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
-_TOKEN_RE = re.compile(r"^gx(?P<kind>[suwj])_(?P<id>[a-f0-9]{16})_(?P<secret>[A-Za-z0-9_-]{32,})$")
-_KIND_PREFIX = {"session": "s", "api": "u", "worker": "w", "join": "j"}
+_TOKEN_RE = re.compile(r"^gx(?P<kind>[suwja])_(?P<id>[a-f0-9]{16})_(?P<secret>[A-Za-z0-9_-]{32,})$")
+_KIND_PREFIX = {"session": "s", "api": "u", "worker": "w", "join": "j", "agent": "a"}
 _PREFIX_KIND = {v: k for k, v in _KIND_PREFIX.items()}
 
 SESSION_TTL_S = 12 * 3600
@@ -124,8 +124,13 @@ class User:
     created_by: str | None
     last_login_at: float | None
     memberships: dict[str, str] = field(default_factory=dict)
+    email: str | None = None
+    oidc_issuer: str | None = None
+    oidc_sub: str | None = None
+    has_password: bool = True
 
     def public(self) -> dict[str, Any]:
+        auth_provider = "oidc" if self.oidc_sub else "local"
         return {
             "id": self.id,
             "username": self.username,
@@ -137,6 +142,9 @@ class User:
             "created_by": self.created_by,
             "last_login_at": _iso(self.last_login_at),
             "memberships": dict(self.memberships),
+            "email": self.email,
+            "auth_provider": auth_provider,
+            "has_password": bool(self.has_password),
         }
 
 
@@ -191,6 +199,7 @@ class JoinToken:
     created_by: str | None
     note: str
     workers: list[str]
+    org_id: str | None = None
 
     @property
     def active(self) -> bool:
@@ -211,6 +220,7 @@ class JoinToken:
             "note": self.note,
             "workers": list(self.workers),
             "active": self.active,
+            "org_id": self.org_id,
         }
 
 
@@ -348,6 +358,7 @@ class UserStore:
         self._lock = threading.RLock()
         with self._conn() as c:
             c.executescript(_SCHEMA)
+            self._migrate_schema(c)
         try:
             os.chmod(self.path, 0o600)
         except OSError:
@@ -362,8 +373,28 @@ class UserStore:
 
     # ── users ──────────────────────────────────────────────────────────────
 
+    def _migrate_schema(self, c: sqlite3.Connection) -> None:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(users)")}
+        if "email" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN email TEXT")
+        if "oidc_issuer" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN oidc_issuer TEXT")
+        if "oidc_sub" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN oidc_sub TEXT")
+        c.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS users_oidc_sub ON users(oidc_issuer, oidc_sub)"
+            " WHERE oidc_sub IS NOT NULL AND oidc_issuer IS NOT NULL"
+        )
+
+    def _row_get(self, row: sqlite3.Row, key: str, default: Any = None) -> Any:
+        try:
+            return row[key]
+        except (IndexError, KeyError):
+            return default
+
     def _user_from_row(self, row: sqlite3.Row, c: sqlite3.Connection) -> User:
         mem = {r["project"]: r["role"] for r in c.execute("SELECT project, role FROM memberships WHERE user_id=?", (row["id"],))}
+        pw = self._row_get(row, "password_hash")
         return User(
             id=row["id"],
             username=row["username"],
@@ -375,6 +406,10 @@ class UserStore:
             created_by=row["created_by"],
             last_login_at=row["last_login_at"],
             memberships=mem,
+            email=(self._row_get(row, "email") or None) or None,
+            oidc_issuer=(self._row_get(row, "oidc_issuer") or None) or None,
+            oidc_sub=(self._row_get(row, "oidc_sub") or None) or None,
+            has_password=bool(pw),
         )
 
     def has_users(self) -> bool:
@@ -429,6 +464,16 @@ class UserStore:
                 raise UserStoreError(f"User '{uname}' already exists", 409, "conflict")
         user = self.get_user(uid)
         assert user is not None
+        try:
+            from app.core.trust.orgs import DEFAULT_ORG_ID, ensure_tenancy_migrated, get_org_store
+
+            ensure_tenancy_migrated(get_org_store())
+            role = "owner" if "admin" in (user.roles or []) else "member"
+            get_org_store().set_membership(DEFAULT_ORG_ID, user.id, role, added_by=created_by or "user.create")
+            if not get_org_store().get_user_active_org_id(user.id):
+                get_org_store().set_user_active_org(user.id, DEFAULT_ORG_ID)
+        except Exception:
+            pass
         return user
 
     def _active_admin_ids(self, c: sqlite3.Connection) -> set[str]:
@@ -496,10 +541,144 @@ class UserStore:
             if row is None:
                 verify_password(password, hash_password("x" * MIN_PASSWORD_LEN))  # equalise timing
                 return None
-            if row["disabled"] or not verify_password(password, row["password_hash"] or ""):
+            pw_hash = row["password_hash"] or ""
+            if row["disabled"] or not pw_hash or not verify_password(password, pw_hash):
                 return None
             c.execute("UPDATE users SET last_login_at=? WHERE id=?", (time.time(), row["id"]))
             return self._user_from_row(row, c)
+
+    def get_user_by_oidc(self, issuer: str, sub: str) -> User | None:
+        iss = str(issuer or "").strip().rstrip("/")
+        sid = str(sub or "").strip()
+        if not iss or not sid:
+            return None
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT * FROM users WHERE oidc_issuer=? AND oidc_sub=?",
+                (iss, sid),
+            ).fetchone()
+            return self._user_from_row(row, c) if row else None
+
+    def upsert_oidc_user(
+        self,
+        *,
+        issuer: str,
+        sub: str,
+        username: str,
+        display_name: str = "",
+        email: str = "",
+        default_roles: Iterable[str] = ("viewer",),
+        auto_provision: bool = True,
+    ) -> User:
+        """Find or create a user bound to an OIDC subject.
+
+        First user on an empty store becomes admin (bootstrap). Username
+        collisions with a different unbound local account are refused.
+        """
+        iss = str(issuer or "").strip().rstrip("/")
+        sid = str(sub or "").strip()
+        if not iss or not sid:
+            raise UserStoreError("OIDC issuer and sub are required", 400, "validation_failed")
+        existing = self.get_user_by_oidc(iss, sid)
+        if existing is not None:
+            if existing.disabled:
+                raise UserStoreError("Account disabled", 403, "disabled")
+            with self._lock, self._conn() as c:
+                c.execute(
+                    "UPDATE users SET last_login_at=?, display_name=COALESCE(NULLIF(?, ''), display_name),"
+                    " email=COALESCE(NULLIF(?, ''), email) WHERE id=?",
+                    (time.time(), str(display_name or "").strip()[:128], str(email or "").strip()[:256], existing.id),
+                )
+            user = self.get_user(existing.id)
+            assert user is not None
+            return user
+
+        uname = str(username or "").strip().lower()
+        if not _USERNAME_RE.match(uname):
+            raise UserStoreError("OIDC username is not a valid Graphyn username", 400, "validation_failed")
+        by_name = self.get_user_by_username(uname)
+        if by_name is not None:
+            if by_name.oidc_sub and (by_name.oidc_issuer != iss or by_name.oidc_sub != sid):
+                raise UserStoreError(
+                    f"Username '{uname}' is already linked to another identity provider account",
+                    409,
+                    "conflict",
+                )
+            if by_name.oidc_sub is None and by_name.has_password:
+                # Link local account to this OIDC subject (same username).
+                if by_name.disabled:
+                    raise UserStoreError("Account disabled", 403, "disabled")
+                with self._lock, self._conn() as c:
+                    c.execute(
+                        "UPDATE users SET oidc_issuer=?, oidc_sub=?, email=COALESCE(NULLIF(?, ''), email),"
+                        " display_name=COALESCE(NULLIF(?, ''), display_name), last_login_at=? WHERE id=?",
+                        (iss, sid, str(email or "").strip()[:256], str(display_name or "").strip()[:128], time.time(), by_name.id),
+                    )
+                user = self.get_user(by_name.id)
+                assert user is not None
+                return user
+            raise UserStoreError(f"Username '{uname}' already exists", 409, "conflict")
+
+        if not auto_provision:
+            raise UserStoreError(
+                "No Graphyn account is linked to this SSO identity — ask an admin to create one",
+                403,
+                "not_provisioned",
+            )
+
+        # First human on an empty store is admin so OIDC-only deploys can bootstrap.
+        if not self.has_users():
+            role_list = ["admin"]
+        else:
+            role_list = _clean_roles(default_roles, ROLE_NAMES) or ["viewer"]
+
+        # Username taken mid-flight: append short subject hash.
+        candidate = uname
+        for _ in range(6):
+            if self.get_user_by_username(candidate) is None:
+                break
+            suffix = hashlib.sha256(f"{iss}:{sid}".encode()).hexdigest()[:6]
+            candidate = f"{uname[:57]}-{suffix}"[:64]
+        else:
+            raise UserStoreError("Could not allocate a unique username for SSO user", 409, "conflict")
+
+        uid = "u_" + uuid.uuid4().hex[:12]
+        with self._lock, self._conn() as c:
+            try:
+                c.execute(
+                    "INSERT INTO users (id, username, display_name, password_hash, roles, approver_roles,"
+                    " created_at, created_by, email, oidc_issuer, oidc_sub, last_login_at)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        uid,
+                        candidate,
+                        str(display_name or "").strip()[:128] or candidate,
+                        None,
+                        json.dumps(role_list),
+                        json.dumps([]),
+                        time.time(),
+                        f"oidc:{iss}",
+                        str(email or "").strip()[:256] or None,
+                        iss,
+                        sid,
+                        time.time(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise UserStoreError("OIDC user conflict", 409, "conflict") from exc
+        self._has_users = True
+        user = self.get_user(uid)
+        assert user is not None
+        try:
+            from app.core.trust.orgs import DEFAULT_ORG_ID, ensure_tenancy_migrated, get_org_store
+
+            ensure_tenancy_migrated(get_org_store())
+            role = "owner" if "admin" in (user.roles or []) else "member"
+            get_org_store().set_membership(DEFAULT_ORG_ID, user.id, role, added_by=f"oidc:{iss}")
+            get_org_store().set_user_active_org(user.id, DEFAULT_ORG_ID)
+        except Exception:
+            pass
+        return user
 
     # ── memberships ────────────────────────────────────────────────────────
 
@@ -574,6 +753,10 @@ class UserStore:
             raise UserStoreError("user_id is required")
         if kind == "worker" and not worker_id:
             raise UserStoreError("worker_id is required")
+        if kind == "agent":
+            aid = (meta or {}).get("agent_id") if meta else None
+            if not aid:
+                raise UserStoreError("meta.agent_id is required for agent credentials")
         tid, secret, token = _new_token(kind)
         now = time.time()
         expires = now + float(ttl_s) if ttl_s else None
@@ -674,6 +857,7 @@ class UserStore:
             created_by=r["created_by"],
             note=r["note"] or "",
             workers=json.loads(r["workers"] or "[]"),
+            org_id=(r["org_id"] if "org_id" in r.keys() else None),
         )
 
     def create_join_token(
@@ -686,6 +870,7 @@ class UserStore:
         max_uses: int = 1,
         created_by: str | None = None,
         note: str = "",
+        org_id: str | None = None,
     ) -> tuple[str, JoinToken]:
         if not 60 <= float(ttl_s) <= 7 * 86400:
             raise UserStoreError("ttl_s must be between 60 s and 7 days")
@@ -697,22 +882,43 @@ class UserStore:
         tid, secret, token = _new_token("join")
         now = time.time()
         with self._lock, self._conn() as c:
-            c.execute(
-                "INSERT INTO join_tokens (id, secret_hash, pool, labels, allowed_plugins, max_uses, created_at, expires_at, created_by, note)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (
-                    tid,
-                    _secret_hash(secret),
-                    pool_clean[0] if pool_clean else None,
-                    json.dumps(lab),
-                    json.dumps(plugins) if plugins is not None else None,
-                    int(max_uses),
-                    now,
-                    now + float(ttl_s),
-                    created_by,
-                    str(note or "").strip()[:256],
-                ),
-            )
+            # org_id column added by OrgStore migration; tolerate older DBs.
+            cols = {r[1] for r in c.execute("PRAGMA table_info(join_tokens)")}
+            if "org_id" in cols:
+                c.execute(
+                    "INSERT INTO join_tokens (id, secret_hash, pool, labels, allowed_plugins, max_uses, created_at, expires_at, created_by, note, org_id)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        tid,
+                        _secret_hash(secret),
+                        pool_clean[0] if pool_clean else None,
+                        json.dumps(lab),
+                        json.dumps(plugins) if plugins is not None else None,
+                        int(max_uses),
+                        now,
+                        now + float(ttl_s),
+                        created_by,
+                        str(note or "").strip()[:256],
+                        (org_id or "").strip() or None,
+                    ),
+                )
+            else:
+                c.execute(
+                    "INSERT INTO join_tokens (id, secret_hash, pool, labels, allowed_plugins, max_uses, created_at, expires_at, created_by, note)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        tid,
+                        _secret_hash(secret),
+                        pool_clean[0] if pool_clean else None,
+                        json.dumps(lab),
+                        json.dumps(plugins) if plugins is not None else None,
+                        int(max_uses),
+                        now,
+                        now + float(ttl_s),
+                        created_by,
+                        str(note or "").strip()[:256],
+                    ),
+                )
             row = c.execute("SELECT * FROM join_tokens WHERE id=?", (tid,)).fetchone()
         return token, self._join_from_row(row)
 
@@ -837,6 +1043,16 @@ class UserStore:
             )
         return self.revoke_worker_credentials(worker_id)
 
+    def update_credential_meta(self, credential_id: str, meta: dict[str, Any]) -> None:
+        with self._lock, self._conn() as c:
+            row = c.execute("SELECT meta FROM credentials WHERE id=?", (credential_id,)).fetchone()
+            if row is None:
+                raise UserStoreError("Credential not found", 404, "not_found")
+            c.execute(
+                "UPDATE credentials SET meta=? WHERE id=?",
+                (json.dumps(meta, separators=(",", ":")), credential_id),
+            )
+
 
 _STORE: UserStore | None = None
 _STORE_PATH: Path | None = None
@@ -859,6 +1075,18 @@ def reset_user_store() -> None:
     with _STORE_LOCK:
         _STORE = None
         _STORE_PATH = None
+    try:
+        from app.core.trust.orgs import reset_org_store
+
+        reset_org_store()
+    except Exception:
+        pass
+    try:
+        from app.core.trust.metering import reset_meter_store
+
+        reset_meter_store()
+    except Exception:
+        pass
 
 
 def users_configured() -> bool:

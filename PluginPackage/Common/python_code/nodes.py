@@ -112,6 +112,48 @@ def _safe_import_factory(modules: dict[str, Any]):
     return _import
 
 
+
+class TableRows(list):
+    """Rows of an upstream table result (e.g. ``csv_table``'s ``CsvTableResult``).
+
+    User code expects ``for r in inputs["input"]`` to yield row dicts, but
+    iterating a pydantic model yields ``(field, value)`` tuples. This list holds
+    the rows and still answers attribute reads (``.rows``, ``.row_count``,
+    ``.metadata``…) from the original result, so older code keeps working.
+    """
+
+    def __init__(self, source: Any, rows: list) -> None:
+        super().__init__(rows)
+        self.__dict__["_source"] = source
+
+    def __getattr__(self, name: str) -> Any:
+        source = self.__dict__.get("_source")
+        if source is None or name.startswith("__"):
+            raise AttributeError(name)
+        return getattr(source, name)
+
+
+def _row_dicts(rows: list) -> list:
+    out = []
+    for item in rows:
+        if hasattr(item, "model_dump"):
+            item = item.model_dump(mode="python")
+        out.append(item)
+    return out
+
+
+def _present_input(value: Any) -> Any:
+    """Hand user code plain rows for table-shaped results (F-06 payload contract)."""
+    if not hasattr(value, "model_dump") or isinstance(value, (dict, list)):
+        return value
+    rows = getattr(value, "rows", None)
+    if isinstance(rows, list):
+        return TableRows(value, _row_dicts(rows))
+    data = getattr(value, "data", None)
+    if isinstance(data, list):
+        return TableRows(value, _row_dicts(data))
+    return value
+
 class RestrictedCodeError(RuntimeError):
     pass
 
@@ -166,6 +208,19 @@ def _validate_source(tree: ast.AST, *, allow_network: bool, allowed_paths: list[
             raise RestrictedCodeError(f"Attribute .{node.attr} is not allowed in python_code.")
         if isinstance(node, ast.Name) and node.id in {"__builtins__", "__loader__", "__spec__", "__import__"}:
             raise RestrictedCodeError(f"Name {node.id!r} is not allowed.")
+
+
+_SAFE_EXCEPTIONS: dict[str, type] = {
+    exc.__name__: exc
+    for exc in (
+        BaseException, Exception, ArithmeticError, AssertionError, AttributeError,
+        EOFError, FloatingPointError, IndexError, KeyError, LookupError,
+        NotImplementedError, OverflowError, RecursionError, RuntimeError,
+        StopIteration, TypeError, UnicodeDecodeError, UnicodeEncodeError, UnicodeError,
+        ValueError, ZeroDivisionError, TimeoutError,
+    )
+}
+_SAFE_EXCEPTIONS["RestrictedCodeError"] = RestrictedCodeError
 
 
 def _safe_open(allowed_paths: list[str]):
@@ -254,7 +309,17 @@ class PythonCodeNode(Node):
             "str": str, "sum": sum, "tuple": tuple, "zip": zip, "isinstance": isinstance,
             "None": None, "True": True, "False": False,
             "print": print,
+            # F19 (F-24): pure helpers user code routinely needs.
+            "map": map, "filter": filter, "next": next, "iter": iter,
+            "divmod": divmod, "pow": pow, "ord": ord, "chr": chr, "format": format,
+            "bytes": bytes, "frozenset": frozenset, "callable": callable,
+            "issubclass": issubclass, "hash": hash, "slice": slice,
         }
+        # F19 (F-24): standard exception types so ``raise ValueError(...)`` /
+        # ``except KeyError:`` / ``class MyError(ValueError)`` work. They carry
+        # no capability; dunder/private attribute access stays AST-blocked.
+        safe_builtins.update(_SAFE_EXCEPTIONS)
+        safe_builtins["__build_class__"] = builtins.__build_class__
         if allowed_paths:
             safe_builtins["open"] = _safe_open(allowed_paths)
         safe_json = _safe_json_namespace()
@@ -263,7 +328,11 @@ class PythonCodeNode(Node):
 
         ns: dict[str, Any] = {
             "__builtins__": safe_builtins,
-            "inputs": inputs if isinstance(inputs, dict) else {"input": inputs},
+            "__name__": "python_code",
+            "inputs": {
+                k: _present_input(v)
+                for k, v in (inputs if isinstance(inputs, dict) else {"input": inputs}).items()
+            },
             "config": {
                 "source": None,
                 "allowed_paths": list(allowed_paths),
@@ -284,4 +353,6 @@ class PythonCodeNode(Node):
             result = ns.get("output")
         if isinstance(result, dict) and set(result.keys()) <= {"output"} | set(result.keys()) and "output" in result and len(result) == 1:
             result = result["output"]
+        if isinstance(result, TableRows):
+            result = list(result)  # plain list downstream (cache / JSON / pickle)
         return {"output": CodeResult(data=result, metadata={})}

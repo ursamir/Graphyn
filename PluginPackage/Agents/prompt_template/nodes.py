@@ -114,9 +114,12 @@ def _render_jinja(template: str, variables: dict) -> str:
 
 
 def _variables(inputs: dict) -> dict:
+    from app.core.nodes.payload import unwrap_payload
+
     raw = inputs.get("variables")
     if raw is None:
         raw = inputs.get("input")
+    raw = unwrap_payload(raw)  # F19 (F-06): payload, not the upstream wrapper
     data = _dump(raw)
     if data is None:
         return {}

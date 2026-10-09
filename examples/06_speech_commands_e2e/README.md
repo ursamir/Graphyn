@@ -50,11 +50,11 @@ venv/bin/python examples/06_speech_commands_e2e/run_infer.py \
 
 Training is split into two sequential phases.
 
-### Phase 1 — Data Preprocessing (template Step 1: one run for all six labels; CLI: 6× — once per label)
+### Phase 1 — Data Preprocessing (one run for all six labels — template Step 1, `pipeline_preprocess.graph.json` and `run_preprocess.sh` are the same graph)
 
 ```
-dataset_ingest(data/{label}/)
-    │  Load 200 WAV clips
+dataset_ingest(workspace/datasets/input/speech-commands, recursive=True)
+    │  Load 6 × 200 WAV clips; the label is the folder name
     ▼
 audio_conditioner
     │  Resample to 16 kHz, mono, DC removal, trim edges quieter than peak-40 dB,
@@ -72,10 +72,11 @@ augmentation_pipeline
     │  pitch_shift ±2 semitones + time_stretch 0.9×–1.1× (both always applied)
     │  copies_per_sample=2 → original + 2 copies = 3× samples
     ▼
-audio_exporter(workspace/artifacts/speech-commands/dataset/speech_commands, v1)
+audio_exporter(workspace/datasets/output/audio_export, v1)
     │  Writes WAV files split 70/15/15 train/val/test, one split per source
     │  clip (group_by_source) so augmented copies never leak into test
-    └─ "yes" runs with append=false (fresh v1), the other five with append=true
+    └─ Versions are immutable: when v1 exists the run writes the next free
+       version (v2, v3, …); `latest` resolves to the newest
 ```
 
 ### Phase 2 — Feature Extraction + Training (runs once)
@@ -83,7 +84,7 @@ audio_exporter(workspace/artifacts/speech-commands/dataset/speech_commands, v1)
 Uses explicit edge routing because `trainer` and `evaluator` have named input ports.
 
 ```
-dataset_ingest(workspace/artifacts/speech-commands/dataset/speech_commands/v1, recursive=True)
+dataset_ingest(workspace/datasets/output/audio_export/latest, recursive=True)
     │  Load all preprocessed WAV files. If Phase 1 has not run the ingest
     │  fails with "has not been produced yet" — set
     │  GRAPHYN_INGEST_EXAMPLE_FALLBACK=1 to train on the bundled raw clips
@@ -136,14 +137,17 @@ The example is a two-template group (`metadata.group = "speech-commands-e2e"`):
 
 | Step | Template id | Graph |
 |---|---|---|
-| 1 · Prepare dataset | `speech-commands-e2e-prepare` | `examples/templates/speech-commands-e2e-prepare.graph.json` — all six labels in one run (recursive ingest of `workspace/datasets/input/speech-commands`), writes `workspace/artifacts/speech-commands/dataset/speech_commands/v1` |
+| 1 · Prepare dataset | `speech-commands-e2e-prepare` | `examples/templates/speech-commands-e2e-prepare.graph.json` — all six labels in one run (recursive ingest of `workspace/datasets/input/speech-commands`), writes the next free version under `workspace/datasets/output/audio_export/` (`latest` resolves to the newest) |
 | 2 · Train model | `ex-06-speech-commands-e2e` | `pipeline_train_ml.graph.json` — reads that dataset, trains, evaluates, exports INT8 TFLite |
 
-Run Step 1, then Step 2. Re-running Step 1 replaces the dataset (`append=false`).
+Run Step 1, then Step 2. Re-running Step 1 writes a new dataset version (versions
+referenced by runs are immutable); Step 2 always reads `latest`.
 Picking a workspace in the console does **not** move Step 1's output: exporters
 that write a `workspace/artifacts/<slug>/dataset/...` hand-off folder are left
-alone by the project stamp. The six `pipeline_preprocess*.graph.json` shards
-(one label each, chained with `append=true`) remain for the CLI scripts.
+alone by the project stamp. `pipeline_preprocess.graph.json` is the same
+all-labels graph for the CLI. (Earlier per-label shards chained with
+`append=true` were removed: appending to a version that runs already reference
+is refused, so they failed on every re-run.)
 
 Every model folder gets a `labels.txt` in the model's class-index order
 (alphabetical: `down, go, no, stop, up, yes`) — deploy from that file, not from
@@ -156,7 +160,7 @@ limitations: [`docs/EXAMPLE_06_COVERAGE.md`](../../docs/EXAMPLE_06_COVERAGE.md).
 
 - Two-phase pipeline execution (preprocessing + training as separate pipelines)
 - Explicit edge routing for multi-port nodes (`trainer.model`, `trainer.dataset`, `evaluator.model_artifact`, `evaluator.dataset`)
-- `audio_exporter` with `append=True` — accumulating outputs from 6 separate pipeline runs into one dataset
+- `audio_exporter` immutable dataset versions — every Phase 1 run writes a new version, Phase 2 reads `latest`
 - `feature_config.json` written by training, read by inference — ensuring feature consistency
 - `edge_optimizer` with INT8 quantisation for TFLite export
 
@@ -182,10 +186,12 @@ workspace/artifacts/speech-commands/
     └── labels.txt
 ```
 
-**Dataset ingest is unchanged.** Phase 2 still reads preprocessed WAVs from
-`examples/06_speech_commands_e2e/output/dataset/speech_commands/v1/` (written by
-Phase 1). CLI `run_train.py` also still writes under `examples/06_speech_commands_e2e/output/`
-when run on the host; that legacy tree is listed by the download API when files exist.
+**Dataset hand-off.** The graphs (console, `run_preprocess.sh`, `run_train_ml.sh`)
+pass the dataset through `workspace/datasets/output/audio_export/` (Phase 2 reads
+`latest`, i.e. the newest version). The SDK
+script `run_train.py` is self-contained: it clears and writes
+`examples/06_speech_commands_e2e/output/` (dataset v1 plus the CLI artifacts below);
+that tree is listed by the download API when files exist.
 
 ```
 examples/06_speech_commands_e2e/output/   # Phase 1 dataset + legacy CLI artifacts

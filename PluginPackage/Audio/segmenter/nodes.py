@@ -31,7 +31,7 @@ class SegmenterNode(Node):
         "silence"      — split on silence gaps (librosa.effects.split)
         "vad"          — Voice Activity Detection via webrtcvad
         "event"        — energy-threshold event detection
-        "speaker_turn" — placeholder (requires speaker_separator upstream)
+        "speaker_turn" — offline diarization (or upstream speaker_segments)
 
     All modes:
     - Filter segments shorter than min_segment_ms or longer than max_segment_ms
@@ -55,11 +55,11 @@ class SegmenterNode(Node):
         label="Segmenter",
         description=(
             "Semantic audio segmentation: fixed windows, silence-based, "
-            "VAD, energy-event detection, and speaker-turn placeholder."
+            "VAD, energy-event detection, and speaker turns (offline diarization)."
         ),
         category="Processing",
-        version="1.1.0",
-        tags=["audio", "segmentation", "vad", "preprocessing", "event"],
+        version="1.2.0",
+        tags=["audio", "segmentation", "vad", "preprocessing", "event", "diarization"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -88,7 +88,7 @@ class SegmenterNode(Node):
     }
 
     class Config(NodeConfig):
-        mode: Literal["fixed", "silence", "vad", "event", "speaker_turn"] = Field(default='fixed', title="Mode", description="How clips are cut. fixed = sliding windows; silence = split on silent gaps (a clip can yield several segments); vad = voice-activity detection (falls back to silence when unavailable); event = energy onsets; speaker_turn = speaker turns from upstream (falls back to silence).")
+        mode: Literal["fixed", "silence", "vad", "event", "speaker_turn"] = Field(default='fixed', title="Mode", description="How clips are cut. fixed = sliding windows; silence = split on silent gaps (a clip can yield several segments); vad = voice-activity detection (falls back to silence when unavailable); event = energy onsets; speaker_turn = who-spoke-when: uses upstream speaker segments when present, otherwise runs offline diarization (speaker embeddings + clustering).")
         window_ms: int = Field(default=1000, title="Window (ms)", description="Window length in milliseconds (fixed mode). Clips shorter than one window are emitted whole.")
         overlap: float = Field(default=0.0, title="Overlap", description="Fractional overlap in [0, 1). fixed: window overlap; silence/vad: each segment end is extended by this fraction of its length.")
         vad_aggressiveness: int = Field(default=2, title="VAD aggressiveness", description="Voice-activity detector strictness 0-3 (higher = filters out more non-speech).")
@@ -96,6 +96,10 @@ class SegmenterNode(Node):
         event_threshold_db: float = Field(default=-30.0, le=0, title="Event threshold (dB re peak)", description="Event mode: frames whose RMS is at least this many dB relative to the loudest frame (<= 0) are active.")
         event_min_gap_ms: int = Field(default=200, title="Event min gap (ms)", description="Event mode: an event ends after this much continuous inactivity (milliseconds).")
         min_segment_ms: int = Field(default=100, title="Min segment (ms)", description="Discard segments shorter than this (milliseconds). Must be < max_segment_ms.")
+        num_speakers: int = Field(default=0, ge=0, le=16, title="Speakers", description="speaker_turn: number of speakers in the recording. Set it when known (most accurate); 0 = estimate automatically, which can over-split a single voice.")
+        max_speakers: int = Field(default=4, ge=1, le=16, title="Max speakers", description="speaker_turn: upper bound when detecting the number of speakers automatically.")
+        diarization_window_ms: int = Field(default=1500, ge=250, le=10000, title="Speaker window (ms)", description="speaker_turn: analysis window per speaker decision (milliseconds).")
+        diarization_hop_ms: int = Field(default=750, ge=100, le=10000, title="Speaker hop (ms)", description="speaker_turn: step between analysis windows (milliseconds).")
         max_segment_ms: int = Field(default=30000, title="Max segment (ms)", description="Hard cap on segment length (milliseconds); longer spans are split into max-length chunks.")
 
         @pydantic.field_validator("overlap")
@@ -424,44 +428,193 @@ class SegmenterNode(Node):
             s, sample_intervals, extra_meta={"event_threshold_db": threshold_db}
         )
 
-    # ── speaker_turn placeholder ──────────────────────────────────────────────
+    # ── speaker_turn: offline diarization ─────────────────────────────────────
 
     def _segment_speaker_turn(self, s: AudioSample) -> list[AudioSample]:
-        """Speaker-turn segmentation placeholder.
+        """Speaker-turn segmentation (F19 / F-17).
 
-        Full implementation requires speaker_separator upstream (Phase 4).
-        Reads pre-computed speaker segments from metadata["speaker_segments"]
-        if available; otherwise falls back to silence-based segmentation with
-        a warning.
+        * Upstream diarization wins: ``metadata["speaker_segments"]`` (e.g. from
+          speaker_separator) is used as-is.
+        * Otherwise a real offline diarizer runs on the clip:
+          speech regions (silence split) → overlapping windows → per-window
+          speaker embedding (MFCC c1..c19 mean/std + delta std + YIN pitch stats,
+          CMVN-normalised)
+          → agglomerative clustering (cosine, average linkage; number of
+          speakers fixed by ``num_speakers`` or picked by silhouette up to
+          ``max_speakers``) → per-frame majority vote → contiguous turns.
         """
         speaker_segments = s.metadata.get("speaker_segments")
-
         if speaker_segments:
-            # Use pre-computed diarization from speaker_separator
-            y = s.data
-            sr = s.sample_rate
-            segments: list[AudioSample] = []
-            seg_id = 0
+            return self._emit_speaker_segments(s, speaker_segments, source="upstream")
+        turns, info = diarize_turns(
+            np.asarray(s.data, dtype=np.float32),
+            int(s.sample_rate),
+            top_db=float(self.config.silence_threshold_db),
+            window_s=self.config.diarization_window_ms / 1000.0,
+            hop_s=self.config.diarization_hop_ms / 1000.0,
+            num_speakers=int(self.config.num_speakers),
+            max_speakers=int(self.config.max_speakers),
+        )
+        return self._emit_speaker_segments(s, turns, source="offline", info=info)
 
-            for seg in speaker_segments:
-                start_s = float(seg.get("start", 0))
-                end_s = float(seg.get("end", len(y) / sr))
-                speaker_id = seg.get("speaker_id", "unknown")
+    def _emit_speaker_segments(
+        self, s: AudioSample, speaker_segments: list, *, source: str, info: dict | None = None
+    ) -> list[AudioSample]:
+        y = s.data
+        sr = s.sample_rate
+        segments: list[AudioSample] = []
+        seg_id = 0
+        for turn_idx, seg in enumerate(speaker_segments):
+            start_s = float(seg.get("start", 0))
+            end_s = float(seg.get("end", len(y) / sr))
+            speaker_id = seg.get("speaker_id", "unknown")
+            start_sample = int(start_s * sr)
+            end_sample = min(int(end_s * sr), len(y))
+            extra = {"speaker_id": speaker_id, "turn_index": turn_idx, "diarization": source}
+            if info:
+                extra["diarization_info"] = info
+            for a, b in self._bounded_spans(start_sample, end_sample, sr):
+                segments.append(self._make_segment(s, y[a:b], a, b, seg_id, extra_meta=extra))
+                seg_id += 1
+        return segments
 
-                start_sample = int(start_s * sr)
-                end_sample = min(int(end_s * sr), len(y))
-                for a, b in self._bounded_spans(start_sample, end_sample, sr):
-                    segments.append(self._make_segment(
-                        s, y[a:b], a, b, seg_id,
-                        extra_meta={"speaker_id": speaker_id},
-                    ))
-                    seg_id += 1
 
-            return segments
-        else:
-            log.warning(
-                "SegmenterNode: mode='speaker_turn' requires speaker_separator upstream "
-                "(Phase 4). No 'speaker_segments' found in metadata — "
-                "falling back to silence-based segmentation."
-            )
-            return self._segment_silence(s)
+# ── offline diarization (no network, no model download) ──────────────────────
+
+
+def _speaker_embeddings(y: np.ndarray, sr: int, spans: list[tuple[int, int]]) -> np.ndarray:
+    feats = []
+    for a, b in spans:
+        chunk = y[a:b]
+        mfcc = librosa.feature.mfcc(y=chunk, sr=sr, n_mfcc=20, n_fft=512, hop_length=160)
+        mfcc = mfcc[1:]  # drop c0 (loudness)
+        delta = librosa.feature.delta(mfcc, width=3) if mfcc.shape[1] >= 3 else np.zeros_like(mfcc)
+        try:
+            f0 = librosa.yin(chunk, fmin=60, fmax=400, sr=sr, frame_length=1024, hop_length=160)
+            voiced = f0[(f0 > 61) & (f0 < 399)]
+            pitch = np.array([np.log(np.median(voiced)) if voiced.size else 0.0,
+                              np.std(np.log(voiced)) if voiced.size > 1 else 0.0])
+        except Exception:
+            pitch = np.zeros(2)
+        feats.append(np.concatenate([mfcc.mean(axis=1), mfcc.std(axis=1), delta.std(axis=1), pitch * 3.0]))
+    return np.asarray(feats, dtype=np.float64)
+
+
+def _normalise(raw: np.ndarray) -> np.ndarray:
+    if len(raw) < 2:
+        return raw
+    return (raw - raw.mean(axis=0)) / (raw.std(axis=0) + 1e-8)
+
+
+def _fisher_separation(raw: np.ndarray, labels: np.ndarray) -> float:
+    """Mean per-dimension Fisher ratio between the two largest clusters (raw,
+    un-normalised MFCC means + pitch) — an absolute 'are these different
+    voices' check that per-file normalisation cannot inflate."""
+    ids, counts = np.unique(labels, return_counts=True)
+    if len(ids) < 2:
+        return 0.0
+    a_id, b_id = ids[np.argsort(-counts)[:2]]
+    cols = list(range(0, 19)) + [raw.shape[1] - 2]  # MFCC means + log-f0
+    a, b = raw[labels == a_id][:, cols], raw[labels == b_id][:, cols]
+    if len(a) < 2 or len(b) < 2:
+        return float("inf")  # cannot test; keep the split
+    scale = np.ones(len(cols))
+    scale[-1] = 20.0 / 3.0  # pitch column was pre-scaled ×3; weight like one MFCC band
+    diff = ((a.mean(axis=0) - b.mean(axis=0)) * scale) ** 2
+    var = (a.var(axis=0) + b.var(axis=0)) * scale**2 + 1e-6
+    return float(np.mean(diff / var))
+
+
+def _cluster(raw: np.ndarray, num_speakers: int, max_speakers: int) -> tuple[np.ndarray, dict]:
+    X = _normalise(raw)
+    from scipy.cluster.hierarchy import fcluster, linkage
+
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    n = len(X)
+    if n < 2 or np.allclose(X, X[0]) or np.any(np.linalg.norm(X, axis=1) < 1e-9):
+        return np.zeros(n, dtype=int), {"k": 1, "selection": "single_window"}
+    Z = linkage(X, method="average", metric="cosine")
+    if num_speakers > 0:
+        k = min(num_speakers, n)
+        return fcluster(Z, k, criterion="maxclust") - 1, {"k": k, "selection": "num_speakers"}
+    from sklearn.metrics import silhouette_score  # sklearn is in the base image
+
+    scored: list[tuple[int, float, np.ndarray]] = []
+    for k in range(2, min(max_speakers, n - 1) + 1):
+        labels = fcluster(Z, k, criterion="maxclust") - 1
+        if len(set(labels)) < 2:
+            continue
+        scored.append((k, float(silhouette_score(X, labels, metric="cosine")), labels))
+    best_k, best_score, best_labels = 1, -1.0, np.zeros(n, dtype=int)
+    if scored:
+        top = max(sc for _, sc, _ in scored)
+        # Parsimony: the fewest speakers whose separation is within 0.05 of the best.
+        best_k, best_score, best_labels = next(t for t in scored if t[1] >= top - 0.05)
+    two = next((lab for k, _, lab in scored if k == 2), None)
+    fisher = _fisher_separation(raw, two) if two is not None else 0.0
+    info = {"selection": "silhouette+fisher", "best_silhouette": round(best_score, 3),
+            "fisher_separation": round(fisher, 3) if np.isfinite(fisher) else None}
+    # Weak separation → a single speaker (do not invent turns).
+    if best_score < 0.12 or fisher < 1.0:
+        return np.zeros(n, dtype=int), {"k": 1, **info}
+    return best_labels, {"k": best_k, **info}
+
+
+def diarize_turns(
+    y: np.ndarray,
+    sr: int,
+    *,
+    top_db: float = 40.0,
+    window_s: float = 1.5,
+    hop_s: float = 0.75,
+    num_speakers: int = 0,
+    max_speakers: int = 4,
+) -> tuple[list[dict], dict]:
+    """Offline speaker diarization → ``([{start, end, speaker_id}], info)``."""
+    if y.ndim > 1:
+        y = y.mean(axis=0) if y.shape[0] < y.shape[-1] else y.mean(axis=1)
+    if len(y) == 0 or float(np.max(np.abs(y))) < 1e-4:
+        return [], {"k": 0, "windows": 0, "reason": "no audible signal"}
+    speech = [(int(a), int(b)) for a, b in librosa.effects.split(y, top_db=top_db)]
+    win, hop = max(1, int(window_s * sr)), max(1, int(hop_s * sr))
+    spans: list[tuple[int, int]] = []
+    for a, b in speech:
+        if b - a <= win:
+            if b - a >= int(0.25 * sr):
+                spans.append((a, b))
+            continue
+        pos = a
+        while pos + win <= b:
+            spans.append((pos, pos + win))
+            pos += hop
+        if b - (pos - hop + win) > int(0.25 * sr):
+            spans.append((max(a, b - win), b))
+    if not spans:
+        return [], {"k": 0, "windows": 0, "speech_regions": len(speech)}
+    labels, info = _cluster(_speaker_embeddings(y, sr, spans), num_speakers, max_speakers)
+    # Relabel by first appearance → spk0, spk1, …
+    order: dict[int, int] = {}
+    for lab in labels:
+        order.setdefault(int(lab), len(order))
+    # Frame-level (10 ms) majority vote across overlapping windows, speech only.
+    step = max(1, sr // 100)
+    n_frames = len(y) // step + 1
+    votes = np.zeros((n_frames, max(1, len(order))), dtype=np.int32)
+    for (a, b), lab in zip(spans, labels):
+        votes[a // step : b // step + 1, order[int(lab)]] += 1
+    in_speech = np.zeros(n_frames, dtype=bool)
+    for a, b in speech:
+        in_speech[a // step : b // step + 1] = True
+    frame_lab = np.where((votes.sum(axis=1) > 0) & in_speech, votes.argmax(axis=1), -1)
+    turns: list[dict] = []
+    cur, start = -1, 0
+    for f in range(n_frames + 1):
+        lab = int(frame_lab[f]) if f < n_frames else -1
+        if lab != cur:
+            if cur >= 0:
+                turns.append({"start": start * step / sr, "end": min(f * step, len(y)) / sr,
+                              "speaker_id": f"spk{cur}"})
+            cur, start = lab, f
+    info.update({"windows": len(spans), "speech_regions": len(speech),
+                 "method": "mfcc_pitch_stats+agglomerative_cosine"})
+    return turns, info

@@ -1,0 +1,77 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-video-action-recognition",
+    "seed": 42,
+    "description": "Classify actions with torchvision R3D-18 (Kinetics-400) and export videos with top-k action labels.",
+    "created_at": null,
+    "tags": [
+      "video",
+      "action"
+    ],
+    "pack": "Video",
+    "industry": "general",
+    "marketplace_id": "tpl-video-action-recognition",
+    "status": "ready",
+    "source_example": "marketplace/tpl-video-action-recognition.graph.json",
+    "base_template": "tpl-video-action-recognition"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "video_ingest",
+      "config": {
+        "recursive": true,
+        "path": "workspace/datasets/input/video-demo"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "action_classify",
+      "config": {
+        "arch": "r3d_18",
+        "top_k": 3
+      },
+      "label": "classify",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "video_exporter",
+      "config": {
+        "clean": true
+      },
+      "label": "export",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "annotations",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

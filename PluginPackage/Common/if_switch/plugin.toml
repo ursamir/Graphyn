@@ -15,6 +15,6 @@ runtime = "inprocess"
 node_types = ["if_switch"]
 
 [config_schema.if_switch]
-expression = { type = "string", title = "Expression", default = "", description = "Boolean expression over the input payload (used when JSONPath is empty)." }
+expression = { type = "string", title = "Expression", default = "", description = "Boolean expression over the input payload's fields, e.g. score > 0.5 and label == 'yes' (equivalent: output['score'] > 0.5). Allowed: comparisons, and/or/not, arithmetic, len(). A non-object payload is available as value. Used when JSONPath is empty." }
 jsonpath = { type = "string", title = "JSONPath", default = "", description = "JSONPath selecting a value; its truthiness chooses the true/false branch when set." }
 cases = { type = "array", title = "Cases", default = [], description = "Optional named cases [{name, expression}] for multi-way branching (advanced).", widget = "json" }

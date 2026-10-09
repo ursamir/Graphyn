@@ -541,8 +541,55 @@ def _should_scope_key(key: str, posix: str, node_type: str | None = None) -> boo
     return False
 
 
-def _scope_value(key: str, value: Any, run_id: str, node_type: str | None = None) -> Any:
+# Keys a node may either read or write. When the path already exists as a
+# file and no writer in this graph produces it, it is an *input* (e.g. a model
+# a previous run exported) and must not be redirected into this run's folder.
+_READ_OR_WRITE_KEYS = frozenset({"model_path"})
+
+
+def _existing_read_inputs(graph: Any) -> frozenset[str]:
+    nodes = graph.get("nodes") if isinstance(graph, dict) else None
+    if not isinstance(nodes, list):
+        return frozenset()
+    sinks: list[str] = []
+    candidates: list[str] = []
+    for node in nodes:
+        cfg = node.get("config") if isinstance(node, dict) else None
+        if not isinstance(cfg, dict):
+            continue
+        for key in _SINK_KEYS:
+            raw = cfg.get(key)
+            if isinstance(raw, str) and raw.strip():
+                sinks.append(_normalize_artifacts(_posix(raw)).rstrip("/"))
+        for key in _READ_OR_WRITE_KEYS:
+            raw = cfg.get(key)
+            if isinstance(raw, str) and raw.strip():
+                candidates.append(raw)
+    keep: set[str] = set()
+    for raw in candidates:
+        text = _normalize_artifacts(_posix(raw))
+        if not _is_artifacts_path(text):
+            continue
+        if any(text == s or text.startswith(s + "/") for s in sinks):
+            continue  # produced in this run → follows the writer into runs/<id>/
+        try:
+            if artifact_fs_path(text).is_file():
+                keep.add(raw)
+        except Exception:
+            continue
+    return frozenset(keep)
+
+
+def _scope_value(
+    key: str,
+    value: Any,
+    run_id: str,
+    node_type: str | None = None,
+    keep: frozenset[str] = frozenset(),
+) -> Any:
     if isinstance(value, str):
+        if key in _READ_OR_WRITE_KEYS and value in keep:
+            return value
         if key in _PATH_KEYS:
             stable = _stable_dataset_artifact(value)
             if stable:
@@ -552,9 +599,9 @@ def _scope_value(key: str, value: Any, run_id: str, node_type: str | None = None
         return value
     if isinstance(value, dict):
         nt = value.get("node_type") if isinstance(value.get("node_type"), str) else node_type
-        return {k: _scope_value(k, v, run_id, nt) for k, v in value.items()}
+        return {k: _scope_value(k, v, run_id, nt, keep) for k, v in value.items()}
     if isinstance(value, list):
-        return [_scope_value(key, item, run_id, node_type) for item in value]
+        return [_scope_value(key, item, run_id, node_type, keep) for item in value]
     return value
 
 def scope_outputs_to_run(graph: Any, run_id: str) -> Any:
@@ -580,7 +627,7 @@ def scope_outputs_to_run(graph: Any, run_id: str) -> Any:
 
         data = dump_ir(graph)
 
-    rewritten = _scope_value("", data, rid)
+    rewritten = _scope_value("", data, rid, None, _existing_read_inputs(data))
     rewritten = _node_scoped_write_paths(rewritten, rid)
     rewritten = _ensure_unique_write_paths(rewritten)
     if is_dict:

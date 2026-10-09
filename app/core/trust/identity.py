@@ -20,6 +20,7 @@ Owns:             parse_token_map(), parse_token_entries(), load_token_map(),
                   principal_snapshot(),
                   worker_route_allowed(), worker_scope_allows(),
                   unbound_worker_tokens_allowed(), legacy_token_disabled(),
+                  legacy_token_actor(), legacy_token_fingerprint(),
                   TokenInfo, GENERIC_ACTORS,
                   UNIDENTIFIED.
 Public Surface:   The functions above. Identity dict shape:
@@ -35,8 +36,11 @@ Reason To Change: Token map format, identity policy or verification rules change
 Policy:
   * token maps to a name → ``actor`` = that name, ``actor_verified`` = True; an
     X-Actor header / body actor that differs is kept as ``claimed_actor`` only.
-  * unmapped token (single GRAPHYN_API_TOKEN, or no auth in dev) → ``actor`` =
-    X-Actor / body actor, else ``"unidentified"``; ``actor_verified`` = False.
+  * the single shared GRAPHYN_API_TOKEN → ``actor`` = its bound principal
+    (``GRAPHYN_API_TOKEN_ACTOR``, default ``"operator"``), ``actor_verified`` =
+    True, ``credential_id`` = token fingerprint; X-Actor is ``claimed_actor``.
+  * no token (unauthenticated dev) → ``actor`` = X-Actor / body actor, else
+    ``"unidentified"``; ``actor_verified`` = False.
   * ``"system"`` is reserved for internal background jobs (no request context).
 
 Token map formats (backward compatible):
@@ -74,7 +78,7 @@ class TokenInfo:
     """Metadata for one accepted bearer token."""
 
     name: str
-    kind: str = "operator"  # operator | worker | user
+    kind: str = "operator"  # operator | worker | user | agent
     worker_id: str | None = None
 
     @property
@@ -278,7 +282,20 @@ def _resolve_issued(token: str | None):
 
         if not looks_like_issued_token(token):
             return None
-        return get_user_store().resolve_token(token)
+        resolved = get_user_store().resolve_token(token)
+        if resolved is None:
+            return None
+        cred, _user = resolved
+        # P0: disabled/missing agent must not authenticate (same as revoke).
+        # Never fall through to unmapped operator via token_accepted=True.
+        if cred.kind == "agent":
+            from app.core.trust.agents import get_agent_store
+
+            agent_id = (cred.meta or {}).get("agent_id")
+            agent = get_agent_store().get_agent(str(agent_id or ""))
+            if agent is None or agent.disabled:
+                return None
+        return resolved
     except Exception as exc:
         log.warning("user store lookup failed: %s", exc)
         return None
@@ -310,6 +327,7 @@ def identity_from_credentials(
     token: str | None,
     claimed: str | None = None,
     explicit: str | None = None,
+    header_org_id: str | None = None,
 ) -> dict[str, Any]:
     """Identity dict for one request (see module policy)."""
     claim = _clean_name(explicit) or _clean_name(claimed) or None
@@ -327,9 +345,41 @@ def identity_from_credentials(
                 "credential_id": cred.id,
                 "auth_method": "worker_credential",
                 "join_token_id": cred.meta.get("join_token_id"),
+                "org_id": (cred.meta or {}).get("org_id"),
             }
+        if cred.kind == "agent":
+            from app.core.trust.agents import get_agent_store, identity_dict_for_agent
+
+            agent_id = (cred.meta or {}).get("agent_id")
+            agent = get_agent_store().get_agent(str(agent_id or ""))
+            if agent is None or agent.disabled:
+                # Defense in depth: _resolve_issued should already have returned
+                # None (token_accepted → False / 401). Never elevate to operator.
+                return {
+                    "actor": UNIDENTIFIED,
+                    "actor_verified": False,
+                    "token_mapped": False,
+                    "claimed_actor": None,
+                    "kind": "inactive",
+                    "worker_id": None,
+                    "auth_method": "unknown",
+                }
+            ident = identity_dict_for_agent(agent, credential_id=cred.id)
+            try:
+                from app.core.trust.orgs import bind_org_to_identity
+
+                bind_org_to_identity(ident, header_org_id=header_org_id or agent.org_id)
+            except Exception as exc:
+                log.warning("org bind failed for agent: %s", exc)
+            return ident
         assert user is not None
-        return {
+        # Prefer org stamped on the session/API credential meta when activating.
+        meta_org = None
+        try:
+            meta_org = (cred.meta or {}).get("org_id")
+        except Exception:
+            meta_org = None
+        ident = {
             "actor": user.username,
             "actor_verified": True,
             "token_mapped": True,
@@ -343,6 +393,13 @@ def identity_from_credentials(
             "credential_id": cred.id,
             "auth_method": "session" if cred.kind == "session" else "api_token",
         }
+        try:
+            from app.core.trust.orgs import bind_org_to_identity
+
+            bind_org_to_identity(ident, header_org_id=header_org_id or meta_org)
+        except Exception as exc:
+            log.warning("org bind failed: %s", exc)
+        return ident
     info = lookup_token_info(token)
     if info is not None:
         return {
@@ -359,6 +416,23 @@ def identity_from_credentials(
     is_legacy = bool(token) and bool(single) and hmac.compare_digest(
         single.encode("utf-8"), str(token).encode("utf-8")
     )
+    if is_legacy:
+        # F19 (F-20): a request authenticated by the shared GRAPHYN_API_TOKEN is
+        # attributed to the principal that token is bound to (configured via
+        # GRAPHYN_API_TOKEN_ACTOR, default "operator") plus a non-reversible
+        # credential fingerprint — never "unidentified". An X-Actor header is a
+        # claim only (kept in claimed_actor).
+        principal = legacy_token_actor()
+        return {
+            "actor": principal,
+            "actor_verified": True,
+            "token_mapped": False,
+            "claimed_actor": claim if claim and claim != principal else None,
+            "kind": "operator",
+            "worker_id": None,
+            "auth_method": "legacy_token",
+            "credential_id": legacy_token_fingerprint(str(token)),
+        }
     return {
         "actor": claim or UNIDENTIFIED,
         "actor_verified": False,
@@ -366,8 +440,23 @@ def identity_from_credentials(
         "claimed_actor": None,
         "kind": "operator",
         "worker_id": None,
-        "auth_method": "legacy_token" if is_legacy else ("none" if not token else "unknown"),
+        "auth_method": "none" if not token else "unknown",
     }
+
+
+def legacy_token_actor() -> str:
+    """Principal name bound to the shared GRAPHYN_API_TOKEN (``GRAPHYN_API_TOKEN_ACTOR``)."""
+    name = _clean_name(os.environ.get("GRAPHYN_API_TOKEN_ACTOR") or "operator")
+    if not name or name.lower() in GENERIC_ACTORS:
+        name = "operator"
+    return name
+
+
+def legacy_token_fingerprint(token: str) -> str:
+    """Stable, non-reversible id of the shared token (rotation shows up in audit)."""
+    import hashlib
+
+    return "legacy:" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
 
 
 def set_request_identity(identity: dict[str, Any] | None) -> Token:
@@ -395,7 +484,7 @@ def current_token_info() -> TokenInfo | None:
     kind = str(ident.get("kind") or "operator")
     return TokenInfo(
         name=str(ident.get("actor") or UNIDENTIFIED),
-        kind=kind if kind in ("operator", "worker", "user") else "operator",
+        kind=kind if kind in ("operator", "worker", "user", "agent") else "operator",
         worker_id=_clean_worker_id(ident.get("worker_id")),
     )
 

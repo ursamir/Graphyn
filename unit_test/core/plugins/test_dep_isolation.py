@@ -438,9 +438,11 @@ def test_isolated_process_uses_worker_not_host(fresh_registry) -> None:
 
         node = Marked()
         ex = NodeExecutor(node)
+        from app.core.plugins.isolated_executor import IsolatedResult
+
         with patch(
             "app.core.plugins.isolated_executor.run_isolated_node",
-            return_value={"ok": True},
+            return_value=IsolatedResult(outputs={"ok": True}),
         ) as run:
             out = ex._process(node, {"a": 1})
         assert out == {"ok": True}

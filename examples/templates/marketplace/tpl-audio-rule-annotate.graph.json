@@ -1,0 +1,105 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-audio-rule-annotate",
+    "seed": 42,
+    "description": "Attach rule-based labels (loudness / duration rules) to clips and export the annotated set.",
+    "created_at": null,
+    "tags": [
+      "audio",
+      "kws",
+      "annotation"
+    ],
+    "pack": "Audio",
+    "industry": "general",
+    "marketplace_id": "tpl-audio-rule-annotate",
+    "status": "ready",
+    "source_example": "marketplace/tpl-audio-rule-annotate.graph.json",
+    "base_template": "tpl-audio-rule-annotate"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "source_type": "filesystem",
+        "recursive": true,
+        "limit": 8,
+        "path": "workspace/datasets/input/speech-commands"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000,
+        "mono": true
+      },
+      "label": "condition",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "audio_annotator",
+      "config": {
+        "annotation_mode": "auto",
+        "auto_rules": [
+          {
+            "field": "duration",
+            "op": ">=",
+            "value": 0.5,
+            "label": "full_utterance"
+          },
+          {
+            "field": "duration",
+            "op": "<",
+            "value": 0.5,
+            "label": "short_utterance"
+          }
+        ]
+      },
+      "label": "annotate",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "audio_exporter",
+      "config": {
+        "format": "wav",
+        "overwrite": true
+      },
+      "label": "export",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

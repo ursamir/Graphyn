@@ -1,0 +1,31 @@
+[plugin]
+name             = "agent-loop"
+version          = "1.0.0"
+description      = "LLM agent loop (ollama / openai_compat / anthropic / gemini) with optional allowlisted Graphyn MCP tool calls."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["agents", "agent", "llm", "mcp"]
+
+dependencies = []
+
+runtime = "inprocess"
+node_types = ["agent_loop"]
+credential_kinds = ["openai_compat", "ollama", "anthropic", "gemini", "graphyn_mcp"]
+
+[config_schema.agent_loop]
+provider = { type = "string", title = "Provider", default = "ollama", description = "Chat model provider. ollama runs locally (OLLAMA_BASE_URL); others need a credential.", enum = ["ollama", "openai_compat", "anthropic", "gemini"] }
+model = { type = "string", title = "Model", default = "", description = "Model id. Empty → OLLAMA_MODEL for ollama, gpt-4o-mini otherwise." }
+base_url = { type = "string", title = "Base URL", default = "", description = "Optional OpenAI-compatible base URL override." }
+api_secret_name = { type = "string", title = "API secret name", default = "OPENAI_API_KEY", description = "Secret/env NAME for openai_compat (never the key itself)." }
+connection_id = { type = "string", title = "LLM credential connection id", default = "", description = "Credential store connection for the model provider. Empty → workspace default → env." }
+temperature = { type = "number", title = "Temperature", default = 0.0, description = "Sampling temperature." }
+timeout_s = { type = "number", title = "Timeout (s)", default = 120.0, description = "Per model call / tool call timeout." }
+max_steps = { type = "integer", title = "Max steps", default = 4, description = "Maximum decide/act iterations before forcing a final answer." }
+system_prompt = { type = "string", title = "System prompt", default = "", description = "Extra instructions prepended to the agent protocol." }
+tool_allowlist = { type = "array", title = "Tool allowlist", default = [], description = "Graphyn MCP tools the agent may call (empty → answer without tools)." }
+allow_mutating = { type = "boolean", title = "Allow mutating", default = false, description = "Permit state-changing tools (they must still be allowlisted)." }
+mcp_connection_id = { type = "string", title = "MCP credential connection id", default = "", description = "graphyn_mcp credential used for tool calls when the platform requires auth." }
+require_tool_call = { type = "boolean", title = "Require a tool call", default = false, description = "When tools are allowlisted, reject a final answer given before any tool was called." }

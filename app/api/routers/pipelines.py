@@ -552,6 +552,15 @@ def run_pipeline_async(request: Request, payload: dict = Body(...)):
             graph, deprecation_header = _build_graph_from_payload(payload)
             graph, project_fields = _stamp_graph_project(graph, payload)
             _require_run_project_access(project_fields)
+            from app.core.trust.identity import current_identity
+            from app.core.trust.metering import MeterStoreError, get_meter_store
+
+            try:
+                _oid = (current_identity() or {}).get("org_id")
+                if _oid:
+                    get_meter_store().check_quota(str(_oid), "runs_per_day")
+            except MeterStoreError as exc:
+                raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": str(exc)}) from exc
             graph, input_overrides, inputs_meta = _prepare_run_inputs(graph, payload)
             _refuse_invalid_graph(graph)
         except HTTPException:
@@ -581,6 +590,21 @@ def run_pipeline_async(request: Request, payload: dict = Body(...)):
         actor = resolve_actor(request)
         trigger = str(payload.get("trigger") or "api") if isinstance(payload, dict) else "api"
         persist_run_identity(run_mgr, actor=actor, trigger=trigger, payload=payload)
+        try:
+            from app.core.trust.identity import current_identity
+            from app.core.trust.metering import record_meter_event
+
+            _oid = (current_identity() or {}).get("org_id")
+            record_meter_event(
+                _oid,
+                "run.started",
+                actor=actor,
+                resource_type="run",
+                resource_id=run_id,
+                meta={"project": (project_fields or {}).get("project") if isinstance(project_fields, dict) else None},
+            )
+        except Exception:
+            pass
 
         # Save YAML config for backward compat if YAML was submitted
         if not _is_ir_payload(payload):

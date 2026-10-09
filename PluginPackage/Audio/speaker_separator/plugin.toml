@@ -1,0 +1,42 @@
+[plugin]
+name             = "speaker-separator"
+version          = "1.0.0"
+description      = "Separate speakers from mixed audio via diarization (pyannote.audio) or source separation (SpeechBrain SepFormer)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "diarization",
+    "speaker",
+    "separation",
+    "pyannote",
+    "speechbrain"
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "librosa>=0.10",
+    "torch>=2.1",
+    "torchaudio>=2.1",
+    "speechbrain>=1.0",
+]
+
+# pyannote backend (gated HF model; needs a token)
+optional_dependencies = [
+    "pyannote.audio>=3.1",
+]
+
+runtime = "isolated"
+node_types = ["speaker_separator"]
+
+[config_schema.speaker_separator]
+backend = { type = "string", title = "Backend", default = "speechbrain", description = "speechbrain: SepFormer 2-source separation (no credentials); pyannote: diarization (needs a HF token, gated model); auto: pyannote when installed and a token resolves, else speechbrain.", enum = ["pyannote", "speechbrain", "auto"] }
+num_speakers = { type = "integer", title = "Num speakers", default = 0, description = "Exact speaker count when known (0 = auto / use min–max range)." }
+min_speakers = { type = "integer", title = "Min speakers", default = 1, description = "Lower bound on speaker count for diarization." }
+max_speakers = { type = "integer", title = "Max speakers", default = 10, description = "Upper bound on speaker count for diarization." }
+output_mode = { type = "string", title = "Output mode", default = "per_speaker", description = "Emit per-speaker audio or diarization labels only.", enum = ["per_speaker", "diarization_only"] }
+auth_token_env = { type = "string", title = "Auth token env", default = "HUGGINGFACE_TOKEN", description = "Env var or Graphyn secret NAME for HuggingFace token (preferred)." }
+min_segment_s = { type = "number", title = "Min segment (s)", default = 0.5, description = "Drop diarization segments shorter than this many seconds." }

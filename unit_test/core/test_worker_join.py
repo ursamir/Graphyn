@@ -272,3 +272,17 @@ def test_run_record_accountability(tmp_path, env, monkeypatch):
     assert acc["run_by"]["principal"]["user_id"] == "u_1" and acc["run_by"]["actor_verified"]
     assert acc["executed_by"]["a"] == {"worker_id": "local"}
     assert acc["executed_by"]["b"]["principal"]["credential_id"] == "cw"
+
+
+import os as _os_f19
+
+import pytest as _pytest_f19
+
+
+@_pytest_f19.fixture(autouse=True)
+def _f19_restore_environ():
+    """worker join applies GRAPHYN_MTLS_* to os.environ; restore it so later tests are not mTLS-on."""
+    saved = dict(_os_f19.environ)
+    yield
+    _os_f19.environ.clear()
+    _os_f19.environ.update(saved)

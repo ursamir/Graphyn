@@ -50,12 +50,18 @@ def resolve_mcp_actor(arguments: dict[str, Any] | None) -> dict[str, Any]:
     claimed = args.get("actor") if isinstance(args.get("actor"), str) else None
     ident = identity_from_credentials(token, claimed)
     if ident.get("token_mapped"):
-        return {
+        out = {
             "actor": str(ident["actor"]),
             "actor_verified": True,
             "token_mapped": True,
             "claimed_actor": ident.get("claimed_actor"),
+            "kind": ident.get("kind"),
         }
+        if ident.get("kind") == "agent":
+            out["agent_id"] = ident.get("agent_id")
+            out["agent_slug"] = ident.get("agent_slug")
+            out["credential_id"] = ident.get("credential_id")
+        return out
     label = (claimed or "mcp").strip()[:128] or "mcp"
     if label == "mcp":
         actor = "mcp"
@@ -121,7 +127,7 @@ def check_auth(arguments: dict[str, Any], tool_name: str | None = None) -> dict[
             "error_type": "forbidden",
             "message": "Worker-scoped tokens cannot call MCP tools — use an operator token.",
         }
-    if tool_name and ident.get("kind") == "user":
+    if tool_name and ident.get("kind") in ("user", "agent"):
         from app.core.trust.rbac import check_project_permission
 
         args = arguments or {}

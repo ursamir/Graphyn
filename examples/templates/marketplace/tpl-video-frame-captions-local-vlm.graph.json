@@ -1,0 +1,100 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-video-frame-captions-local-vlm",
+    "seed": 42,
+    "description": "Sample frames and caption them with a local vision-language model served by Ollama.",
+    "created_at": null,
+    "tags": [
+      "video",
+      "captions",
+      "vlm"
+    ],
+    "pack": "Video",
+    "industry": "general",
+    "marketplace_id": "tpl-video-frame-captions-local-vlm",
+    "status": "needs-endpoint",
+    "source_example": "marketplace/tpl-video-frame-captions-local-vlm.graph.json",
+    "base_template": "tpl-video-frame-captions-local-vlm",
+    "requires": [
+      "Ollama reachable at OLLAMA_BASE_URL (host on GRAPHYN_HTTP_EGRESS_ALLOWLIST) with the 'moondream' model pulled"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "video_ingest",
+      "config": {
+        "recursive": true,
+        "path": "workspace/datasets/input/video-demo"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "frame_sample",
+      "config": {
+        "mode": "uniform",
+        "num_frames": 2
+      },
+      "label": "frames",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "video_caption",
+      "config": {
+        "provider": "ollama",
+        "model": "moondream",
+        "frames_per_video": 2
+      },
+      "label": "caption",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "video_exporter",
+      "config": {
+        "clean": true
+      },
+      "label": "export",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "captions",
+      "dst_id": "n3",
+      "dst_port": "annotations",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

@@ -117,27 +117,33 @@ class IfSwitchNode(Node):
         "true": OutputPort(name="true", data_type=object, description="Payload when condition is true"),
         "false": OutputPort(name="false", data_type=object, description="Payload when condition is false"),
         "cases": OutputPort(name="cases", data_type=object, description="Named case matches dict"),
-        "output": OutputPort(name="output", data_type=object, description="BranchResult summary"),
+        "output": OutputPort(name="output", data_type=BranchResult, description="BranchResult summary"),
     }
 
     class Config(NodeConfig):
-        expression: str = Field(default='', title="Expression", description="Boolean expression over the input payload (used when JSONPath is empty).")
+        expression: str = Field(default='', title="Expression", description="Boolean expression over the input payload's fields, e.g. score > 0.5 and label == 'yes' (equivalent: output['score'] > 0.5). Allowed: comparisons, and/or/not, arithmetic, len(). A non-object payload is available as value. Used when JSONPath is empty.")
         jsonpath: str = Field(default='', title="JSONPath", description="JSONPath selecting a value; its truthiness chooses the true/false branch when set.")
         cases: list = Field(default=[], title="Cases", description="Optional named cases [{name, expression}] for multi-way branching (advanced).")
 
     def process(self, inputs):
-        payload = inputs.get("input") if isinstance(inputs, dict) else inputs
-        as_dict = _as_dict(payload)
+        from app.core.nodes.payload import unwrap_payload
+
+        raw = inputs.get("input") if isinstance(inputs, dict) else inputs
+        # F19 (F-06): conditions see the payload, not the upstream wrapper;
+        # the branch outputs still forward the original value unchanged.
+        payload = raw
+        data = unwrap_payload(raw)
+        as_dict = _as_dict(data)
         matched = False
         expr = (self.config.expression or "").strip()
         path = (self.config.jsonpath or "").strip()
         if expr:
             from app.core.execution.conditions import evaluate_condition
-            matched = bool(evaluate_condition(expr, as_dict))
+            matched = bool(evaluate_condition(expr, as_dict, bare_names=True))
         elif path:
-            matched = _truthy(_jsonpath(payload if payload is not None else as_dict, path))
+            matched = _truthy(_jsonpath(data if data is not None else as_dict, path))
         else:
-            matched = _truthy(payload)
+            matched = _truthy(data)
 
         case_hits: dict[str, Any] = {}
         for raw in list(self.config.cases or []):
@@ -150,7 +156,7 @@ class IfSwitchNode(Node):
             hit = False
             if cexpr:
                 from app.core.execution.conditions import evaluate_condition
-                hit = bool(evaluate_condition(cexpr, as_dict))
+                hit = bool(evaluate_condition(cexpr, as_dict, bare_names=True))
             if hit:
                 case_hits[name] = payload
 

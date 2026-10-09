@@ -47,7 +47,7 @@ class WaitDelayNode(Node):
     }
     output_ports: ClassVar[dict[str, OutputPort]] = {
         "output": OutputPort(name="output", data_type=object, description="Passthrough input"),
-        "receipt": OutputPort(name="receipt", data_type=object, description="DelayReceipt"),
+        "receipt": OutputPort(name="receipt", data_type=DelayReceipt, description="DelayReceipt"),
     }
 
     class Config(NodeConfig):

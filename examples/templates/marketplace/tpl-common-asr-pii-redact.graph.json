@@ -1,0 +1,136 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-common-asr-pii-redact",
+    "seed": 42,
+    "description": "Transcribe locally, redact PII in text and bleep it in audio, gate, store the redacted transcripts.",
+    "created_at": null,
+    "tags": [
+      "common",
+      "captions",
+      "pii",
+      "compliance"
+    ],
+    "pack": "Common",
+    "industry": "general",
+    "marketplace_id": "tpl-common-asr-pii-redact",
+    "status": "ready",
+    "source_example": "marketplace/tpl-common-asr-pii-redact.graph.json",
+    "base_template": "tpl-common-asr-pii-redact"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "source_type": "filesystem",
+        "recursive": true,
+        "limit": 8,
+        "path": "workspace/datasets/input/speech-commands"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000,
+        "mono": true
+      },
+      "label": "condition",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "asr_transcribe",
+      "config": {
+        "provider": "local_whisper",
+        "model": "tiny",
+        "language": "en"
+      },
+      "label": "transcribe",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "pii_redact",
+      "config": {
+        "engine": "auto"
+      },
+      "label": "redact",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "eval_gate",
+      "config": {
+        "check_empty_transcript": false,
+        "fail_if_empty_list": false
+      },
+      "label": "gate",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n5",
+      "node_type": "object_store",
+      "config": {
+        "operation": "put",
+        "prefix": "redacted"
+      },
+      "label": "store",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "transcript",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "audio",
+      "condition": null
+    },
+    {
+      "src_id": "n3",
+      "src_port": "transcript",
+      "dst_id": "n4",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n4",
+      "src_port": "output",
+      "dst_id": "n5",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

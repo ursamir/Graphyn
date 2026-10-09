@@ -1,0 +1,108 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-video-scene-clips",
+    "seed": 42,
+    "description": "Quality-gate videos, detect scene cuts and cut one clip per scene (ffmpeg), export clips + manifest.",
+    "created_at": null,
+    "tags": [
+      "video",
+      "scenes"
+    ],
+    "pack": "Video",
+    "industry": "general",
+    "marketplace_id": "tpl-video-scene-clips",
+    "status": "ready",
+    "source_example": "marketplace/tpl-video-scene-clips.graph.json",
+    "base_template": "tpl-video-scene-clips"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "video_ingest",
+      "config": {
+        "recursive": true,
+        "path": "workspace/datasets/input/video-demo"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "video_quality_gate",
+      "config": {},
+      "label": "quality",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "scene_detect",
+      "config": {
+        "threshold": 0.3
+      },
+      "label": "scenes",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "clip_segment",
+      "config": {
+        "mode": "scenes"
+      },
+      "label": "clips",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "video_exporter",
+      "config": {
+        "clean": true
+      },
+      "label": "export",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "video",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "scenes",
+      "condition": null
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

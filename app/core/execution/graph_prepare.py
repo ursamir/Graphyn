@@ -179,6 +179,16 @@ def check_graph_executable(
 
         registry = get_registry()
     result = validate_graph_ir_result(graph, registry)
+    # F19 / F-25: a node missing config it cannot run without would fail the
+    # run for certain — refuse up front instead of starting it.
+    required = [w for w in (result.get("warnings") or []) if w.get("code") == "VAL-REQ-CONFIG"]
+    if required and result["valid"]:
+        raise GraphPrepareError(
+            "validation_failed",
+            required[0]["message"],
+            errors=[{**w, "severity": "error"} for w in required],
+            warnings=[w for w in (result.get("warnings") or []) if w.get("code") != "VAL-REQ-CONFIG"],
+        )
     if not result["valid"]:
         errors = result.get("errors") or []
         message = errors[0]["message"] if errors else "validation failed"
@@ -295,6 +305,15 @@ def persist_run_identity(
         principal = None
     if principal:
         fields["principal"] = principal
+    # F18: stamp org_id for pipeline queue fair-share on remote jobs.
+    try:
+        from app.core.trust.identity import current_identity
+
+        oid = (current_identity() or {}).get("org_id")
+        if oid:
+            fields["org_id"] = str(oid)
+    except Exception:
+        pass
     body = payload if isinstance(payload, dict) else {}
     name = body.get("pipeline") or body.get("pipeline_name")
     if isinstance(name, str) and name.strip():

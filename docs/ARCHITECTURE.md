@@ -529,7 +529,7 @@ get_backend().execute(graph, ...)
 | Checkpoint node IDs | Null byte rejection + path traversal guard via `os.path.abspath` prefix check |
 | Webhook DNS | Resolves once, connects to IP directly with `Host` header (DNS rebinding fix) |
 | `python_code` | Trusted-operator `exec` with AST filters (defense-in-depth, **not** a sandbox); see `docs/TRUST_MODEL.md` |
-| Workflow HTTP egress | `GRAPHYN_HTTP_EGRESS_MODE=trusted\|restricted` + optional `GRAPHYN_HTTP_EGRESS_ALLOWLIST` on `http_request`, `http_webhook`, `asr_transcribe`, `structured_llm` (`app/core/trust/egress.py`) |
+| Workflow network egress | `GRAPHYN_HTTP_EGRESS_MODE=restricted` (default) \| `trusted` + optional `GRAPHYN_HTTP_EGRESS_ALLOWLIST` / `GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW`; IP-pinned `EgressTransport` on `http_request`, `http_webhook`, LLM providers, URL ingest; SMTP + S3 endpoints validated (`app/core/trust/egress.py`) |
 
 ---
 

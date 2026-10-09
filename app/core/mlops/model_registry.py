@@ -545,12 +545,37 @@ def approve_prod(
     """
     if not _SAFE_NAME.match(name or ""):
         raise ValueError(f"Invalid model name {name!r}")
+    from app.core.mlops.promotion_policy import SeparationOfDutiesError, check_separation_of_duties
+
     path = registry_path(base_dir)
     with _registry_lock(path):
         rec = get_model(name, base_dir=base_dir)
         pending = rec.get("pending_prod")
         if not isinstance(pending, dict) or not pending.get("run_id"):
             raise ValueError("No pending_prod to approve")
+        # F19 (F-08): requester ≠ approver unless an admin policy waived SoD.
+        try:
+            sod = check_separation_of_duties(
+                requested_by=str(pending.get("requested_by") or ""), approver=actor, base_dir=base_dir
+            )
+        except SeparationOfDutiesError as exc:
+            try:
+                from app.core.trust.audit import record_audit
+
+                record_audit(
+                    actor=actor,
+                    action="model.approve_prod",
+                    resource_type="model",
+                    resource_id=f"{name}@prod",
+                    meta={"run_id": str(pending["run_id"]), "requested_by": pending.get("requested_by"),
+                          "reason": str(exc)},
+                    result="denied",
+                    error_code=exc.code,
+                    base_dir=base_dir,
+                )
+            except Exception:
+                pass
+            raise
         out = _register(
             name,
             run_id=str(pending["run_id"]),
@@ -570,7 +595,9 @@ def approve_prod(
             action="model.approve_prod",
             resource_type="model",
             resource_id=f"{name}@prod",
-            meta={"run_id": str(pending["run_id"]), "requested_by": pending.get("requested_by")},
+            meta={"run_id": str(pending["run_id"]), "requested_by": pending.get("requested_by"),
+                  "separation_of_duties": "enforced" if sod["enforced"] else "waived",
+                  "sod_waived": not sod["enforced"], "sod_waived_by": sod.get("waived_by")},
         )
     except Exception:
         pass

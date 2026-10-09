@@ -1,7 +1,7 @@
 [plugin]
 name             = "object-store"
-version          = "1.0.0"
-description      = "Get/put/list objects. Local filesystem backend by default; optional S3 via boto3."
+version          = "1.1.0"
+description      = "Get/put/list objects. put stores upstream files or inline data (JSON/CSV/text); local filesystem backend by default; optional S3 via boto3."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]

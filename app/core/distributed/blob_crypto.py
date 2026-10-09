@@ -56,13 +56,14 @@ class BlobCryptoError(ValueError):
 def blob_encryption_key() -> bytes | None:
     """Return 32-byte master key or None when encryption is disabled.
 
-    Prefers ``GRAPHYN_BLOB_ENCRYPTION_KEY`` (urlsafe-b64 32-byte or passphrase).
-    Does **not** auto-generate — unset means plaintext (lab back-compat).
-    Optional fallback to ``GRAPHYN_CREDENTIALS_KEY`` only when
+    Uses ``app.core.trust.kms.resolve_data_key("blob")`` when a blob key is
+    configured (or envelope KMS is active). Unset + local backend → plaintext
+    (lab back-compat). Optional fallback to credentials key when
     ``GRAPHYN_BLOB_ENCRYPTION_FALLBACK=1``.
     """
+    backend = (os.environ.get("GRAPHYN_KMS_BACKEND") or "local").strip().lower()
     raw = (os.environ.get(_ENV_KEY) or "").strip()
-    if not raw:
+    if not raw and backend not in ("envelope", "local-envelope", "byok"):
         if (os.environ.get("GRAPHYN_BLOB_ENCRYPTION_FALLBACK") or "").strip().lower() in (
             "1",
             "true",
@@ -72,7 +73,15 @@ def blob_encryption_key() -> bytes | None:
             raw = (os.environ.get(_ENV_FALLBACK) or "").strip()
         if not raw:
             return None
-    return _derive_master(raw.encode("utf-8"))
+    try:
+        from app.core.trust.kms import resolve_data_key
+
+        return resolve_data_key("blob")
+    except Exception:
+        # KmsError or KMS module unavailable: fall back to the raw env key.
+        if raw:
+            return _derive_master(raw.encode("utf-8"))
+        return None
 
 
 def blob_encryption_enabled() -> bool:

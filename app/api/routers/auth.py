@@ -5,16 +5,17 @@ Responsibility:   User sign-in, self-service credentials, user administration
                   and project membership (RBAC). Every mutation is audited
                   with the acting user and credential id.
 Owns:             POST /auth/login, POST /auth/logout, POST /auth/bootstrap,
+                  GET /auth/oidc/{config,start,callback}, POST /auth/oidc/finish,
                   POST /me/password, GET|POST /me/tokens, DELETE /me/tokens/{id},
                   GET|POST /users, GET|PATCH /users/{id},
                   GET /users/{id}/tokens, DELETE /users/{id}/tokens/{tid},
                   GET /projects/{name}/members,
                   PUT|DELETE /projects/{name}/members/{user_id}.
 Public Surface:   router (authenticated, RBAC-checked in app.api.main) and
-                  public_router (POST /auth/login only).
+                  public_router (login + OIDC start/callback/finish/config).
 Must NOT:         Return password hashes, token secrets or token hashes (a new
                   token is returned once, at creation).
-Dependencies:     fastapi, pydantic, app.core.trust.{users, identity, rbac, audit}.
+Dependencies:     fastapi, pydantic, app.core.trust.{users, identity, rbac, audit, oidc}.
 Reason To Change: Login / user admin / membership API changes.
 """
 from __future__ import annotations
@@ -107,6 +108,10 @@ def _note_failure(key: str) -> None:
 @public_router.post("/auth/login", summary="Sign in with username + password")
 def login(request: Request, body: LoginBody):
     """Returns a session bearer token (12 h). Five failures in 5 min lock the username for that client."""
+    from app.core.trust.oidc import password_login_allowed
+
+    if not password_login_allowed():
+        raise HTTPException(status_code=403, detail="Password login is disabled — use SSO")
     key = _client_key(request, body.username)
     if _locked(key):
         raise HTTPException(status_code=429, detail="Too many failed sign-ins — try again in a few minutes", headers={"Retry-After": "300"})
@@ -158,6 +163,93 @@ def bootstrap(body: BootstrapBody):
     return {"user": user.public()}
 
 
+
+# ── OIDC / SSO ─────────────────────────────────────────────────────────────────
+
+
+def _request_base(request: Request) -> str:
+    """Public base URL for building redirect_uri when not configured."""
+    # Prefer reverse-proxy headers (UI nginx → API).
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "http").split(",")[0].strip()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
+    if not host:
+        host = request.url.netloc
+    return f"{proto}://{host}"
+
+
+def _oidc_err(exc) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": str(exc)})
+
+
+@public_router.get("/auth/oidc/config", summary="OIDC / SSO public status (no secrets)")
+def oidc_config_endpoint():
+    from app.core.trust.oidc import public_status
+
+    return public_status()
+
+
+@public_router.get("/auth/oidc/start", summary="Start OIDC authorization-code + PKCE login")
+def oidc_start(request: Request, returnTo: str = "/", format: str = "redirect"):
+    """Redirects the browser to the IdP, or returns JSON ``{authorize_url}`` when ``format=json``."""
+    from fastapi.responses import JSONResponse, RedirectResponse
+
+    from app.core.trust.oidc import OidcError, begin_login
+
+    try:
+        started = begin_login(return_to=returnTo, request_base=_request_base(request))
+    except OidcError as exc:
+        raise _oidc_err(exc)
+    if str(format or "").lower() == "json":
+        return JSONResponse(started)
+    return RedirectResponse(url=started["authorize_url"], status_code=302)
+
+
+@public_router.get("/auth/oidc/callback", summary="OIDC callback (authorization code)")
+def oidc_callback(request: Request, code: str = "", state: str = "", error: str = "", error_description: str = ""):
+    from fastapi.responses import RedirectResponse
+
+    from app.core.trust.oidc import OidcError, finish_callback
+
+    if error:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "oidc_idp_error", "message": error_description or error},
+        )
+    try:
+        done = finish_callback(code=code, state=state)
+    except OidcError as exc:
+        raise _oidc_err(exc)
+    _audit(
+        "auth.login",
+        "user",
+        done["user"]["id"],
+        {"credential_id": done["credential_id"], "username": done["user"]["username"], "method": "oidc"},
+        actor=done["user"]["username"],
+    )
+    return RedirectResponse(url=done["complete_url"], status_code=302)
+
+
+class OidcFinishBody(BaseModel):
+    ticket: str = Field(..., min_length=8, max_length=256)
+
+
+@public_router.post("/auth/oidc/finish", summary="Exchange a one-time OIDC ticket for a session token")
+def oidc_finish(body: OidcFinishBody):
+    from app.core.trust.oidc import OidcError, redeem_ticket
+
+    try:
+        payload = redeem_ticket(body.ticket)
+    except OidcError as exc:
+        raise _oidc_err(exc)
+    return {
+        "token": payload["token"],
+        "expires_at": payload.get("expires_at"),
+        "credential_id": payload.get("credential_id"),
+        "user": payload.get("user"),
+        "return_to": payload.get("return_to") or "/",
+    }
+
+
 # ── self-service ───────────────────────────────────────────────────────────────
 
 
@@ -171,7 +263,14 @@ def change_password(body: PasswordBody):
     uid = _current_user_id()
     store = get_user_store()
     user = store.get_user(uid)
-    if user is None or store.authenticate(user.username, body.current_password) is None:
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not user.has_password:
+        raise HTTPException(
+            status_code=400,
+            detail="This account uses SSO only — set a local password via an admin reset, or continue with SSO",
+        )
+    if store.authenticate(user.username, body.current_password) is None:
         raise HTTPException(status_code=401, detail="Current password is wrong")
     try:
         store.update_user(uid, password=body.new_password)
@@ -337,9 +436,22 @@ def project_members(name: str):
     return get_user_store().project_members(name)
 
 
+def _require_member_admin(project: str) -> dict[str, Any]:
+    """Project owners (project.members) or global users.admin may manage members."""
+    ident = _ident()
+    if _is_user_admin(ident):
+        return ident
+    from app.core.trust.rbac import effective_permissions
+
+    perms = effective_permissions(ident, project)
+    if "project.members" in perms or "admin" in perms:
+        return ident
+    raise HTTPException(status_code=403, detail="Permission 'project.members' required")
+
+
 @router.put("/projects/{name}/members/{user_id}", summary="Add / change a project member")
 def put_member(name: str, user_id: str, body: MemberBody):
-    ident = _ident()
+    ident = _require_member_admin(name)
     try:
         get_user_store().set_membership(name, user_id, body.role, added_by=str(ident.get("actor") or ""))
     except UserStoreError as exc:
@@ -350,6 +462,7 @@ def put_member(name: str, user_id: str, body: MemberBody):
 
 @router.delete("/projects/{name}/members/{user_id}", summary="Remove a project member")
 def delete_member(name: str, user_id: str):
+    _require_member_admin(name)
     if not get_user_store().remove_membership(name, user_id):
         raise HTTPException(status_code=404, detail="Not a member")
     _audit("project.member_remove", "project", name, {"user_id": user_id})

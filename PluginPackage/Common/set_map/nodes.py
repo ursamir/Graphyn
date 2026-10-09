@@ -72,7 +72,10 @@ class SetMapNode(Node):
         set: dict = Field(default={}, title="Set", description="Constant fields to inject into the payload (JSON object).")
 
     def process(self, inputs):
-        payload = inputs.get("input") if isinstance(inputs, dict) else inputs
+        from app.core.nodes.payload import unwrap_payload
+
+        # F19 (F-06): map the payload, not the upstream wrapper.
+        payload = unwrap_payload(inputs.get("input") if isinstance(inputs, dict) else inputs)
         copy_map = dict(self.config.copy_fields or {})
         rename = dict(self.config.rename or {})
         drop = list(self.config.drop or [])

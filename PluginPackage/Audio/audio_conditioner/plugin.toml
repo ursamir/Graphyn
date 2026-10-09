@@ -28,6 +28,7 @@ optional_dependencies = [
 ]
 
 node_types = ["audio_conditioner"]
+runtime    = "inprocess"  # explicit (was the implicit default)
 
 [config_schema.audio_conditioner]
 target_sample_rate = { type = "integer", title = "Target sample rate", default = 16000, minimum = 1000, maximum = 384000, description = "Resample audio to this rate (Hz).", ui = { group = "Basic" } }

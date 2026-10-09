@@ -40,6 +40,6 @@ def test_register_request_approve(tmp_path: Path, monkeypatch):
     assert pending["status"] == "pending_approval"
     assert get_model("wakeword", base_dir=tmp_path)["pending_prod"]["run_id"] == run_id
 
-    done = approve_prod("wakeword", actor="t", base_dir=tmp_path)
+    done = approve_prod("wakeword", actor="approver", base_dir=tmp_path)
     assert "prod" in done["stages"]
     assert done.get("pending_prod") in (None, {})

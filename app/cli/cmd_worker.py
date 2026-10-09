@@ -23,6 +23,19 @@ import yaml
 _LEGACY_DEFAULT_WORKER_ID = "worker-local"
 
 
+
+def _job_model_payload(job: dict) -> dict:
+    """Keep only ``NodeJob`` fields from a claimed job.
+
+    ``NodeJob`` is strict (extra="forbid"); a control plane that adds
+    informational keys to the claimed job (F18 put ``worker_slots`` there)
+    must not fail every job on an older/newer worker.
+    """
+    from app.core.distributed.models import NodeJob
+
+    fields = NodeJob.model_fields
+    return {k: v for k, v in (job or {}).items() if k in fields}
+
 def _worker_heartbeat_payload(
     resources: dict,
     status: str,
@@ -50,6 +63,18 @@ class _WorkerHTTPError(RuntimeError):
     def __init__(self, code: int, message: str) -> None:
         super().__init__(message)
         self.code = int(code)
+
+
+def _complete_report_message(job_id: str, exc: BaseException) -> str:
+    """Worker log line when the control plane does not accept a completion.
+
+    409 means the job is already terminal (run cancelled) or was reclaimed
+    (lease fenced): the result is dropped by design, so say so plainly.
+    """
+    if isinstance(exc, _WorkerHTTPError) and exc.code == 409:
+        reason = "run_cancelled" if "run_cancelled" in str(exc) else "job no longer leased to this worker"
+        return f"[worker] result for {job_id} dropped: control plane answered 409 ({reason})"
+    return f"[worker] complete report for {job_id} failed: {exc}"
 
 
 def _auto_worker_id() -> str:
@@ -464,7 +489,7 @@ def cmd_worker_start(args):
         from app.core.host.registry_runtime import get_registry
         from app.core.paths.write_paths import ensure_node_write_dirs
 
-        node_job = _NodeJob.model_validate(job)
+        node_job = _NodeJob.model_validate(_job_model_payload(job))
 
         registry = get_registry()
         try:
@@ -1079,10 +1104,7 @@ def cmd_worker_start(args):
                     print(f"[worker] reported completion for {job['job_id']}")
                 except Exception as complete_exc:
                     # 409: already terminal (cancelled) or fenced by a reclaim.
-                    print(
-                        f"[worker] complete report for {job['job_id']} failed: {complete_exc}",
-                        file=sys.stderr,
-                    )
+                    print(_complete_report_message(job["job_id"], complete_exc), file=sys.stderr)
                 finally:
                     with _active_lock:
                         _active.discard(job["job_id"])

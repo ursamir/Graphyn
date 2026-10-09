@@ -1,0 +1,44 @@
+[plugin]
+name             = "embedding-generator"
+version          = "2.0.0"
+description      = "Generate semantic audio embeddings: wav2vec2, HuBERT, CLAP audio projection, x-vector / ECAPA speaker embeddings, YAMNet."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "embeddings",
+    "wav2vec2",
+    "hubert",
+    "clap",
+    "xvector",
+    "ssl",
+    "features"
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "librosa>=0.10",
+    "torch>=2.1",
+    "torchaudio>=2.1",
+    "transformers>=4.40",
+    "speechbrain>=1.0",
+]
+
+optional_dependencies = [
+    "tensorflow>=2.12",
+    "tensorflow-hub>=0.14",
+    "setuptools<81",  # tensorflow_hub imports pkg_resources (removed in setuptools 81)
+]
+
+runtime = "isolated"
+node_types = ["embedding_generator"]
+
+[config_schema.embedding_generator]
+model = { type = "string", title = "Model", default = "wav2vec2", description = "Embedding model: wav2vec2, hubert, clap, xvector, ecapa, yamnet (yamnet needs tensorflow + tensorflow-hub).", enum = ["wav2vec2", "hubert", "clap", "xvector", "ecapa", "yamnet"] }
+model_name_or_path = { type = "string", title = "Model name or path", default = "", description = "Override checkpoint (HF id or local path) for wav2vec2/hubert/clap." }
+pooling = { type = "string", title = "Pooling", default = "mean", description = "How frame embeddings are pooled (wav2vec2/hubert/yamnet). none = flatten frames.", enum = ["mean", "max", "first", "last", "none"] }
+normalize = { type = "boolean", title = "L2 normalize", default = true, description = "L2-normalize each embedding." }
+layer = { type = "integer", title = "Layer", default = -1, description = "Hidden layer to pool for wav2vec2/hubert (-1 = last)." }

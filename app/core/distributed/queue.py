@@ -2,8 +2,10 @@
 """
 Bounded Context:  BC5 — Execution Runtime
 Responsibility:   Thread-safe node-job queue with claim by worker eligibility,
-                  lease TTL + reclaim, cancel signaling, and durable store.
+                  lease TTL + reclaim, cancel signaling, durable store, and
+                  F18 fair-share / slot booking / queue visibility.
 Owns:             JobQueue (enqueue, claim, complete, get, cancel, events,
+                  list_queue, refresh_queue_reasons,
                   reclaim_expired_leases, renew_lease, renew_leases_for_worker,
                   release_jobs_for_worker, ack_result, active_blob_refs),
                   terminal-history trim (finished_at / unread-result TTL).
@@ -209,6 +211,25 @@ def _tombstone_rejected_outputs(result: JobResult, *, reason: str) -> None:
         log.warning("JobQueue: failed to tombstone rejected blobs: %s", exc)
 
 
+def _lease_loss_failure(job: NodeJob, next_attempts: int) -> str | None:
+    """Why a job that lost its lease must fail instead of being requeued.
+
+    ``None`` → safe to requeue. A non-idempotent node (side effects such as
+    mail or a mutating HTTP call) may already have acted, so it is never
+    re-run automatically; otherwise ``max_attempts`` (from the IR retry
+    policy, default 5) bounds the reclaim cycles.
+    """
+    if not bool(getattr(job, "idempotent", True)):
+        return (
+            f"lease lost while non-idempotent node {job.node_type!r} was in flight — "
+            "not retried automatically (it may already have had external side effects)"
+        )
+    max_attempts = 5 if job.max_attempts is None else int(job.max_attempts)
+    if next_attempts > max_attempts:
+        return f"exceeded max_attempts ({max_attempts})"
+    return None
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -219,6 +240,15 @@ def _as_aware(dt: datetime | None) -> datetime | None:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+class JobCancelled(ValueError):
+    """Result reported for a job that was cancelled (RT-CANCEL-003 → 409 ``run_cancelled``).
+
+    Subclass of ``ValueError`` so existing "job already terminal" handling still applies.
+    """
+
+    code = "run_cancelled"
 
 
 class JobQueue:
@@ -356,6 +386,28 @@ class JobQueue:
                         now=_utcnow(),
                         stale_workers=self._stale_worker_ids(),
                     )
+                    jobs = dict(snap.get("jobs") or {})
+                    order = list(snap.get("order") or [])
+                    events = dict(snap.get("events") or {})
+                    from app.core.distributed.quotas import (
+                        QuotaExceeded,
+                        infer_queue_reason,
+                        org_at_queue_depth,
+                    )
+
+                    job_list = _jobs_list_from_raw(jobs)
+                    if org_at_queue_depth(getattr(job, "org_id", None), jobs=job_list, upcoming=1):
+                        raise QuotaExceeded(
+                            f"Organization queue depth exceeded for org={job.org_id!r}",
+                            kind="org",
+                        )
+                    try:
+                        from app.core.distributed.registry import get_worker_registry
+
+                        workers = get_worker_registry().list(include_stale=False)
+                    except Exception:
+                        workers = []
+                    reason = infer_queue_reason(job, workers=workers, jobs=job_list)
                     stored = job.model_copy(
                         update={
                             "job_id": job_id,
@@ -364,15 +416,14 @@ class JobQueue:
                             "claimed_by": None,
                             "claimed_at": None,
                             "lease_expires_at": None,
+                            "queue_reason": reason,
                         }
                     )
-                    jobs = dict(snap.get("jobs") or {})
-                    order = list(snap.get("order") or [])
-                    events = dict(snap.get("events") or {})
                     jobs[job_id] = _plain_jsonable(stored.model_dump(mode="python"))
                     if job_id not in order:
                         order.append(job_id)
                     events.setdefault(job_id, [])
+                    jobs = _annotate_pending_reasons(jobs, order)
                     new_snap = _keep_pause(
                         snap,
                         jobs=jobs,
@@ -388,6 +439,25 @@ class JobQueue:
 
             self._reclaim_expired_leases_unlocked(now=_utcnow())
             job_id = job.job_id or str(uuid.uuid4())
+            from app.core.distributed.quotas import (
+                QuotaExceeded,
+                infer_queue_reason,
+                org_at_queue_depth,
+            )
+
+            job_list = list(self._jobs.values())
+            if org_at_queue_depth(getattr(job, "org_id", None), jobs=job_list, upcoming=1):
+                raise QuotaExceeded(
+                    f"Organization queue depth exceeded for org={job.org_id!r}",
+                    kind="org",
+                )
+            try:
+                from app.core.distributed.registry import get_worker_registry
+
+                workers = get_worker_registry().list(include_stale=False)
+            except Exception:
+                workers = []
+            reason = infer_queue_reason(job, workers=workers, jobs=job_list)
             stored = job.model_copy(
                 update={
                     "job_id": job_id,
@@ -396,6 +466,7 @@ class JobQueue:
                     "claimed_by": None,
                     "claimed_at": None,
                     "lease_expires_at": None,
+                    "queue_reason": reason,
                 }
             )
             self._jobs[job_id] = stored
@@ -511,6 +582,19 @@ class JobQueue:
                     return True
         return False
 
+
+    def active_job_ids_for_run(self, run_id: str) -> list[str]:
+        """Pending/claimed/running job ids of ``run_id`` (orphan reconcile)."""
+        rid = str(run_id or "").strip()
+        if not rid:
+            return []
+        with self._lock:
+            self._refresh_if_stale_unlocked()
+            return [
+                jid
+                for jid, job in self._jobs.items()
+                if str(job.run_id or "") == rid and job.status in ("pending", "claimed", "running")
+            ]
 
     def active_blob_refs(
         self, *, exclude_run_id: str | None = None
@@ -735,8 +819,8 @@ class JobQueue:
             if expires > now:
                 continue
             next_attempts = int(job.attempts or 0) + 1
-            max_attempts = int(job.max_attempts or 5)
-            if next_attempts > max_attempts:
+            failure = _lease_loss_failure(job, next_attempts)
+            if failure:
                 failed = job.model_copy(
                     update={
                         "status": "failed",
@@ -753,17 +837,11 @@ class JobQueue:
                 results_raw[jid] = _plain_jsonable(JobResult(
                     job_id=jid,
                     status="failed",
-                    error=(
-                        f"exceeded max_attempts ({max_attempts}) after lease reclaim"
-                    ),
+                    error=f"{failure} after lease reclaim (worker {job.claimed_by} lost)",
                     worker_id=job.claimed_by,
                 ).model_dump(mode="python"))
                 changed = True
-                log.warning(
-                    "JobQueue: job %s failed — max_attempts %s exceeded",
-                    jid,
-                    max_attempts,
-                )
+                log.warning("JobQueue: job %s failed — %s", jid, failure)
                 continue
             update: dict[str, Any] = {
                 "status": "pending",
@@ -843,7 +921,11 @@ class JobQueue:
     def _claim_in_snapshot(
         self, snap: dict[str, Any], worker: WorkerInfo
     ) -> tuple[dict[str, Any], NodeJob | None]:
-        """CAS claim against a queue snapshot. At most one pending→claimed."""
+        """CAS claim against a queue snapshot. At most one pending→claimed.
+
+        F18: fair-share among orgs (prefer lower running/quota) then FIFO;
+        books a worker slot by transitioning pending→claimed under the store lock.
+        """
         snap = self._reclaim_in_snapshot(
             snap,
             lease_ttl_s=self._lease_ttl_s,
@@ -852,51 +934,41 @@ class JobQueue:
         )
         jobs_raw = dict(snap.get("jobs") or {})
         order = list(snap.get("order") or [])
-        for job_id in list(order):
-            payload = jobs_raw.get(job_id)
-            if payload is None:
-                continue
-            try:
-                job = NodeJob.model_validate(payload)
-            except Exception as exc:
-                log.warning(
-                    "JobQueue: skip corrupt job %r during claim: %s", job_id, exc
-                )
-                continue
-            if job.status != "pending":
-                continue
-            if str(job.run_id or "") in _paused_run_ids(snap):
-                continue
-            if not _worker_trust_ok(worker):
-                continue
-            if not _plugins_allow(worker, job.node_type):
-                continue
-            if not worker_eligible_for_job(worker, job):
-                continue
-            if _quota_blocks_claim(worker, job, jobs_raw):
-                continue
-            now = _utcnow()
-            claimed = job.model_copy(
-                update={
-                    "status": "claimed",
-                    "claimed_by": worker.worker_id,
-                    "claim_pools": _claim_pools(worker, job),
-                    "claimed_at": now,
-                    "lease_expires_at": now
-                    + timedelta(seconds=self._lease_ttl_s),
-                }
-            )
-            jobs_raw[job_id] = _plain_jsonable(claimed.model_dump(mode="python"))
-            order = [jid for jid in order if jid != job_id]
-            new_snap = _keep_pause(
+        paused = _paused_run_ids(snap)
+        job = _pick_fair_share_job(worker, order, jobs_raw, paused=paused)
+        if job is None:
+            # Refresh queue_reason on remaining pending jobs for visibility.
+            jobs_raw = _annotate_pending_reasons(jobs_raw, order)
+            return _keep_pause(
                 snap,
                 jobs=jobs_raw,
                 order=order,
                 results=dict(snap.get("results") or {}),
                 events=dict(snap.get("events") or {}),
-            )
-            return new_snap, claimed
-        return snap, None
+            ), None
+        job_id = job.job_id
+        now = _utcnow()
+        claimed = job.model_copy(
+            update={
+                "status": "claimed",
+                "claimed_by": worker.worker_id,
+                "claim_pools": _claim_pools(worker, job),
+                "claimed_at": now,
+                "lease_expires_at": now + timedelta(seconds=self._lease_ttl_s),
+                "queue_reason": None,
+            }
+        )
+        jobs_raw[job_id] = _plain_jsonable(claimed.model_dump(mode="python"))
+        order = [jid for jid in order if jid != job_id]
+        jobs_raw = _annotate_pending_reasons(jobs_raw, order)
+        new_snap = _keep_pause(
+            snap,
+            jobs=jobs_raw,
+            order=order,
+            results=dict(snap.get("results") or {}),
+            events=dict(snap.get("events") or {}),
+        )
+        return new_snap, claimed
 
     def claim(self, worker: WorkerInfo) -> NodeJob | None:
         """Claim the oldest pending job this worker is eligible for.
@@ -928,40 +1000,37 @@ class JobQueue:
                 return claimed
 
             self._reclaim_expired_leases_unlocked(now=_utcnow())
-            for job_id in list(self._order):
-                job = self._jobs.get(job_id)
-                if job is None or job.status != "pending":
-                    continue
-                if str(job.run_id or "") in self._paused_runs:
-                    continue
-                # Hard refuse: advertised plugins must include node_type.
-                if not _worker_trust_ok(worker):
-                    continue
-                if not _plugins_allow(worker, job.node_type):
-                    continue
-                if not worker_eligible_for_job(worker, job):
-                    continue
-                jobs_raw = {
-                    jid: j.model_dump(mode="python") for jid, j in self._jobs.items()
-                }
-                if _quota_blocks_claim(worker, job, jobs_raw):
-                    continue
-                now = _utcnow()
-                claimed = job.model_copy(
-                    update={
-                        "status": "claimed",
-                        "claimed_by": worker.worker_id,
-                        "claim_pools": _claim_pools(worker, job),
-                        "claimed_at": now,
-                        "lease_expires_at": now
-                        + timedelta(seconds=self._lease_ttl_s),
-                    }
-                )
-                self._jobs[job_id] = claimed
-                self._order.remove(job_id)
+            jobs_raw = {
+                jid: j.model_dump(mode="python") for jid, j in self._jobs.items()
+            }
+            job = _pick_fair_share_job(
+                worker, list(self._order), jobs_raw, paused=set(self._paused_runs)
+            )
+            if job is None:
+                annotated = _annotate_pending_reasons(jobs_raw, list(self._order))
+                for jid, payload in annotated.items():
+                    try:
+                        self._jobs[jid] = NodeJob.model_validate(payload)
+                    except Exception:
+                        pass
                 self._persist_unlocked()
-                return claimed
-            return None
+                return None
+            now = _utcnow()
+            claimed = job.model_copy(
+                update={
+                    "status": "claimed",
+                    "claimed_by": worker.worker_id,
+                    "claim_pools": _claim_pools(worker, job),
+                    "claimed_at": now,
+                    "lease_expires_at": now + timedelta(seconds=self._lease_ttl_s),
+                    "queue_reason": None,
+                }
+            )
+            self._jobs[job.job_id] = claimed
+            if job.job_id in self._order:
+                self._order.remove(job.job_id)
+            self._persist_unlocked()
+            return claimed
 
     def renew_lease(self, job_id: str, *, worker_id: str | None = None) -> NodeJob | None:
         """Extend lease for a claimed/running job (heartbeat renews lease)."""
@@ -1110,8 +1179,8 @@ class JobQueue:
             if job.claimed_by != worker_id or job.status not in ("claimed", "running"):
                 continue
             next_attempts = int(job.attempts or 0) + 1
-            max_attempts = int(job.max_attempts or 5)
-            if next_attempts > max_attempts:
+            failure = _lease_loss_failure(job, next_attempts)
+            if failure:
                 failed = job.model_copy(
                     update={
                         "status": "failed",
@@ -1128,10 +1197,7 @@ class JobQueue:
                 results_raw[jid] = _plain_jsonable(JobResult(
                     job_id=jid,
                     status="failed",
-                    error=(
-                        f"exceeded max_attempts ({max_attempts}) after worker "
-                        f"{worker_id} re-registered"
-                    ),
+                    error=f"{failure} after worker {worker_id} re-registered",
                     worker_id=worker_id,
                 ).model_dump(mode="python"))
                 released.append(jid)
@@ -1248,55 +1314,29 @@ class JobQueue:
     def _reclaim_expired_leases_unlocked(
         self, *, now: datetime | None = None
     ) -> list[str]:
+        # F19: same decision as the durable path (idempotency, max_attempts,
+        # stale-worker pin release) — run the pure snapshot reclaim in memory.
         now = _as_aware(now) or _utcnow()
-        reclaimed: list[str] = []
-        for jid, job in list(self._jobs.items()):
-            if job.status not in ("claimed", "running"):
-                continue
-            expires = _as_aware(job.lease_expires_at)
-            if expires is None:
-                claimed_at = _as_aware(job.claimed_at)
-                if claimed_at is None:
-                    continue
-                expires = claimed_at + timedelta(seconds=self._lease_ttl_s)
-            if expires > now:
-                continue
-            update: dict[str, Any] = {
-                "status": "pending",
-                "claimed_by": None,
-                "claimed_at": None,
-                "lease_expires_at": None,
-                "lease_generation": int(job.lease_generation or 0) + 1,
-            }
-            # Preferred-worker pin (placement.mode=worker) would trap the job on
-            # the unreachable worker; widen to auto + original GPU/tag constraints.
-            widened = widen_placement_after_reclaim(
-                job.placement,
-                tags=list(job.tags or []),
-                require_gpu=bool(job.require_gpu),
-                min_vram_mib=job.min_vram_mib,
-                pool=job.pool,
-            )
-            if widened is not job.placement:
-                update["placement"] = widened
-                log.info(
-                    "JobQueue: widened placement for reclaimed job %s "
-                    "(cleared preferred worker pin → mode=auto)",
-                    jid,
-                )
-            updated = job.model_copy(update=update)
-            self._jobs[jid] = updated
-            if jid not in self._order:
-                self._order.append(jid)
-            reclaimed.append(jid)
-            log.info(
-                "JobQueue: reclaimed expired lease for job %s (was claimed by %s)",
-                jid,
-                job.claimed_by,
-            )
-        if reclaimed:
-            self._persist_unlocked()
-        return reclaimed
+        snap = self._queue_snapshot_unlocked()
+        before = dict(snap.get("jobs") or {})
+        new_snap = self._reclaim_in_snapshot(
+            snap,
+            lease_ttl_s=self._lease_ttl_s,
+            now=now,
+            stale_workers=self._stale_worker_ids(),
+        )
+        if new_snap is snap:
+            return []
+        self._apply_queue_snapshot_unlocked(new_snap)
+        self._persist_unlocked()
+        return [
+            jid
+            for jid, payload in (new_snap.get("jobs") or {}).items()
+            if isinstance(before.get(jid), dict)
+            and before[jid].get("status") in ("claimed", "running")
+            and isinstance(payload, dict)
+            and payload.get("status") == "pending"
+        ]
 
     def mark_running(self, job_id: str) -> NodeJob | None:
         """Transition claimed → running (optional worker signal)."""
@@ -1364,7 +1404,12 @@ class JobQueue:
                     if payload is None:
                         raise KeyError(result.job_id)
                     job = NodeJob.model_validate(payload)
-                    if job.status in ("succeeded", "failed", "cancelled"):
+                    if job.status == "cancelled":
+                        _tombstone_rejected_outputs(result, reason=f"job {result.job_id} cancelled")
+                        raise JobCancelled(
+                            f"Job {result.job_id} was cancelled; result and artifacts discarded"
+                        )
+                    if job.status in ("succeeded", "failed"):
                         raise ValueError(
                             f"Job {result.job_id} already terminal ({job.status})"
                         )
@@ -1412,7 +1457,7 @@ class JobQueue:
                     }
                     if result.events:
                         bucket = list(evmap.get(result.job_id) or [])
-                        bucket.extend(result.events)
+                        bucket.extend(_stamp_event_seq(bucket, result.events))
                         evmap[result.job_id] = _cap_events(bucket)
                     order = [j for j in (snap.get("order") or []) if j != result.job_id]
                     new_snap = _keep_pause(
@@ -1439,7 +1484,12 @@ class JobQueue:
             job = self._jobs.get(result.job_id)
             if job is None:
                 raise KeyError(result.job_id)
-            if job.status in ("succeeded", "failed", "cancelled"):
+            if job.status == "cancelled":
+                _tombstone_rejected_outputs(result, reason=f"job {result.job_id} cancelled")
+                raise JobCancelled(
+                    f"Job {result.job_id} was cancelled; result and artifacts discarded"
+                )
+            if job.status in ("succeeded", "failed"):
                 raise ValueError(
                     f"Job {result.job_id} already terminal ({job.status})"
                 )
@@ -1479,7 +1529,7 @@ class JobQueue:
             self._results[result.job_id] = result
             if result.events:
                 bucket = self._events.setdefault(result.job_id, [])
-                bucket.extend(result.events)
+                bucket.extend(_stamp_event_seq(bucket, result.events))
                 self._events[result.job_id] = _cap_events(bucket)
             evt = self._waiters.get(result.job_id)
             if evt is not None:
@@ -1670,6 +1720,89 @@ class JobQueue:
 
             evt.wait(timeout=slice_s)
 
+    def list_queue(self, *, org_id: str | None = None) -> list[dict[str, Any]]:
+        """Pending jobs with FIFO position and queue_reason (F18).
+
+        Position is 1-based within the global pending order (after optional
+        org filter, positions are relative to the filtered list).
+        """
+        with self._lock:
+            self._refresh_if_stale_unlocked()
+            rows: list[dict[str, Any]] = []
+            pos = 0
+            for jid in list(self._order):
+                job = self._jobs.get(jid)
+                if job is None or job.status != "pending":
+                    continue
+                if org_id and str(job.org_id or "") != str(org_id):
+                    continue
+                pos += 1
+                reason = job.queue_reason or "waiting_worker"
+                rows.append(
+                    {
+                        "job_id": job.job_id,
+                        "run_id": job.run_id,
+                        "node_id": job.node_id,
+                        "node_type": job.node_type,
+                        "org_id": job.org_id,
+                        "status": "queued",
+                        "queue_position": pos,
+                        "queue_reason": reason,
+                        "pool": job.pool,
+                        "require_gpu": job.require_gpu,
+                        "created_at": job.created_at.isoformat()
+                        if job.created_at
+                        else None,
+                        "placement": job.placement.model_dump(mode="json")
+                        if job.placement is not None
+                        else None,
+                    }
+                )
+            return rows
+
+    def refresh_queue_reasons(self) -> int:
+        """Recompute queue_reason on all pending jobs. Returns updated count."""
+        with self._lock:
+            if self._store is not None:
+                def mut(snap: dict[str, Any]):
+                    jobs = dict(snap.get("jobs") or {})
+                    order = list(snap.get("order") or [])
+                    new_jobs = _annotate_pending_reasons(jobs, order)
+                    changed = sum(
+                        1
+                        for jid in order
+                        if isinstance(jobs.get(jid), dict)
+                        and isinstance(new_jobs.get(jid), dict)
+                        and jobs[jid].get("queue_reason") != new_jobs[jid].get("queue_reason")
+                    )
+                    return _keep_pause(
+                        snap,
+                        jobs=new_jobs,
+                        order=order,
+                        results=dict(snap.get("results") or {}),
+                        events=dict(snap.get("events") or {}),
+                    ), changed
+
+                return int(self._durable_mutate(mut) or 0)
+
+            jobs_raw = {
+                jid: j.model_dump(mode="python") for jid, j in self._jobs.items()
+            }
+            annotated = _annotate_pending_reasons(jobs_raw, list(self._order))
+            changed = 0
+            for jid, payload in annotated.items():
+                try:
+                    nj = NodeJob.model_validate(payload)
+                except Exception:
+                    continue
+                prev = self._jobs.get(jid)
+                if prev is not None and prev.queue_reason != nj.queue_reason:
+                    changed += 1
+                self._jobs[jid] = nj
+            if changed:
+                self._persist_unlocked()
+            return changed
+
     def pending_count(self) -> int:
         with self._lock:
             self._refresh_if_stale_unlocked()
@@ -1703,6 +1836,38 @@ class JobQueue:
             self._paused_runs.clear()
             self._persist_unlocked()
 
+
+
+
+def _annotate_pending_reasons(
+    jobs_raw: dict[str, Any], order: list[str]
+) -> dict[str, Any]:
+    """Stamp queue_reason on pending jobs (F18 visibility). Best-effort."""
+    from app.core.distributed.quotas import infer_queue_reason
+
+    try:
+        from app.core.distributed.registry import get_worker_registry
+
+        workers = get_worker_registry().list(include_stale=False)
+    except Exception:
+        workers = []
+    job_list = _jobs_list_from_raw(jobs_raw)
+    out = dict(jobs_raw)
+    for jid in order:
+        payload = out.get(jid)
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("status") != "pending":
+            continue
+        try:
+            reason = infer_queue_reason(payload, workers=workers, jobs=job_list)
+        except Exception:
+            reason = "waiting_worker"
+        if payload.get("queue_reason") != reason:
+            payload = dict(payload)
+            payload["queue_reason"] = reason
+            out[jid] = payload
+    return out
 
 
 def _claim_pools(worker: WorkerInfo, job: NodeJob) -> list[str]:
@@ -1743,9 +1908,19 @@ def _count_active_in_jobs(
 
 
 def _quota_blocks_claim(worker: WorkerInfo, job: NodeJob, jobs_raw: dict[str, Any]) -> bool:
-    """True when claiming ``job`` would exceed worker or pool concurrent quotas."""
-    from app.core.distributed.quotas import parse_pool_max_claimed, worker_max_claimed
+    """True when claiming ``job`` would exceed worker, pool, or org concurrent quotas.
 
+    F18: worker slots (max_claimed), pool caps, and per-org max_concurrent_jobs.
+    """
+    from app.core.distributed.quotas import (
+        org_at_concurrent_quota,
+        parse_pool_max_claimed,
+        worker_max_claimed,
+    )
+    from app.core.distributed.slots import slots_bookable
+
+    if not slots_bookable(worker, jobs=jobs_raw):
+        return True
     limit = worker_max_claimed(worker)
     if limit is not None:
         if _count_active_in_jobs(jobs_raw, worker_id=worker.worker_id) >= limit:
@@ -1762,7 +1937,67 @@ def _quota_blocks_claim(worker: WorkerInfo, job: NodeJob, jobs_raw: dict[str, An
         for pool_name in pools:
             if pool_name in limits and _count_active_in_jobs(jobs_raw, pool=pool_name) >= limits[pool_name]:
                 return True
+    # Org fair-share gate: do not let one tenant exceed concurrent quota.
+    job_list = list(jobs_raw.values())
+    if org_at_concurrent_quota(getattr(job, "org_id", None), jobs=job_list):
+        return True
     return False
+
+
+def _jobs_list_from_raw(jobs_raw: dict[str, Any]) -> list[Any]:
+    out: list[Any] = []
+    for payload in (jobs_raw or {}).values():
+        try:
+            out.append(NodeJob.model_validate(payload) if not isinstance(payload, NodeJob) else payload)
+        except Exception:
+            continue
+    return out
+
+
+def _pick_fair_share_job(
+    worker: WorkerInfo,
+    order: list[str],
+    jobs_raw: dict[str, Any],
+    *,
+    paused: set[str],
+) -> NodeJob | None:
+    """Pick the next eligible pending job using FIFO within org fair-share.
+
+    Among jobs this worker can run (eligibility + plugins + trust) that are not
+    blocked by worker/pool/org quotas, prefer the org with the lowest
+    running/quota utilization, breaking ties by queue order (FIFO).
+    """
+    from app.core.distributed.quotas import fair_share_key
+
+    candidates: list[tuple[tuple[float, int], int, NodeJob]] = []
+    job_list = _jobs_list_from_raw(jobs_raw)
+    for idx, job_id in enumerate(order):
+        payload = jobs_raw.get(job_id)
+        if payload is None:
+            continue
+        try:
+            job = NodeJob.model_validate(payload)
+        except Exception as exc:
+            log.warning("JobQueue: skip corrupt job %r during fair-share: %s", job_id, exc)
+            continue
+        if job.status != "pending":
+            continue
+        if str(job.run_id or "") in paused:
+            continue
+        if not _worker_trust_ok(worker):
+            continue
+        if not _plugins_allow(worker, job.node_type):
+            continue
+        if not worker_eligible_for_job(worker, job):
+            continue
+        if _quota_blocks_claim(worker, job, jobs_raw):
+            continue
+        key = fair_share_key(job.org_id, jobs=job_list, fifo_index=idx)
+        candidates.append((key, idx, job))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: (t[0][0], t[0][1], t[1]))
+    return candidates[0][2]
 
 
 def worker_trust_required() -> bool:

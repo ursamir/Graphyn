@@ -240,6 +240,45 @@ def register_exception_handlers(app: FastAPI) -> None:
             headers={_REQUEST_ID_HEADER: rid},
         )
 
+    # F18.1: enqueue / claim path QuotaExceeded must not become opaque 500.
+    try:
+        from app.core.distributed.quotas import QuotaExceeded as _QuotaExceeded
+    except Exception:  # pragma: no cover — import failure leaves 500 path
+        _QuotaExceeded = None  # type: ignore[misc, assignment]
+
+    if _QuotaExceeded is not None:
+
+        @app.exception_handler(_QuotaExceeded)
+        async def _quota_exceeded_handler(request: Request, exc: _QuotaExceeded):
+            rid = get_or_set_request_id(request)
+            body = error_body(
+                code="quota_exceeded",
+                message=str(exc) or "Quota exceeded",
+                request_id=rid,
+                status_code=409,
+                legacy_detail={"code": "quota_exceeded", "message": str(exc), "kind": getattr(exc, "kind", None)},
+            )
+            return JSONResponse(
+                status_code=409,
+                content=body,
+                headers={_REQUEST_ID_HEADER: rid},
+            )
+
+    from app.core.runs.run_journal import ArtifactCommitForbidden as _CommitForbidden
+
+    @app.exception_handler(_CommitForbidden)
+    async def _run_cancelled_handler(request: Request, exc: _CommitForbidden):
+        # RT-CANCEL-003: artifact commit after a durable cancel → 409 run_cancelled.
+        rid = get_or_set_request_id(request)
+        body = error_body(
+            code="run_cancelled",
+            message=str(exc) or "Run was cancelled",
+            request_id=rid,
+            status_code=409,
+            legacy_detail={"code": "run_cancelled", "message": str(exc)},
+        )
+        return JSONResponse(status_code=409, content=body, headers={_REQUEST_ID_HEADER: rid})
+
     @app.exception_handler(Exception)
     async def _unhandled_exception_handler(request: Request, exc: Exception):
         rid = get_or_set_request_id(request)

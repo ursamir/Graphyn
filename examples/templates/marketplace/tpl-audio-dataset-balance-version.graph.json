@@ -1,0 +1,126 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-audio-dataset-balance-version",
+    "seed": 42,
+    "description": "Build a feature dataset, oversample minority classes and write a versioned dataset snapshot.",
+    "created_at": null,
+    "tags": [
+      "audio",
+      "kws",
+      "dataset",
+      "versioning"
+    ],
+    "pack": "Audio",
+    "industry": "general",
+    "marketplace_id": "tpl-audio-dataset-balance-version",
+    "status": "ready",
+    "source_example": "marketplace/tpl-audio-dataset-balance-version.graph.json",
+    "base_template": "tpl-audio-dataset-balance-version"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "source_type": "filesystem",
+        "recursive": true,
+        "limit": 8,
+        "path": "workspace/datasets/input/speech-commands"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000,
+        "mono": true
+      },
+      "label": "condition",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "feature_frontend",
+      "config": {
+        "feature_type": "mfcc"
+      },
+      "label": "features",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "dataset_builder",
+      "config": {
+        "fixed_length": 100
+      },
+      "label": "dataset",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "dataset_balancer",
+      "config": {
+        "strategy": "oversample"
+      },
+      "label": "balance",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n5",
+      "node_type": "dataset_versioner",
+      "config": {
+        "version_tag": "v1",
+        "overwrite": true
+      },
+      "label": "version",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n4",
+      "src_port": "output",
+      "dst_id": "n5",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

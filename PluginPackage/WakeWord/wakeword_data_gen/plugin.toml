@@ -1,0 +1,44 @@
+[plugin]
+name             = "wakeword-data-gen"
+version          = "2.0.0"
+description      = "Synthetic wake-word clips: Piper VITS (SLERP speaker blending) or MMS-TTS positives, CMUdict adversarial negatives and background-noise clips (livekit-wakeword)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+tags             = ["wakeword", "tts", "synthetic-data", "piper", "livekit-wakeword"]
+
+# Wraps livekit-wakeword (Apache-2.0). Isolated venv: torch is pre-installed CPU-only.
+# piper_vits also needs the espeak-ng binary; its checkpoint (~174 MB) downloads once from github.com/livekit/livekit-wakeword releases.
+# mms downloads facebook/mms-tts-* from huggingface.co.
+dependencies = [
+    "numpy>=1.24",
+    "soundfile>=0.12",
+    "scipy>=1.11",
+    "torch>=2.1",
+    "transformers>=4.40",
+    "livekit-wakeword[train]>=0.2.1,<0.3",
+    "cmudict>=1.0",
+]
+
+runtime = "isolated"
+node_types = ["wakeword_data_gen"]
+
+[config_schema.wakeword_data_gen]
+model_name = { type = "string", title = "Model name", default = "hey_graphyn", description = "Directory / model file stem (letters, digits, _ and -).", minLength = 1, pattern = "^[A-Za-z0-9_\\-]+$" }
+target_phrases = { type = "array", title = "Target phrases", default = ["hey graphyn"], description = "Wake phrase(s) to synthesise as positives.", items = { type = "string" }, minItems = 1 }
+custom_negative_phrases = { type = "array", title = "Extra negatives", default = [], description = "Phrases added to the generated adversarial negatives.", items = { type = "string" } }
+n_samples = { type = "integer", title = "Train clips", default = 200, description = "Positive and negative clips per train split.", minimum = 1, maximum = 200000 }
+n_samples_val = { type = "integer", title = "Test clips", default = 50, description = "Positive and negative clips per test split.", minimum = 1, maximum = 50000 }
+n_background_samples = { type = "integer", title = "Background train clips", default = 50, description = "Background-noise clips (needs background audio).", minimum = 0 }
+n_background_samples_val = { type = "integer", title = "Background test clips", default = 10, minimum = 0 }
+tts_backend = { type = "string", title = "TTS", default = "auto", description = "piper_vits: Piper VITS LibriTTS + SLERP (needs espeak-ng); mms: Meta MMS-TTS via transformers; auto: piper when espeak-ng is installed, else mms.", enum = ["auto", "piper_vits", "mms"] }
+piper_checkpoint = { type = "string", title = "Piper checkpoint", default = "", description = "Path to en-us-libritts-high.pt (empty \u2192 <data_dir>/piper/, downloaded from the livekit-wakeword GitHub release when missing)." }
+max_speakers = { type = "integer", title = "Max speakers", default = 0, description = "piper: limit LibriTTS speakers (0 = all 904).", minimum = 0 }
+mms_model = { type = "string", title = "MMS model", default = "facebook/mms-tts-eng", description = "mms: Hugging Face MMS-TTS checkpoint." }
+length_scales = { type = "array", title = "Length scales", default = [0.75, 1.0, 1.25], description = "Speaking-rate sweep (>1 = slower).", items = { type = "number" }, minItems = 1 }
+noise_scales = { type = "array", title = "Noise scales", default = [0.667, 0.98], description = "VITS prosody-noise sweep.", items = { type = "number" }, minItems = 1 }
+batch_size = { type = "integer", title = "TTS batch size", default = 25, minimum = 1, maximum = 512 }
+output_dir = { type = "string", title = "Output dir", default = "workspace/artifacts/wakeword", description = "Runs are written to <output_dir>/<model_name>/.", ui = { group = "Advanced" } }
+data_dir = { type = "string", title = "Data dir", default = "workspace/models/wakeword", description = "Shared downloads (Piper checkpoint, optional ACAV100M features)." }
+overwrite = { type = "boolean", title = "Overwrite", default = false, description = "Delete an existing <model_name> directory first (otherwise complete splits are reused and partial ones resumed)." }

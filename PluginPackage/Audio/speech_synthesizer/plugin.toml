@@ -1,0 +1,38 @@
+[plugin]
+name             = "speech-synthesizer"
+version          = "2.0.0"
+description      = "Text-to-speech: Meta MMS-TTS (VITS, 1,100+ languages, via transformers) or eSpeak NG."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "tts",
+    "synthesis",
+    "mms",
+    "espeak",
+    "generative"
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "soundfile>=0.12",
+    "torch>=2.1",
+    "transformers>=4.40",
+]
+
+runtime = "isolated"
+node_types = ["speech_synthesizer"]
+
+[config_schema.speech_synthesizer]
+backend = { type = "string", title = "Backend", default = "mms", description = "mms: Meta MMS-TTS via transformers; espeak: eSpeak NG binary; auto: mms.", enum = ["mms", "espeak", "auto"] }
+text = { type = "string", title = "Text", default = "", description = "Text used when the input port is empty." }
+model_name = { type = "string", title = "Model name", default = "", description = "mms: HF model id override (empty → facebook/mms-tts-<language>)." }
+language = { type = "string", title = "Language", default = "en", description = "ISO 639-1 or 639-3 code (mms checkpoint / espeak voice)." }
+sample_rate = { type = "integer", title = "Sample rate", default = 16000, description = "Output sample rate in Hz (resampled from the model rate)." }
+speed = { type = "number", title = "Speed", default = 1.0, description = "Speaking rate multiplier (1.0 = normal)." }
+noise_scale = { type = "number", title = "Noise scale", default = 0.667, description = "mms: prosody variation (VITS noise scale)." }
+output_dir = { type = "string", title = "Output dir", default = "workspace/datasets/output/tts", description = "Where synthesized WAV files are written.", ui = { group = "Advanced" } }

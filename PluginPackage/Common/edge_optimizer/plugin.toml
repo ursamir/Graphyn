@@ -1,6 +1,6 @@
 [plugin]
 name             = "edge-optimizer"
-version          = "1.1.0"
+version          = "1.2.0"
 description      = "Optimize models for edge deployment via TFLite or ONNX quantization."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
@@ -25,7 +25,7 @@ runtime = "isolated"
 node_types = ["edge_optimizer"]
 
 [config_schema.edge_optimizer]
-backend = { type = "string", title = "Backend", default = "tflite", description = "Export format. tflite = TensorFlow Lite (supports quantization); onnx = ONNX (float32 only); tflm, executorch, ultralytics_export = placeholder only, use the dedicated export nodes; auto = tflite when available, else onnx.", enum = ["tflite", "onnx", "tflm", "executorch", "ultralytics_export", "auto"], ui = { help_advanced = "onnx uses tf2onnx (Keras) or torch.onnx (PyTorch)." } }
+backend = { type = "string", title = "Backend", default = "tflite", description = "Export format. tflite = TensorFlow Lite (supports quantization); onnx = ONNX (float32 only); tflm = TensorFlow Lite for Microcontrollers (the .tflite plus C source arrays and an op-resolver list); auto = tflite when available, else onnx.", enum = ["tflite", "onnx", "tflm", "auto"], ui = { help_advanced = "onnx uses tf2onnx (Keras) or torch.onnx (PyTorch)." } }
 quantization = {  type = "string", title = "Quantization", default = "int8", description = "float32 = no quantization; float16 = half-precision weights; int8 = full integer model (uint8 input/output), calibrated on training samples. TFLite only.", enum = ["float32", "float16", "int8"], ui = { help_advanced = "int8 calibrates on rows of saved_model/X_train_repr.npy written by the trainer.", visible_if = { backend = ["tflite", "auto"] } } }
 output_path = { type = "string", title = "Output path", default = "workspace/artifacts/optimized", description = "Folder for the exported model and its labels.txt.", ui = { group = "Advanced", help_advanced = "Relative to the Graphyn workspace (workspace/artifacts/...)." } }
 representative_samples = { type = "integer", title = "Representative samples", default = 100, minimum = 1, description = "Number of training samples used to calibrate int8 quantization.", ui = { help_advanced = "Evenly spaced over saved_model/X_train_repr.npy.", visible_if = { quantization = "int8" } } }

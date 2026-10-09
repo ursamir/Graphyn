@@ -4,7 +4,8 @@ Bounded Context:  Execution Runtime / Workspace
 Responsibility:   Create filesystem write destinations for every node, in one
                   place, instead of each plugin mkdir'ing its own output_path.
 Owns:             WRITE_CONFIG_KEYS, ensure_write_destination, ensure_node_write_dirs,
-                  jail_relative_path (plugin file-path jail).
+                  jail_relative_path (plugin file-path jail),
+                  jail_read_path (read jail; follows workspace links into examples/).
 Public Surface:   ensure_node_write_dirs, ensure_write_destination, WRITE_CONFIG_KEYS,
                   jail_relative_path.
 Must NOT:         Create ingest/read directories (path, model_path). Must not
@@ -19,6 +20,7 @@ process() for in-process and isolated workers alike.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -117,6 +119,72 @@ def jail_relative_path(raw: str, *, what: str = "path") -> Path:
     if resolved is None:
         raise ValueError(f"{what} resolves outside the workspace")
     return resolved
+
+
+def _trusted_read_roots() -> list[Path]:
+    """Read-only roots a *workspace symlink* may point into (F19 / F-19).
+
+    Template sync links ``workspace/datasets/input/<slug>`` to the bundled
+    ``examples/<folder>/data`` seed tree. Those links live inside the workspace
+    but resolve outside it; reading through them is safe (shipped sample data),
+    writing is not, so only :func:`jail_read_path` honours these roots.
+    """
+    roots: list[Path] = []
+    try:
+        from app.core.templates.example_templates import examples_dir
+
+        roots.append(examples_dir().resolve())
+    except Exception:  # pragma: no cover - import guard
+        pass
+    env = os.environ.get("GRAPHYN_EXAMPLES_DIR", "").strip()
+    if env:
+        try:
+            roots.append(Path(env).resolve())
+        except OSError:
+            pass
+    return roots
+
+
+def jail_read_path(raw: str, *, what: str = "path") -> Path:
+    """Resolve a relative path for **reading** inside the workspace.
+
+    Same lexical rules as :func:`jail_relative_path` (no absolute paths, no
+    ``..``). The path must exist *lexically* under the workspace; it may be (or
+    pass through) a symlink whose target is inside the workspace or inside the
+    bundled ``examples/`` seed tree (see :func:`_trusted_read_roots`). A
+    ``workspace/`` prefix is accepted once and never doubled. Raises
+    ``ValueError`` (outside the jail) or ``FileNotFoundError`` (missing).
+    """
+    text = (raw or "").replace("\\", "/").strip()
+    if not text:
+        raise ValueError(f"{what} is required")
+    if text.startswith("/") or (len(text) > 1 and text[1] == ":") or text.startswith("~"):
+        raise ValueError(f"{what} must be relative to the workspace (got an absolute path)")
+    parts = [p for p in text.split("/") if p not in ("", ".")]
+    if any(part == ".." for part in parts):
+        raise ValueError(f"{what} must not contain '..'")
+    root = _project_root()
+    lexical: list[Path] = []
+    if parts and parts[0] == "workspace" and len(parts) > 1:
+        lexical.append(root.joinpath(*parts[1:]))
+    lexical.append(root.joinpath(*parts))
+    allowed = [root, *_trusted_read_roots()]
+    rejected = False
+    for cand in lexical:
+        if not os.path.lexists(cand):
+            continue
+        try:
+            resolved = cand.resolve()
+        except OSError:
+            continue
+        if any(resolved == r or resolved.is_relative_to(r) for r in allowed):
+            if not resolved.exists():
+                raise FileNotFoundError(f"{what}: {text!r} is a dangling link")
+            return resolved
+        rejected = True
+    if rejected:
+        raise ValueError(f"{what} resolves outside the workspace")
+    raise FileNotFoundError(f"{what}: {text!r} not found in the workspace")
 
 
 def ensure_write_destination(raw: str) -> Path | None:

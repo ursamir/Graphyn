@@ -69,14 +69,35 @@ def test_http_provider_missing_key(installed_cls):
         node.process({"input": [_sample()]})
 
 
-def test_default_provider_is_not_mock(installed_cls, monkeypatch):
+def test_default_provider_is_local_whisper(installed_cls, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     node = installed_cls(config={}, seed=0)
-    assert (node.config.provider or "").lower() != "mock"
-    assert node.config.provider == "openai_compat"
-    sample = _sample()
-    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
-        node.process({"input": [sample]})
+    assert node.config.provider == "local_whisper"
+
+
+def test_every_sample_transcribed_and_merged(installed_cls, monkeypatch):
+    """All samples are transcribed (not just the first); timings share one timeline."""
+    seen = []
+
+    def fake_local(self, samples, *, provider_label="local_whisper"):
+        seen.append(samples[0].metadata["i"])
+        i = samples[0].metadata["i"]
+        return self_types.Transcript(text=f"t{i}", language="en",
+                                     words=[self_types.WordTiming(word=f"w{i}", start=0.1, end=0.4)])
+
+    import sys
+    self_types = sys.modules[installed_cls.__module__]
+    monkeypatch.setattr(installed_cls, "_local_whisper", fake_local)
+    node = installed_cls(config={}, seed=0)
+    out = node.process({"input": [_sample(i=0), _sample(n=32000, i=1), _sample(i=2)]})["output"]
+    assert seen == [0, 1, 2]
+    assert out.text == "t0\nt1\nt2"
+    assert [round(w.start, 3) for w in out.words] == [0.1, 1.1, 3.1]
+    items = out.metadata["items"]
+    assert [it["text"] for it in items] == ["t0", "t1", "t2"]
+    assert [it["offset_s"] for it in items] == [0.0, 1.0, 3.0]
+    single = node.process({"input": [_sample(i=7)]})["output"]
+    assert single.text == "t7" and "items" not in single.metadata
 
 
 def test_assemblyai_polls_until_completed(installed_cls, tmp_path, monkeypatch):
@@ -212,6 +233,9 @@ def test_openai_compat_refuses_key_to_unbound_base_url(installed_cls, tmp_path, 
         config={"provider": "openai_compat", "base_url": "https://evil.example.com/v1"},
         seed=0,
     )
+    # Egress DNS policy is tested elsewhere; isolate the key<->base_url binding.
+    import sys
+    monkeypatch.setattr(sys.modules[installed_cls.__module__], "validate_http_egress_url", lambda url: None)
     with patch("httpx.post") as post:
         with pytest.raises(RuntimeError, match="base_url"):
             node.process({"input": [sample]})

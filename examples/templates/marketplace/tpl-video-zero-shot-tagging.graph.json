@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-video-zero-shot-tagging",
+    "seed": 42,
+    "description": "Sample frames, embed with CLIP and tag each video against zero-shot labels; export with annotations.",
+    "created_at": null,
+    "tags": [
+      "video",
+      "clip",
+      "zero-shot"
+    ],
+    "pack": "Video",
+    "industry": "general",
+    "marketplace_id": "tpl-video-zero-shot-tagging",
+    "status": "ready",
+    "source_example": "marketplace/tpl-video-zero-shot-tagging.graph.json",
+    "base_template": "tpl-video-zero-shot-tagging"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "video_ingest",
+      "config": {
+        "recursive": true,
+        "path": "workspace/datasets/input/video-demo"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "video_embed",
+      "config": {
+        "num_frames": 4,
+        "zero_shot_labels": [
+          "an animal",
+          "a person",
+          "a city street",
+          "a cartoon"
+        ]
+      },
+      "label": "embed",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "video_exporter",
+      "config": {
+        "clean": true
+      },
+      "label": "export",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "annotations",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

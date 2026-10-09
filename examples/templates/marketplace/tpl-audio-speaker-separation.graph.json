@@ -1,0 +1,92 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-audio-speaker-separation",
+    "seed": 42,
+    "description": "Separate overlapped speech into per-speaker tracks with SpeechBrain SepFormer and export them.",
+    "created_at": null,
+    "tags": [
+      "audio",
+      "speaker",
+      "separation"
+    ],
+    "pack": "Audio",
+    "industry": "general",
+    "marketplace_id": "tpl-audio-speaker-separation",
+    "status": "ready",
+    "source_example": "marketplace/tpl-audio-speaker-separation.graph.json",
+    "base_template": "tpl-audio-speaker-separation"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "source_type": "filesystem",
+        "recursive": true,
+        "limit": 8,
+        "path": "workspace/datasets/input/speaker-verification"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000,
+        "mono": true
+      },
+      "label": "condition",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "speaker_separator",
+      "config": {
+        "backend": "speechbrain",
+        "num_speakers": 2
+      },
+      "label": "separate",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "audio_exporter",
+      "config": {
+        "format": "wav",
+        "overwrite": true
+      },
+      "label": "export",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-wakeword-detect",
+    "seed": 42,
+    "description": "Run a trained wake-word ONNX model over recordings and report detections per clip.",
+    "created_at": null,
+    "tags": [
+      "wakeword",
+      "detect"
+    ],
+    "pack": "WakeWord",
+    "industry": "general",
+    "marketplace_id": "tpl-wakeword-detect",
+    "status": "needs-upstream",
+    "source_example": "marketplace/tpl-wakeword-detect.graph.json",
+    "base_template": "tpl-wakeword-detect",
+    "requires": [
+      "tpl-wakeword-train-export (produces workspace/models/wakeword/hey_graphyn/hey_graphyn.onnx)"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "source_type": "filesystem",
+        "recursive": true,
+        "limit": 8,
+        "path": "workspace/datasets/input/wake-word"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "wakeword_infer",
+      "config": {
+        "model_path": "workspace/models/wakeword/hey_graphyn/hey_graphyn.onnx"
+      },
+      "label": "detect",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "audio",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

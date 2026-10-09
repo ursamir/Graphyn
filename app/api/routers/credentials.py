@@ -90,44 +90,79 @@ def get_kinds():
     return {"kinds": kinds}
 
 
+def _active_org_id() -> str | None:
+    from app.core.trust.identity import current_identity
+
+    ident = current_identity() or {}
+    if ident.get("kind") == "user":
+        return ident.get("org_id")
+    return None
+
+
 @router.get("", summary="List credential connections (metadata / redacted only)")
 def list_creds(
     kind: Optional[str] = Query(None),
     include_revoked: bool = Query(False),
 ):
-    items = list_connections(kind=kind, include_revoked=include_revoked)
+    org_id = _active_org_id()
+    items = list_connections(kind=kind, include_revoked=include_revoked, org_id=org_id)
     return {"items": items, "total": len(items)}
 
 
 @router.post("", summary="Create a credential connection")
 def create_cred(body: CredentialCreateBody, request: Request):
     try:
+        from app.core.trust.metering import MeterStoreError, get_meter_store, record_meter_event
+
+        org_id = _active_org_id()
+        if org_id:
+            try:
+                get_meter_store().check_quota(org_id, "credentials")
+            except MeterStoreError as exc:
+                raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": str(exc)}) from exc
         meta = create_connection(
             name=body.name,
             kind=body.kind,
             payload=body.payload or {},
             is_default=bool(body.is_default),
             meta=body.meta,
+            org_id=_active_org_id(),
         )
     except (CredentialError, CredentialNotFoundError) as exc:
         raise _http(exc) from exc
     _audit(request, "credential.create", meta["id"], {"kind": meta["kind"], "name": meta["name"]})
+    if org_id:
+        record_meter_event(org_id, "credential.created", resource_type="credential", resource_id=meta["id"])
     return JSONResponse(content={"ok": True, **meta})
 
+
+
+def _org_allowed(meta: dict) -> bool:
+    org_id = _active_org_id()
+    if not org_id:
+        return True
+    return (meta.get("org_id") or None) == org_id
+
+
+def _require_org_cred(connection_id: str) -> dict:
+    meta = get_connection(connection_id, include_revoked=True)
+    if not _org_allowed(meta):
+        raise CredentialNotFoundError(f"Credential connection {connection_id!r} not found")
+    return meta
 
 @router.get("/{connection_id}", summary="Get one connection (redacted)")
 def get_cred(connection_id: str):
     try:
-        meta = get_connection(connection_id, include_revoked=True)
+        return _require_org_cred(connection_id)
     except (CredentialError, CredentialNotFoundError) as exc:
         raise _http(exc) from exc
-    return meta
 
 
 @router.patch("/{connection_id}", summary="Update / rotate a connection")
 @router.put("/{connection_id}", summary="Update / rotate a connection")
 def update_cred(connection_id: str, body: CredentialUpdateBody, request: Request):
     try:
+        _require_org_cred(connection_id)
         meta = update_connection(
             connection_id,
             name=body.name,
@@ -145,6 +180,7 @@ def update_cred(connection_id: str, body: CredentialUpdateBody, request: Request
 @router.post("/{connection_id}/default", summary="Bind as workspace default for kind")
 def bind_default(connection_id: str, request: Request):
     try:
+        _require_org_cred(connection_id)
         meta = set_default(connection_id)
     except (CredentialError, CredentialNotFoundError) as exc:
         raise _http(exc) from exc
@@ -159,6 +195,7 @@ def delete_cred(
     delete: bool = Query(False, description="Permanently delete instead of soft-revoke"),
 ):
     try:
+        _require_org_cred(connection_id)
         result = revoke_connection(connection_id, delete=bool(delete))
     except (CredentialError, CredentialNotFoundError) as exc:
         raise _http(exc) from exc

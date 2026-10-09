@@ -1,0 +1,25 @@
+[plugin]
+name             = "experiment-tracker"
+version          = "1.0.0"
+description      = "Log experiment parameters, metrics, and artifacts. JSON backend (default) or MLflow."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["ml", "experiment", "tracking", "mlflow", "governance"]
+
+dependencies = [
+    "numpy>=1.24",
+    "mlflow-skinny>=2.10",
+]
+
+runtime = "isolated"
+node_types = ["experiment_tracker"]
+
+[config_schema.experiment_tracker]
+backend = {  type = "string", title = "Backend", default = "json", description = "Implementation backend. One of: json, mlflow.", enum = ["json", "mlflow"]  }
+experiment_name = { type = "string", title = "Experiment name", default = "default", description = "Name recorded in the experiment tracker / run metadata." }
+tracking_uri = { type = "string", title = "Tracking URI", default = "", description = "MLflow tracking URI (mlflow backend). Empty → local file store at {output_dir}/mlruns; http(s)://host for an MLflow server." }
+log_artifacts = { type = "boolean", title = "Log artifacts", default = true, description = "Also log the model / manifest files referenced by the input." }
+output_dir = { type = "string", title = "Output dir", default = "workspace/runs", description = "Directory for JSON run records (json) or the local MLflow store (mlflow with empty tracking URI).", ui = { group = "Advanced" } }

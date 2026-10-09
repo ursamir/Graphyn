@@ -40,7 +40,9 @@ _FENCE = re.compile(r"^\s*```(?:json)?\s*\n?(.*?)\n?```\s*$", re.S | re.I)
 
 def _parse_payload(raw: Any) -> tuple[Any, list[str]]:
     """Coerce LLM output to a JSON value: parse strings / ChatMessage.content."""
-    data = _dump(raw)
+    from app.core.nodes.payload import unwrap_payload
+
+    data = _dump(unwrap_payload(raw))  # F19 (F-06): validate the payload, not its wrapper
     if isinstance(data, dict) and "role" in data and isinstance(data.get("content"), str) \
             and set(data) <= {"role", "content", "name", "metadata"}:
         data = data["content"]

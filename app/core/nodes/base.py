@@ -76,6 +76,17 @@ class Node(Generic[InputT, OutputT]):
         """Default empty config — subclasses replace this."""
         pass
 
+    @classmethod
+    def missing_run_config(cls, config: "NodeConfig") -> list[tuple[str, str]]:
+        """Config the node cannot run without, as ``[(field, message)]`` (F19 / F-25).
+
+        Fields that are optional in the schema (so templates and drafts stay
+        loadable) but required to actually execute. Validation reports them as
+        ``VAL-REQ-CONFIG`` warnings and execution refuses the graph up front
+        instead of starting a run that is certain to fail. Default: none.
+        """
+        return []
+
     # ── construction ─────────────────────────────────────────────────────────
     def __init__(
         self,

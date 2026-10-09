@@ -1,0 +1,97 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-wakeword-train-export",
+    "seed": 42,
+    "description": "End-to-end wake-word model: synthetic data, features, 3-phase training with threshold tuning, ONNX export.",
+    "created_at": null,
+    "tags": [
+      "wakeword",
+      "train",
+      "onnx"
+    ],
+    "pack": "WakeWord",
+    "industry": "general",
+    "marketplace_id": "tpl-wakeword-train-export",
+    "status": "ready",
+    "source_example": "marketplace/tpl-wakeword-train-export.graph.json",
+    "base_template": "tpl-wakeword-train-export"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "wakeword_data_gen",
+      "config": {
+        "model_name": "hey_graphyn",
+        "output_dir": "workspace/models/wakeword",
+        "target_phrases": [
+          "hey graphyn"
+        ],
+        "n_samples": 24,
+        "n_samples_val": 8,
+        "n_background_samples": 8,
+        "n_background_samples_val": 2,
+        "tts_backend": "auto"
+      },
+      "label": "generate",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "wakeword_feature_extract",
+      "config": {
+        "augment": true,
+        "rounds": 1
+      },
+      "label": "features",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "wakeword_train",
+      "config": {
+        "steps": 600,
+        "device": "cpu"
+      },
+      "label": "train",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "wakeword_export_onnx",
+      "config": {
+        "quantize": false
+      },
+      "label": "export",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "run",
+      "dst_id": "n1",
+      "dst_port": "run",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "run",
+      "dst_id": "n2",
+      "dst_port": "run",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "run",
+      "dst_id": "n3",
+      "dst_port": "run",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

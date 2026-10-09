@@ -59,11 +59,23 @@ def test_construct(installed_cls):
 
 
 # ── smoke process ─────────────────────────────────────────────────────────────
-# AudioClassifierNode.process(self, inputs: list) has its second parameter named
-# "inputs", so the SISO wrapper does NOT activate (it only wraps when the param
-# is NOT named "inputs"). The node therefore expects the raw list directly.
+# AudioClassifierNode.process(self, samples: list) is SISO-wrapped: the engine
+# passes {"input": [...]} and gets {"output": [...]} back. (It used to name the
+# parameter "inputs", which disables the wrapper, so in a live pipeline the node
+# iterated the dict keys and failed with "got 'str'".)
 # With backend="auto" and no model_path, it tries YAMNet (tensorflow_hub).
 # If TF is not installed, the node raises ImportError — we skip gracefully.
+
+
+def test_process_is_siso_wrapped():
+    from importlib import util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[3] / "PluginPackage" / "Audio" / "audio_classifier" / "nodes.py"
+    spec = util.spec_from_file_location("_ac_nodes_siso", path)
+    mod = util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert hasattr(mod.AudioClassifierNode.process, "__wrapped__")
 
 def _call_process(node, items):
     """Call process() correctly regardless of SISO-wrapper state.
@@ -166,7 +178,7 @@ def test_confidence_threshold_filters_predictions(installed_cls, make_audio_samp
         s2.path = str(s2.path) + "_low"
     except Exception:
         pass
-    out = node.process([s1, s2])
+    out = node.process({"input": [s1, s2]})["output"]
     assert len(out) == 1
     assert out[0].predicted_label == "c"
     assert out[0].metadata.get("confidence_threshold") == 0.9

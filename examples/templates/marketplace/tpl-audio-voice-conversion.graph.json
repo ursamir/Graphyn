@@ -1,0 +1,74 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-audio-voice-conversion",
+    "seed": 42,
+    "description": "Convert clips to a reference speaker's voice with kNN-VC (WavLM features) and export them.",
+    "created_at": null,
+    "tags": [
+      "audio",
+      "speaker",
+      "voice-conversion"
+    ],
+    "pack": "Audio",
+    "industry": "general",
+    "marketplace_id": "tpl-audio-voice-conversion",
+    "status": "ready",
+    "source_example": "marketplace/tpl-audio-voice-conversion.graph.json",
+    "base_template": "tpl-audio-voice-conversion"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "source_type": "filesystem",
+        "recursive": true,
+        "limit": 8,
+        "path": "workspace/datasets/input/speaker-verification"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "voice_converter",
+      "config": {
+        "backend": "knnvc",
+        "target_speaker": "workspace/datasets/input/speaker-verification/speaker_002"
+      },
+      "label": "convert",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "audio_exporter",
+      "config": {
+        "format": "wav",
+        "overwrite": true
+      },
+      "label": "export",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

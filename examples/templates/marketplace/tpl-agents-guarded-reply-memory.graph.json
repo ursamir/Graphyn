@@ -1,0 +1,114 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-agents-guarded-reply-memory",
+    "seed": 42,
+    "description": "Draft a reply with a local LLM, block policy violations, pass an approval gate and persist to memory.",
+    "created_at": null,
+    "tags": [
+      "agents",
+      "guardrails",
+      "hitl"
+    ],
+    "pack": "Agents",
+    "industry": "general",
+    "marketplace_id": "tpl-agents-guarded-reply-memory",
+    "status": "needs-endpoint",
+    "source_example": "marketplace/tpl-agents-guarded-reply-memory.graph.json",
+    "base_template": "tpl-agents-guarded-reply-memory",
+    "requires": [
+      "Ollama reachable at OLLAMA_BASE_URL (host on GRAPHYN_HTTP_EGRESS_ALLOWLIST) with the configured model pulled"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "prompt_template",
+      "config": {
+        "template": "Write a two-sentence status update for a customer whose order shipped."
+      },
+      "label": "prompt",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "llm_chat",
+      "config": {
+        "provider": "ollama",
+        "model": "qwen3:0.6b",
+        "temperature": 0.0
+      },
+      "label": "chat",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "guardrail_filter",
+      "config": {
+        "policies": [
+          "pii",
+          "secret"
+        ],
+        "action": "block"
+      },
+      "label": "guard",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "hitl_approve",
+      "config": {
+        "unattended_approve": true,
+        "reason_required": false
+      },
+      "label": "approve",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "memory_store",
+      "config": {
+        "namespace": "support-replies",
+        "key": "last_reply"
+      },
+      "label": "remember",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n3",
+      "src_port": "approved",
+      "dst_id": "n4",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

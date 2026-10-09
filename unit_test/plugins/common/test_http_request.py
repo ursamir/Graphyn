@@ -100,7 +100,7 @@ def test_auth_env_not_secret_in_config(installed_cls, monkeypatch):
     assert "s3cret-token" not in str(dumped)
     assert dumped["auth_env"] == "GITHUB_TOKEN"
     from unittest.mock import patch
-    with patch("httpx.stream", _stream(_FakeResp(201, '{"ok":true}'))) as mocked:
+    with patch("app.core.trust.egress.egress_stream", _stream(_FakeResp(201, '{"ok":true}'))) as mocked:
         out = node.process({"input": {}})["output"]
     assert out.status_code == 201
     headers = mocked.call_args.kwargs.get("headers") or {}
@@ -128,7 +128,7 @@ def test_http_mocked(installed_cls):
         "timeout_s": 1.0,
         "retry": 0,
     }, seed=0)
-    with patch("httpx.stream", _stream(_FakeResp(200, '{"ok":true}', {"content-type": "application/json"}))) as mocked:
+    with patch("app.core.trust.egress.egress_stream", _stream(_FakeResp(200, '{"ok":true}', {"content-type": "application/json"}))) as mocked:
         out = node.process({"input": {"ignored": True}})["output"]
     assert out.ok is True
     mocked.assert_called_once()
@@ -148,7 +148,7 @@ def test_restricted_egress_blocks_private_before_httpx(installed_cls, monkeypatc
         "method": "GET",
     }, seed=0)
     from unittest.mock import patch
-    with patch("httpx.stream") as mocked:
+    with patch("app.core.trust.egress.egress_stream") as mocked:
         with pytest.raises(RuntimeError, match="egress|blocked|private|loopback"):
             node.process({"input": None})
     mocked.assert_not_called()
@@ -162,7 +162,7 @@ def test_trusted_egress_allows_private_literal(installed_cls, monkeypatch):
         "method": "GET",
     }, seed=0)
     from unittest.mock import patch
-    with patch("httpx.stream", _stream(_FakeResp(200, "ok"))) as mocked:
+    with patch("app.core.trust.egress.egress_stream", _stream(_FakeResp(200, "ok"))) as mocked:
         out = node.process({"input": None})["output"]
     assert out.ok is True
     mocked.assert_called_once()
@@ -184,7 +184,7 @@ def test_metadata_not_deterministic_or_cacheable(installed_cls):
 def test_retries_only_retryable_status_for_get(installed_cls):
     from unittest.mock import patch
     node = _node(installed_cls, retry=2)
-    with patch("httpx.stream", _stream(_FakeResp(503, "busy"), _FakeResp(200, '{"ok":1}'))) as m:
+    with patch("app.core.trust.egress.egress_stream", _stream(_FakeResp(503, "busy"), _FakeResp(200, '{"ok":1}'))) as m:
         out = node.process({"input": None})["output"]
     assert out.ok and out.metadata["attempts"] == 2 and m.call_count == 2
 
@@ -192,7 +192,7 @@ def test_retries_only_retryable_status_for_get(installed_cls):
 def test_non_retryable_4xx_fails_immediately(installed_cls):
     from unittest.mock import patch
     node = _node(installed_cls, retry=3)
-    with patch("httpx.stream", _stream(_FakeResp(404, "nope"))) as m:
+    with patch("app.core.trust.egress.egress_stream", _stream(_FakeResp(404, "nope"))) as m:
         with pytest.raises(RuntimeError, match="404"):
             node.process({"input": None})
     assert m.call_count == 1
@@ -201,7 +201,7 @@ def test_non_retryable_4xx_fails_immediately(installed_cls):
 def test_post_not_retried_without_idempotency_key(installed_cls):
     from unittest.mock import patch
     node = _node(installed_cls, method="POST", retry=3, json_body={"a": 1})
-    with patch("httpx.stream", _stream(_FakeResp(503, "busy"))) as m:
+    with patch("app.core.trust.egress.egress_stream", _stream(_FakeResp(503, "busy"))) as m:
         with pytest.raises(RuntimeError, match="503"):
             node.process({"input": None})
     assert m.call_count == 1
@@ -210,7 +210,7 @@ def test_post_not_retried_without_idempotency_key(installed_cls):
 def test_post_retried_with_idempotency_key_header(installed_cls):
     from unittest.mock import patch
     node = _node(installed_cls, method="POST", retry=2, json_body={"a": 1}, idempotency_key="k-1")
-    with patch("httpx.stream", _stream(_FakeResp(429, "slow"), _FakeResp(200, "{}"))) as m:
+    with patch("app.core.trust.egress.egress_stream", _stream(_FakeResp(429, "slow"), _FakeResp(200, "{}"))) as m:
         node.process({"input": None})
     assert m.call_count == 2
     assert m.call_args.kwargs["headers"]["Idempotency-Key"] == "k-1"
@@ -221,7 +221,7 @@ def test_connection_error_retried_for_get(installed_cls):
     import httpx
     from unittest.mock import patch
     node = _node(installed_cls, retry=1)
-    with patch("httpx.stream", _stream(httpx.ConnectError("down"), _FakeResp(200, "{}"))) as m:
+    with patch("app.core.trust.egress.egress_stream", _stream(httpx.ConnectError("down"), _FakeResp(200, "{}"))) as m:
         node.process({"input": None})
     assert m.call_count == 2
 
@@ -236,10 +236,10 @@ def test_backoff_capped_with_jitter(installed_cls):
 def test_response_size_cap_streams_and_stops(installed_cls):
     from unittest.mock import patch
     node = _node(installed_cls, max_response_bytes=10)
-    with patch("httpx.stream", _stream(_FakeResp(200, "x" * 100, chunk=4))):
+    with patch("app.core.trust.egress.egress_stream", _stream(_FakeResp(200, "x" * 100, chunk=4))):
         with pytest.raises(RuntimeError, match="max_response_bytes"):
             node.process({"input": None})
-    with patch("httpx.stream", _stream(_FakeResp(200, "ok", {"content-length": "999"}))):
+    with patch("app.core.trust.egress.egress_stream", _stream(_FakeResp(200, "ok", {"content-length": "999"}))):
         with pytest.raises(RuntimeError, match="Content-Length"):
             node.process({"input": None})
 
@@ -247,7 +247,7 @@ def test_response_size_cap_streams_and_stops(installed_cls):
 def test_external_calls_recorded_redacted(installed_cls):
     from unittest.mock import patch
     node = _node(installed_cls, url="https://example.com/api?token=SECRET", retry=1)
-    with patch("httpx.stream", _stream(_FakeResp(500, "x"), _FakeResp(200, "{}"))):
+    with patch("app.core.trust.egress.egress_stream", _stream(_FakeResp(500, "x"), _FakeResp(200, "{}"))):
         node.process({"input": None})
     calls = node.take_external_calls()
     assert [c["status"] for c in calls] == [500, 200]
@@ -268,7 +268,7 @@ def test_connection_id_http_auth(installed_cls, monkeypatch, payload, header, ex
     import app.core.credentials.resolve as res
     monkeypatch.setattr(res, "get_payload", lambda cid: ("http_auth", payload))
     node = _node(installed_cls, connection_id="c1", auth_env="IGNORED_WHEN_CONNECTION")
-    with patch("httpx.stream", _stream(_FakeResp(200, "{}"))) as m:
+    with patch("app.core.trust.egress.egress_stream", _stream(_FakeResp(200, "{}"))) as m:
         node.process({"input": None})
     assert m.call_args.kwargs["headers"][header] == expected
     assert node.take_external_calls()[0]["connection_id"] == "c1"
@@ -280,7 +280,7 @@ def test_connection_allowed_hosts_binding(installed_cls, monkeypatch):
     monkeypatch.setattr(res, "get_payload", lambda cid: (
         "http_auth", {"scheme": "bearer", "token": "t", "allowed_hosts": "api.github.com"}))
     node = _node(installed_cls, connection_id="c1")
-    with patch("httpx.stream") as m:
+    with patch("app.core.trust.egress.egress_stream") as m:
         with pytest.raises(RuntimeError, match="allowed_hosts"):
             node.process({"input": None})
     m.assert_not_called()
@@ -292,7 +292,7 @@ def test_connection_empty_allowed_hosts_fails_closed(installed_cls, monkeypatch)
     monkeypatch.setattr(res, "get_payload", lambda cid: (
         "http_auth", {"scheme": "bearer", "token": "t", "allowed_hosts": ""}))
     node = _node(installed_cls, connection_id="c1")
-    with patch("httpx.stream") as m:
+    with patch("app.core.trust.egress.egress_stream") as m:
         with pytest.raises(RuntimeError, match="empty allowed_hosts"):
             node.process({"input": None})
     m.assert_not_called()

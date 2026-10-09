@@ -367,6 +367,12 @@ def capture_environment(*, refresh: bool = False) -> dict[str, Any]:
         "git_source": git_source,
         "build_info": info or None,
         "graphyn_version": _dist_version("graphyn-sdk") or gv,
+        # F19 (F-16): say so when the build carries no commit (sealed-run claims weaker).
+        "provenance_warnings": (
+            []
+            if git_sha
+            else ["build has no git commit: rebuild with scripts/build_stack.sh (sets GRAPHYN_GIT_SHA)"]
+        ),
         "backend": (os.environ.get("GRAPHYN_BACKEND") or "local_python").strip() or "local_python",
     }
     _env_cache = env

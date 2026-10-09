@@ -1,0 +1,308 @@
+{
+  "project": "review-f20-templates",
+  "api": "graphyn-api :8001 (image rebuilt 2026-10-08 17:26 IST with F19 fixes)",
+  "generated_by": "F20 live sweep",
+  "generated_at": "2026-10-08 19:27 IST",
+  "runs": {
+    "tpl-agents-agent-loop": {
+      "run_id": "3dfa0a09a1d94916a946a404a65e447d",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:03:30 IST",
+      "note": ""
+    },
+    "tpl-agents-email-alert": {
+      "run_id": "a56270d2d56046f98bb6e3a21c275957",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:03:33 IST",
+      "note": ""
+    },
+    "tpl-agents-guarded-reply-memory": {
+      "run_id": "796db10f7fc447169b722f4d89d96eaa",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:03:35 IST",
+      "note": ""
+    },
+    "tpl-agents-guardrail-approval-memory": {
+      "run_id": "407a83217bd94c8f85cbb52412fd17d4",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:03:37 IST",
+      "note": ""
+    },
+    "tpl-agents-local-llm-chat": {
+      "run_id": "186ca3ab14354d9bb419c51d8fb0e000",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:03:39 IST",
+      "note": ""
+    },
+    "tpl-agents-structured-extract-validate": {
+      "run_id": "e05b84fcae4d4a81b1b1c51929c47a6b",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:03:42 IST",
+      "note": ""
+    },
+    "tpl-agents-tool-router-mcp": {
+      "run_id": "62d6471d11b741eb85fa5171aa2f2727",
+      "status": "failed",
+      "verified_at": "2026-10-08 19:17:37 IST",
+      "note": "needs-credentials (MCP connection / agent token): mcp_tool_call: the platform requires auth for MCP tools \u2014 set config.connection_id to a credential of kind 'graphyn_mcp' (agent token) or set a workspace defaul"
+    },
+    "tpl-agents-tool-router-memory": {
+      "run_id": "85ddb81c51b24fe2ac4969fb15854a78",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:03:47 IST",
+      "note": ""
+    },
+    "tpl-audio-classify-yamnet": {
+      "run_id": "fbd348618a4944448c96797672c503e7",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:04:12 IST",
+      "note": ""
+    },
+    "tpl-audio-dataset-balance-version": {
+      "run_id": "ecf3f560df614bee8eb4f1332fcfa5c4",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:04:14 IST",
+      "note": ""
+    },
+    "tpl-audio-embeddings": {
+      "run_id": "45f4ce916db1415a822af3646ab2ce8f",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:05:11 IST",
+      "note": ""
+    },
+    "tpl-audio-kws-edge-tflite": {
+      "run_id": "91cbc4e45dab4fd681feb38af8819807",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:05:38 IST",
+      "note": ""
+    },
+    "tpl-audio-kws-train": {
+      "run_id": "eb4d95d7e55545cbbb7f4cee6439b5d8",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:06:07 IST",
+      "note": ""
+    },
+    "tpl-audio-podcast-leveling": {
+      "run_id": "190446580ed8489bb85c45d30e18d48c",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:06:09 IST",
+      "note": ""
+    },
+    "tpl-audio-quality-gate-export": {
+      "run_id": "0784c9a72ca047b2aac8c1e8550ba1ed",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:06:12 IST",
+      "note": ""
+    },
+    "tpl-audio-room-simulation-augment": {
+      "run_id": "303363c27a5d41d1a2eadaa7f3d0cb41",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:06:16 IST",
+      "note": ""
+    },
+    "tpl-audio-rule-annotate": {
+      "run_id": "20c33a37f39b43e0adae565fba2b12c5",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:06:19 IST",
+      "note": ""
+    },
+    "tpl-audio-sound-event-detection": {
+      "run_id": "f2fe34deca634b5ea55f96e4d20abee8",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:06:39 IST",
+      "note": ""
+    },
+    "tpl-audio-sound-event-train": {
+      "run_id": "f7ec838a1109407284c01732871fadc6",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:08:36 IST",
+      "note": ""
+    },
+    "tpl-audio-sound-generation": {
+      "run_id": "0cebc9d7f2ea43b0813e691e0873b699",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:10:48 IST",
+      "note": ""
+    },
+    "tpl-audio-speaker-id-train": {
+      "run_id": "430a3ea669d04d3c870ff37c702dbeda",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:11:13 IST",
+      "note": ""
+    },
+    "tpl-audio-speaker-separation": {
+      "run_id": "c67837a1af7545fea74f3957edfa1f74",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:11:58 IST",
+      "note": ""
+    },
+    "tpl-audio-speech-enhancement": {
+      "run_id": "b9a882a1f12d4d6d977d0261792b832a",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:12:02 IST",
+      "note": ""
+    },
+    "tpl-audio-stream-monitor": {
+      "run_id": "4f849eb2aca246339f4fda6e1166d71d",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:12:05 IST",
+      "note": ""
+    },
+    "tpl-audio-tts-dataset": {
+      "run_id": "b84e22496f774c6f8b572e31af226bb4",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:12:33 IST",
+      "note": ""
+    },
+    "tpl-audio-voice-conversion": {
+      "run_id": "2ea7233429a14a6e9aacfc760a25f162",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:17:04 IST",
+      "note": ""
+    },
+    "tpl-common-asr-captions": {
+      "run_id": "9eafad7c3a484b35940194b621a51c4d",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:17:06 IST",
+      "note": ""
+    },
+    "tpl-common-asr-pii-redact": {
+      "run_id": "64fcf7cafc524dd2977b03a5ff56bcde",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:17:09 IST",
+      "note": ""
+    },
+    "tpl-common-asr-word-alignment": {
+      "run_id": "dca3b0bd6b8b43808d35200168c5e990",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:17:12 IST",
+      "note": ""
+    },
+    "tpl-common-branch-merge-error": {
+      "run_id": "c14a2a48b9284404bef339e55a9be582",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:17:14 IST",
+      "note": ""
+    },
+    "tpl-common-csv-transform": {
+      "run_id": "8d82a1fa60a64d1b8322db92329f23d7",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 19:17:40 IST",
+      "note": ""
+    },
+    "tpl-common-dataset-report-email": {
+      "run_id": "8efbfd7de22c4cfeab806f5e83a43846",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:17:19 IST",
+      "note": ""
+    },
+    "tpl-common-doc-chunk-store": {
+      "run_id": "f8035cb71d1f43f887af5858482b6134",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:17:21 IST",
+      "note": ""
+    },
+    "tpl-common-http-poll-transform": {
+      "run_id": "aea39b07072d4e8780e5b05df48dc596",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:17:24 IST",
+      "note": ""
+    },
+    "tpl-common-speaker-embeddings": {
+      "run_id": "5da7e322cb494b50882ddc1b0a24ce1b",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:17:52 IST",
+      "note": ""
+    },
+    "tpl-common-train-track-experiment": {
+      "run_id": "c951b0913c764273bbcc14472a3171ca",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:18:07 IST",
+      "note": ""
+    },
+    "tpl-cross-call-analytics": {
+      "run_id": "51793d2e55614fd3bd3520001aebc0d4",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:18:10 IST",
+      "note": ""
+    },
+    "tpl-cross-meeting-notes-memory": {
+      "run_id": "1c9a66df4a0b4251bc53438d4827e09f",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:18:12 IST",
+      "note": ""
+    },
+    "tpl-cross-tts-asr-roundtrip": {
+      "run_id": "210a9b9bed084e1a8af0a92b4e90f807",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:18:18 IST",
+      "note": ""
+    },
+    "tpl-cross-video-audio-fusion": {
+      "run_id": "453c3c187ee64f968ef893a14d2431ff",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:20:24 IST",
+      "note": ""
+    },
+    "tpl-video-action-recognition": {
+      "run_id": "e61a382edbbe4ff08153f914179f3206",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:20:43 IST",
+      "note": ""
+    },
+    "tpl-video-frame-captions-local-vlm": {
+      "run_id": "8e886832216a4b24876c860573c0d5db",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:20:49 IST",
+      "note": ""
+    },
+    "tpl-video-scene-clips": {
+      "run_id": "894e735aa1a148e28466243ff10f8908",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:20:54 IST",
+      "note": ""
+    },
+    "tpl-video-transcribe-captions": {
+      "run_id": "bfdf10ee38f84b65bec9d09611830965",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:20:56 IST",
+      "note": ""
+    },
+    "tpl-video-zero-shot-tagging": {
+      "run_id": "5c852a7df38541699d39cb791b4e664c",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 18:21:05 IST",
+      "note": ""
+    },
+    "tpl-wakeword-data-gen": {
+      "run_id": "e83dc0244a854d4882d142e86c6239f3",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 19:10:20 IST",
+      "note": ""
+    },
+    "tpl-wakeword-detect": {
+      "run_id": "e9008de59f4f4002a5ad0f9a47dbffad",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 19:17:25 IST",
+      "note": ""
+    },
+    "tpl-wakeword-features": {
+      "run_id": "bc1924c1c86b4557a7f23cd7c31c554f",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 19:10:53 IST",
+      "note": ""
+    },
+    "tpl-wakeword-train-export": {
+      "run_id": "0a6f708ff88e45d2bc45e6c135198f8d",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 19:11:28 IST",
+      "note": ""
+    },
+    "tpl-wakeword-train-int8-detect": {
+      "run_id": "1411526b5fe545559b2ae16bfb840509",
+      "status": "succeeded",
+      "verified_at": "2026-10-08 19:14:44 IST",
+      "note": ""
+    }
+  }
+}

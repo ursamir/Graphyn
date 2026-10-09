@@ -1,0 +1,29 @@
+[plugin]
+name             = "video-caption"
+version          = "1.0.0"
+description      = "Caption video frames with a vision-language model: local Ollama (moondream, llava) or an OpenAI-compatible endpoint."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+tags = ["video", "caption", "vlm", "ollama", "llm"]
+
+# Uses Graphyn's LLM client (httpx) and the ffmpeg binary.
+dependencies = ["numpy>=1.24", "httpx>=0.24"]
+credential_kinds = ["openai_compat", "ollama"]
+
+runtime = "inprocess"
+node_types = ["video_caption"]
+
+[config_schema.video_caption]
+provider = { type = "string", title = "Provider", default = "ollama", enum = ["ollama", "openai_compat"] }
+model = { type = "string", title = "Model", default = "moondream", description = "Vision model id (e.g. moondream, llava-phi3, gpt-4o-mini)." }
+base_url = { type = "string", title = "Base URL", default = "", description = "Empty = OLLAMA_BASE_URL / connection default." }
+connection_id = { type = "string", title = "Connection", default = "", description = "Credential connection id (openai_compat)." }
+api_secret_name = { type = "string", title = "API secret name", default = "OPENAI_API_KEY" }
+prompt = { type = "string", title = "Prompt", default = "Describe what happens in this video frame in one sentence." }
+frames_per_video = { type = "integer", title = "Frames per video", default = 3, minimum = 1, maximum = 32, description = "For VideoSample inputs." }
+max_frames = { type = "integer", title = "Max frames", default = 32, minimum = 1, description = "Cap on frames captioned per run." }
+image_width = { type = "integer", title = "Image width (px)", default = 512, minimum = 64, description = "Frames are downscaled to this width before sending." }
+temperature = { type = "number", title = "Temperature", default = 0.0, minimum = 0, maximum = 2 }
+timeout_s = { type = "number", title = "Timeout per frame (s)", default = 180.0, exclusiveMinimum = 0 }

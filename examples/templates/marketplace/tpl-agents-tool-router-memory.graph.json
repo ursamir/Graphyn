@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-agents-tool-router-memory",
+    "seed": 42,
+    "description": "Route a request to one of several named tools by keyword and log the routing decision to memory.",
+    "created_at": null,
+    "tags": [
+      "agents",
+      "tools",
+      "memory"
+    ],
+    "pack": "Agents",
+    "industry": "general",
+    "marketplace_id": "tpl-agents-tool-router-memory",
+    "status": "ready",
+    "source_example": "marketplace/tpl-agents-tool-router-memory.graph.json",
+    "base_template": "tpl-agents-tool-router-memory"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "prompt_template",
+      "config": {
+        "template": "please check the run status of last night's job"
+      },
+      "label": "request",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "tool_router",
+      "config": {
+        "tools": [
+          {
+            "name": "inspect_run",
+            "keywords": [
+              "run status",
+              "status"
+            ]
+          },
+          {
+            "name": "list_pipelines",
+            "keywords": [
+              "list pipelines"
+            ]
+          }
+        ],
+        "strict": false
+      },
+      "label": "route",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "memory_store",
+      "config": {
+        "namespace": "routing-log",
+        "key": "last_route"
+      },
+      "label": "remember",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

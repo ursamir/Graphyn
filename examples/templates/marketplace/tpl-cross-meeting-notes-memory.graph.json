@@ -1,0 +1,119 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-cross-meeting-notes-memory",
+    "seed": 42,
+    "description": "Transcribe, redact, extract action items and persist them to the agent memory store.",
+    "created_at": null,
+    "tags": [
+      "cross",
+      "captions",
+      "meetings",
+      "memory"
+    ],
+    "pack": "Agents",
+    "industry": "general",
+    "marketplace_id": "tpl-cross-meeting-notes-memory",
+    "status": "ready",
+    "source_example": "marketplace/tpl-cross-meeting-notes-memory.graph.json",
+    "base_template": "tpl-cross-meeting-notes-memory"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "source_type": "filesystem",
+        "recursive": true,
+        "limit": 8,
+        "path": "workspace/datasets/input/speech-commands"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "asr_transcribe",
+      "config": {
+        "provider": "local_whisper",
+        "model": "tiny",
+        "language": "en"
+      },
+      "label": "transcribe",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "pii_redact",
+      "config": {
+        "engine": "regex"
+      },
+      "label": "redact",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "structured_llm",
+      "config": {
+        "provider": "rule_based",
+        "schema_name": "meeting",
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "next_step": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "label": "extract",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "memory_store",
+      "config": {
+        "namespace": "meetings",
+        "key": "last_meeting"
+      },
+      "label": "remember",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "transcript",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "transcript",
+      "dst_id": "n3",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

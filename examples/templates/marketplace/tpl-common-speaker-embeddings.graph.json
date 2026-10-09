@@ -1,0 +1,91 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-common-speaker-embeddings",
+    "seed": 42,
+    "description": "Compute ECAPA-TDNN speaker embeddings (SpeechBrain, VoxCeleb) per clip and store them for speaker search / verification.",
+    "created_at": null,
+    "tags": [
+      "common",
+      "speaker",
+      "embeddings"
+    ],
+    "pack": "Common",
+    "industry": "general",
+    "marketplace_id": "tpl-common-speaker-embeddings",
+    "status": "ready",
+    "source_example": "marketplace/tpl-common-speaker-embeddings.graph.json",
+    "base_template": "tpl-common-speaker-embeddings"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "source_type": "filesystem",
+        "recursive": true,
+        "limit": 8,
+        "path": "workspace/datasets/input/speaker-verification"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000,
+        "mono": true
+      },
+      "label": "condition",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "embedding_generator",
+      "config": {
+        "model": "ecapa"
+      },
+      "label": "embed",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "object_store",
+      "config": {
+        "operation": "put",
+        "prefix": "speaker-embeddings"
+      },
+      "label": "store",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

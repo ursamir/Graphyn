@@ -279,6 +279,9 @@ def auth_status():
 
     configured = token_auth_configured()
     required = auth_required()
+    from app.core.trust.oidc import password_login_allowed, public_status as oidc_public_status
+
+    oidc = oidc_public_status()
     return {
         "auth_required": required,
         "token_configured": configured,
@@ -289,6 +292,9 @@ def auth_status():
         # Sign-in with username + password is available once a user exists.
         "users_configured": _users_configured(),
         "legacy_token_disabled": _legacy_disabled(),
+        "oidc_enabled": oidc["oidc_enabled"],
+        "oidc": oidc["oidc"],
+        "password_login": oidc["password_login"] and password_login_allowed(),
     }
 
 

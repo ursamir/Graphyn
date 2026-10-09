@@ -1,0 +1,21 @@
+[plugin]
+name             = "av-align"
+version          = "1.0.0"
+description      = "Extract a video's audio as AudioSamples, or align an external recording to the video with GCC-PHAT (offset + confidence)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+tags = ["video", "audio", "alignment", "sync", "gcc-phat"]
+
+# Needs the ffmpeg/ffprobe binaries on PATH (present in the Graphyn image).
+dependencies = ["numpy>=1.24", "scipy>=1.10"]
+
+runtime = "inprocess"
+node_types = ["av_align"]
+
+[config_schema.av_align]
+method = { type = "string", title = "Method", default = "extract", enum = ["extract", "xcorr"], description = "extract = the video's own soundtrack; xcorr = align an external recording (audio input) with GCC-PHAT." }
+sample_rate = { type = "integer", title = "Sample rate", default = 16000, minimum = 8000, maximum = 48000 }
+max_offset_ms = { type = "integer", title = "Max offset (ms)", default = 500, minimum = 1, maximum = 60000, description = "xcorr search range ±." }
+min_confidence = { type = "number", title = "Min confidence", default = 0.0, minimum = 0, description = "xcorr: fail when the peak/mean confidence is below this (0 = never)." }

@@ -45,7 +45,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -56,7 +56,7 @@ from app.models.deployment_artifact import DeploymentArtifact
 
 log = logging.getLogger(__name__)
 
-PACKAGER_VERSION = "1.1.1"
+PACKAGER_VERSION = "1.2.0"
 _BUNDLE_DIR = Path(__file__).resolve().parent / "bundle"
 _RUN_ID_IN_PATH = re.compile(r"(?:^|/)runs/([0-9a-f]{32})(?:/|$)")
 _AUDIO_SUFFIXES = (".wav", ".flac", ".ogg", ".mp3", ".m4a", ".aiff", ".aif")
@@ -937,7 +937,7 @@ class DeploymentPackagerNode(Node):
     }
 
     class Config(NodeConfig):
-        target: Literal["mobile", "mcu", "docker", "edge", "cmsis_pack", "arduino", "zephyr", "pte_bundle"] = Field(default='mobile', title="Target", description="Deployment target. One of: mobile, mcu, docker, edge, cmsis_pack, arduino, zephyr, pte_bundle.")
+        target: Literal["mobile", "mcu", "docker", "edge", "cmsis_pack", "arduino", "zephyr"] = Field(default='mobile', title="Target", description="Deployment target. mobile / docker / edge = runnable bundle; mcu = C header with the model bytes; arduino = Arduino library .zip (TFLite Micro sketch); zephyr = Zephyr module; cmsis_pack = CMSIS-Pack (.pack). The last four need a .tflite model.")
         output_path: str = Field(default='workspace/artifacts/packages', title="Output path", description="Folder for the deployment package.")
         include_inference_script: bool = Field(default=True, title="Include inference script", description="Bundle run_inference.py (real audio → prediction) and the optional serve.py endpoint (On/Off).")
         include_metadata: bool = Field(default=True, title="Include metadata", description="Bundle model metadata / labels JSON with the package (On/Off).")
@@ -945,6 +945,16 @@ class DeploymentPackagerNode(Node):
         source_run_id: str = Field(default='', title="Source training run", description="Run whose Feature Frontend / Dataset Builder settings go into preprocessing.json (empty = the run declared by Ship, else read from the model path).")
         selftest: Literal["strict", "warn", "off"] = Field(default='strict', title="Self-test", description="strict = fail the run when the shipped preprocessing or input shape does not match training; warn = record only; off = skip.")
         selftest_samples: int = Field(default=3, ge=0, le=10, title="Self-test clips", description="Real clips from the source dataset the shipped script is verified on (0 = shape checks only).")
+
+        @field_validator("target", mode="before")
+        @classmethod
+        def _route_removed_targets(cls, v: Any) -> Any:
+            if str(v or "").strip().lower() == "pte_bundle":
+                raise ValueError(
+                    "target 'pte_bundle' was removed: ExecuTorch (.pte) export is not available in "
+                    "this build. Use target 'mcu', 'arduino', 'zephyr' or 'cmsis_pack' with a .tflite model."
+                )
+            return v
 
     # ── SISO process ──────────────────────────────────────────────────────────
 
@@ -972,12 +982,12 @@ class DeploymentPackagerNode(Node):
             pkg_path, bundle_info = self._package_bundle(model_path, labels, artifact, out_dir, pkg_name, target)
         elif target == "mcu":
             pkg_path = self._package_mcu(model_path, labels, out_dir, pkg_name)
-        elif target in ("cmsis_pack", "arduino", "zephyr", "pte_bundle"):
-            pkg_path = self._package_additive_target(model_path, labels, artifact, out_dir, pkg_name, target)
+        elif target in ("cmsis_pack", "arduino", "zephyr"):
+            pkg_path = self._package_embedded(model_path, labels, out_dir, pkg_name, target)
         else:
             raise ValueError(
                 f"DeploymentPackagerNode: unknown target '{target}'. "
-                "Choose from: mobile, mcu, docker, edge, cmsis_pack, arduino, zephyr, pte_bundle"
+                "Choose from: mobile, mcu, docker, edge, cmsis_pack, arduino, zephyr"
             )
 
         new_meta = dict(artifact.metadata)
@@ -1372,23 +1382,41 @@ class DeploymentPackagerNode(Node):
 
     # ── other targets ─────────────────────────────────────────────────────────
 
-    def _package_additive_target(self, model_path, labels, artifact, out_dir, pkg_name, target: str):
-        """Stub packagers for cmsis_pack/arduino/zephyr/pte_bundle (prefer TinyML nodes)."""
-        dest = Path(out_dir) / f"{pkg_name}_{target}"
-        dest.mkdir(parents=True, exist_ok=True)
-        (dest / "PACKAGE_STUB.txt").write_text(
-            f"target={target}\nsource={model_path}\nprefer=cmsis_pack_exporter|executorch_export\n",
-            encoding="utf-8",
+    def _package_embedded(self, model_path, labels, out_dir, pkg_name, target: str) -> Path:
+        """Real embedded deliverables from a .tflite model (F19 / F-05)."""
+        from app.core.ml.embedded_packaging import (
+            build_arduino_library,
+            build_cmsis_pack,
+            build_zephyr_module,
+            is_tflite,
         )
-        return dest
+
+        if not is_tflite(model_path):
+            raise ValueError(
+                f"DeploymentPackagerNode: target '{target}' needs a TensorFlow Lite model "
+                f"(.tflite flatbuffer); got '{model_path}'. Export with Edge Optimizer "
+                "backend 'tflite' or 'tflm' first."
+            )
+        dest = Path(out_dir) / f"{pkg_name}_{target}"
+        if dest.exists():
+            shutil.rmtree(dest)
+        dest.mkdir(parents=True, exist_ok=True)
+        labels = [str(x) for x in labels]
+        if target == "arduino":
+            return build_arduino_library(Path(model_path), labels, dest, pkg_name)
+        if target == "zephyr":
+            return build_zephyr_module(Path(model_path), labels, dest, pkg_name)
+        return build_cmsis_pack(Path(model_path), labels, dest, pkg_name, version=PACKAGER_VERSION)
 
     def _package_mcu(self, model_path, labels, out_dir, name) -> Path:
         header_path = out_dir / f"{name}.h"
-        model_bytes = b""
-        if model_path and model_path.exists():
-            model_bytes = model_path.read_bytes()
+        if not (model_path and Path(model_path).is_file() and Path(model_path).stat().st_size > 0):
+            raise FileNotFoundError(
+                f"DeploymentPackagerNode: target 'mcu' needs a model file to embed; got '{model_path}'."
+            )
+        model_bytes = Path(model_path).read_bytes()
 
-        label_strs = ", ".join(f'"{lbl}"' for lbl in labels)
+        label_strs = ", ".join('"' + str(lbl).replace("\\", "\\\\").replace('"', '\\"') + '"' for lbl in labels) or '""'
         model_name = model_path.name if model_path else "model"
 
         # Write header incrementally to avoid building a ~50 MB string in RAM

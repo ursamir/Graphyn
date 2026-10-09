@@ -32,8 +32,13 @@ log = logging.getLogger(__name__)
 
 
 def _jsonable(obj: Any) -> Any:
+    from app.core.nodes.payload import unwrap_payload, wrapper_field
+
     if obj is None or isinstance(obj, (str, int, float, bool)):
         return obj
+    if wrapper_field(obj) is not None:
+        # F19 (F-06): send the payload (CodeResult.data, …), not the wrapper.
+        return _jsonable(unwrap_payload(obj))
     if isinstance(obj, dict):
         return {str(k): _jsonable(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
@@ -63,6 +68,7 @@ class HttpWebhookNode(Node):
         supports_edge=True,
         deterministic=False,
         cacheable=False,
+        idempotent=False,
         streaming_support=False,
         realtime_support=False,
     )
@@ -80,7 +86,7 @@ class HttpWebhookNode(Node):
     output_ports: ClassVar[dict[str, OutputPort]] = {
         "output": OutputPort(
             name="output",
-            data_type=object,
+            data_type=WebhookReceipt,
             description="WebhookReceipt (status, body) plus pass-through payload in metadata",
         )
     }
@@ -92,6 +98,12 @@ class HttpWebhookNode(Node):
         hmac_env: str = Field(default='', title="HMAC env / secret name", description="Env var or Graphyn secret name holding the HMAC key (never put the key itself in IR).")
         hmac_header: str = Field(default='X-Graphyn-Signature', title="HMAC header", description="Header that carries the HMAC signature.")
         provider: Literal["http"] = Field(default='http', title="Provider", description="HTTP provider. Only http (real network) is supported.")
+
+    @classmethod
+    def missing_run_config(cls, config):
+        if not (str(getattr(config, "url", "") or "").strip() or str(getattr(config, "connection_id", "") or "").strip()):
+            return [("url", "HttpWebhookNode: config.url (or connection_id) is required (completion callback URL).")]
+        return []
 
     def _target(self) -> tuple[str, str | None]:
         cid = (getattr(self.config, "connection_id", "") or "").strip()
@@ -173,7 +185,14 @@ class HttpWebhookNode(Node):
             ) from exc
         label = redact_webhook_url_for_api(url)
         try:
-            resp = httpx.post(url, content=raw, headers=headers, timeout=timeout, follow_redirects=False)
+            from app.core.trust import egress as _egress
+
+            # F19: resolve-then-connect (IP pinned); redirects never followed.
+            resp = _egress.egress_post(url, content=raw, headers=headers, timeout=timeout, follow_redirects=False)
             return int(resp.status_code), str(resp.text or "")
         except Exception as exc:
+            from app.core.trust.egress import HttpEgressError
+
+            if isinstance(exc, HttpEgressError):  # message is already URL-redacted
+                raise RuntimeError(f"HttpWebhookNode: POST {label} refused: {exc}") from exc
             raise RuntimeError(f"HttpWebhookNode: POST {label} failed: {type(exc).__name__}") from exc

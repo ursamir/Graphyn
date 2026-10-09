@@ -14,12 +14,13 @@ def test_search_marketplace_templates_basic():
 
 
 def test_search_marketplace_pack_filter():
-    r = search_marketplace_templates(pack="RAG", limit=10)
+    # F19 (F-07): RAG pack removed on this branch; filter on a shipped pack.
+    r = search_marketplace_templates(pack="Agents", limit=10)
     assert r["catalog_missing"] is False
     assert r["matched"] >= 1
     for t in r["templates"]:
         pack = str(t.get("pack") or "")
-        assert pack == "RAG" or "rag" in pack.lower()
+        assert pack == "Agents" or "agents" in pack.lower()
 
 
 def test_search_q_substring():

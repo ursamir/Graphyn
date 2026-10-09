@@ -1,6 +1,6 @@
 [plugin]
 name             = "segmenter"
-version          = "1.1.0"
+version          = "1.2.0"
 description      = "Semantic audio segmentation: fixed windows, silence-based, VAD, energy-event detection, and speaker-turn placeholder."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
@@ -19,9 +19,10 @@ optional_dependencies = [
 ]
 
 node_types = ["segmenter"]
+runtime    = "inprocess"  # explicit (was the implicit default)
 
 [config_schema.segmenter]
-mode = {  type = "string", title = "Mode", default = "fixed", description = "How clips are cut. fixed = sliding windows; silence = split on silent gaps (a clip can yield several segments); vad = voice-activity detection (falls back to silence when unavailable); event = energy onsets; speaker_turn = speaker turns from upstream (falls back to silence).", enum = ["fixed", "silence", "vad", "event", "speaker_turn"], ui = { help_advanced = "silence uses librosa.effects.split; vad needs webrtcvad; speaker_turn reads metadata.speaker_segments." } }
+mode = {  type = "string", title = "Mode", default = "fixed", description = "How clips are cut. fixed = sliding windows; silence = split on silent gaps (a clip can yield several segments); vad = voice-activity detection (falls back to silence when unavailable); event = energy onsets; speaker_turn = who-spoke-when: uses upstream speaker segments when present, otherwise runs offline diarization (speaker embeddings + clustering).", enum = ["fixed", "silence", "vad", "event", "speaker_turn"], ui = { help_advanced = "silence uses librosa.effects.split; vad needs webrtcvad; speaker_turn uses metadata.speaker_segments when present, else MFCC-statistics embeddings + agglomerative clustering (offline)." } }
 window_ms = { type = "integer", title = "Window (ms)", default = 1000, minimum = 1, description = "Window length in milliseconds (fixed mode). Clips shorter than one window are emitted whole.", ui = { visible_if = { mode = "fixed" } } }
 overlap = { type = "number", title = "Overlap", default = 0.0, minimum = 0, exclusiveMaximum = 1, description = "Fractional overlap in [0, 1). fixed: window overlap; silence/vad: each segment end is extended by this fraction of its length.", ui = { visible_if = { mode = ["fixed", "silence", "vad"] } } }
 vad_aggressiveness = { type = "integer", title = "VAD aggressiveness", default = 2, minimum = 0, maximum = 3, description = "Voice-activity detector strictness 0-3 (higher = filters out more non-speech).", ui = { help_advanced = "WebRTC VAD mode.", visible_if = { mode = "vad" } } }
@@ -29,4 +30,8 @@ silence_threshold_db = { type = "number", title = "Silence threshold (dB below p
 event_threshold_db = { type = "number", title = "Event threshold (dB re peak)", default = -30.0, maximum = 0, description = "Event mode: frames whose RMS is at least this many dB relative to the clip's loudest frame (<= 0) are active.", ui = { visible_if = { mode = "event" } } }
 event_min_gap_ms = { type = "integer", title = "Event min gap (ms)", default = 200, minimum = 1, description = "Event mode: an event ends after this much continuous inactivity (milliseconds).", ui = { visible_if = { mode = "event" } } }
 min_segment_ms = { type = "integer", title = "Min segment (ms)", default = 100, minimum = 1, description = "Discard segments shorter than this (milliseconds). Must be < max_segment_ms." }
+num_speakers = { type = "integer", title = "Speakers", default = 0, minimum = 0, maximum = 16, description = "speaker_turn: number of speakers in the recording. Set it when known (most accurate); 0 = estimate automatically, which can over-split a single voice.", ui = { visible_if = { mode = "speaker_turn" } } }
+max_speakers = { type = "integer", title = "Max speakers", default = 4, minimum = 1, maximum = 16, description = "speaker_turn: upper bound when detecting the number of speakers automatically.", ui = { visible_if = { mode = "speaker_turn" } } }
+diarization_window_ms = { type = "integer", title = "Speaker window (ms)", default = 1500, minimum = 250, maximum = 10000, description = "speaker_turn: analysis window per speaker decision (milliseconds).", ui = { visible_if = { mode = "speaker_turn" } } }
+diarization_hop_ms = { type = "integer", title = "Speaker hop (ms)", default = 750, minimum = 100, maximum = 10000, description = "speaker_turn: step between analysis windows (milliseconds).", ui = { visible_if = { mode = "speaker_turn" } } }
 max_segment_ms = { type = "integer", title = "Max segment (ms)", default = 30000, minimum = 1, description = "Hard cap on segment length (milliseconds); longer spans are split into max-length chunks (a trailing chunk shorter than min_segment_ms is dropped)." }

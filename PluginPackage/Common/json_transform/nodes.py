@@ -107,12 +107,25 @@ class JsonTransformNode(Node):
             return data
 
     def process(self, inputs):
-        payload = inputs.get("input") if isinstance(inputs, dict) else inputs
+        from app.core.nodes.payload import unwrap_payload
+
+        raw = inputs.get("input") if isinstance(inputs, dict) else inputs
+        # F19 (F-06): operate on the payload (CodeResult.data, CsvTableResult.rows, …).
+        payload = unwrap_payload(raw)
+        legacy = raw.model_dump(mode="json") if hasattr(raw, "model_dump") else raw
+
+        def _get(path: str) -> Any:
+            val = _get_path(payload, path)
+            if val is None and legacy is not payload:
+                # Paths written against the wrapper (e.g. ``$.data.x``) keep working.
+                val = _get_path(legacy, path)
+            return val
+
         mappings = list(self.config.mappings or [])
         pick = list(self.config.pick or [])
         single = (self.config.jsonpath or "").strip()
         if single and not mappings and not pick:
-            return {"output": JsonDocument(data=_get_path(payload, single), metadata={"jsonpath": single})}
+            return {"output": JsonDocument(data=_get(single), metadata={"jsonpath": single})}
         out: dict[str, Any] = {}
         for m in mappings:
             if not isinstance(m, dict):
@@ -121,10 +134,10 @@ class JsonTransformNode(Node):
             dst = str(m.get("to") or m.get("dst") or src)
             if not src or not dst:
                 continue
-            _set_path(out, dst, _get_path(payload, src))
+            _set_path(out, dst, _get(src))
         for p in pick:
             key = str(p)
-            out[key.split(".")[-1]] = _get_path(payload, key)
+            out[key.split(".")[-1]] = _get(key)
         if not mappings and not pick:
             out = payload if isinstance(payload, dict) else {"value": payload}
         return {"output": JsonDocument(data=out, metadata={})}

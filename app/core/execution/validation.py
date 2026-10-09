@@ -546,6 +546,28 @@ def validate_graph_ir_result(graph: Any, registry: Any) -> dict:
 
         errors.extend(_placement_findings(node))
 
+        # F19 / F-25: config the node cannot run without (schema-optional so
+        # templates/drafts load). Warning here; execution refuses (VAL-003).
+        hook = getattr(node_class, "missing_run_config", None)
+        if callable(hook):
+            try:
+                cfg_obj = node_class.Config.model_validate(
+                    sanitize_node_config_dict(node_class.Config, dict(deep_unfreeze(node.config or {})))
+                )
+                missing = list(hook(cfg_obj) or [])
+            except Exception:
+                missing = []
+            for field_name, msg in missing:
+                warnings.append(
+                    _finding(
+                        "VAL-REQ-CONFIG",
+                        "warning",
+                        f"[{node.id}] {msg}",
+                        node_ids=[node.id],
+                        field=field_name,
+                    )
+                )
+
         # IR route/continue shadows Config on_error_port — warn when both are set.
         pol = getattr(node, "on_error", None)
         mode = str(getattr(pol, "mode", None) or "") if pol is not None else ""

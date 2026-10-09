@@ -71,3 +71,24 @@ def test_process_smoke(installed_cls, make_audio_sample):
     assert "output" in result
     assert isinstance(result["output"], list)
     assert len(result["output"]) >= 1
+
+
+def test_copies_are_distinct_and_seeded(installed_cls):
+    """copies_per_sample yields different rooms/noise per copy, reproducibly per seed."""
+    pytest.importorskip("pyroomacoustics")
+    import numpy as np
+
+    from app.models.audio_sample import AudioSample
+
+    sr = 16000
+    t = np.arange(sr // 2) / sr
+    s = AudioSample(path="/t.wav", sample_rate=sr, data=(0.3 * np.sin(2 * np.pi * 300 * t)).astype(np.float32))
+    cfg = {"copies_per_sample": 3, "snr_db": 20}
+    a = installed_cls(config=cfg, seed=7).process({"input": [s]})["output"]
+    b = installed_cls(config=cfg, seed=7).process({"input": [s]})["output"]
+    assert len(a) == 3
+    assert [x.metadata["room_simulation"]["copy_index"] for x in a] == [0, 1, 2]
+    assert len({round(x.metadata["room_simulation"]["rt60"], 6) for x in a}) == 3
+    n = min(len(a[0].data), len(a[1].data))
+    assert np.abs(a[0].data[:n] - a[1].data[:n]).max() > 1e-3
+    assert all(np.allclose(x.data, y.data) for x, y in zip(a, b))

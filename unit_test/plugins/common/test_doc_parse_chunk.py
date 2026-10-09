@@ -62,3 +62,65 @@ def test_html_strips_tags(installed_cls, tmp_path):
     blob = " ".join(c.text for c in chunks)
     assert "Hi" in blob and "There" in blob
     assert "<p>" not in blob
+
+
+def _chunks(result):
+    return result["output"] if isinstance(result, dict) else result
+
+
+def test_fixed_strategy_with_overlap(installed_cls, tmp_path):
+    (tmp_path / "a.txt").write_text("abcdefghij" * 10)  # 100 chars
+    node = installed_cls(config={"path": str(tmp_path), "chunk_strategy": "fixed", "max_chars": 40, "overlap": 10}, seed=0)
+    chunks = _chunks(node.process({"input": None}))
+    texts = [c.text for c in chunks]
+    assert all(len(t) <= 40 for t in texts)
+    assert texts[1][:10] == texts[0][-10:]  # 10-char overlap
+    assert "".join(t[10:] if i else t for i, t in enumerate(texts)).startswith("abcdefghij" * 9)
+
+
+def test_recursive_strategy_splits_sentences(installed_cls, tmp_path):
+    (tmp_path / "a.txt").write_text(" ".join(f"Sentence number {i} is here." for i in range(30)))
+    node = installed_cls(config={"path": str(tmp_path), "chunk_strategy": "recursive", "max_chars": 120}, seed=0)
+    texts = [c.text for c in _chunks(node.process({"input": None}))]
+    assert len(texts) > 3
+    assert all(len(t) <= 120 for t in texts)
+    assert all(t.rstrip().endswith(".") for t in texts[:-1])  # cut at sentence boundaries
+
+
+def test_metadata_keys(installed_cls, tmp_path):
+    (tmp_path / "doc.md").write_text("# T\n\nbody")
+    node = installed_cls(config={"path": str(tmp_path), "metadata_keys": ["name", "size"]}, seed=0)
+    meta = _chunks(node.process({"input": None}))[0].metadata
+    assert meta["name"] == "doc.md" and meta["size"] > 0 and meta["suffix"] == ".md"
+    bad = installed_cls(config={"path": str(tmp_path), "metadata_keys": ["author"]}, seed=0)
+    with pytest.raises(ValueError, match="unknown metadata key"):
+        bad.process({"input": None})
+
+
+def test_use_unstructured_missing_is_clear(installed_cls, tmp_path, monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **k):
+        if name.startswith("unstructured"):
+            raise ImportError("no unstructured")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    (tmp_path / "a.txt").write_text("hello")
+    node = installed_cls(config={"path": str(tmp_path), "use_unstructured": True}, seed=0)
+    with pytest.raises(RuntimeError, match="unstructured"):
+        node.process({"input": None})
+
+
+def test_accepts_wrapped_and_dict_paths(installed_cls, tmp_path):
+    """F-06 payload contract: paths inside python_code wrappers / {path} dicts are read."""
+    doc = tmp_path / "w.txt"
+    doc.write_text("alpha beta gamma " * 50)
+    node = installed_cls(config={"max_chars": 120, "chunk_strategy": "fixed"}, seed=0)
+    wrapped = node.process({"input": {"data": {"path": str(doc)}, "metadata": {}}})["output"]
+    assert len(wrapped) > 1
+    assert all("alpha" in c.text or "gamma" in c.text for c in wrapped)
+    listed = node.process({"input": [{"path": str(doc)}]})["output"]
+    assert [c.text for c in listed] == [c.text for c in wrapped]

@@ -56,6 +56,16 @@ def _check_recipients(addrs: list[str], allowed_domains: list[str]) -> list[str]
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
+    from app.core.nodes.payload import unwrap_payload, wrapper_field
+
+    if wrapper_field(value) is not None:
+        # F19 (F-06): read the payload (CodeResult.data, …), not the wrapper.
+        value = unwrap_payload(value)
+        if isinstance(value, str):
+            return {"body": value}
+        if not isinstance(value, dict):
+            import json as _json
+            return {"body": _json.dumps(value, default=str)[:8000]}
     if value is None:
         return {}
     if isinstance(value, dict):
@@ -91,6 +101,7 @@ class SendEmailNode(Node):
         supports_edge=True,
         deterministic=False,
         cacheable=False,
+        idempotent=False,
     )
 
     input_ports: ClassVar[dict[str, InputPort]] = {
@@ -103,7 +114,7 @@ class SendEmailNode(Node):
     }
 
     output_ports: ClassVar[dict[str, OutputPort]] = {
-        "output": OutputPort(name="output", data_type=object, description="EmailReceipt"),
+        "output": OutputPort(name="output", data_type=EmailReceipt, description="EmailReceipt"),
     }
 
     class Config(NodeConfig):
@@ -127,6 +138,12 @@ class SendEmailNode(Node):
             title="Credential connection id",
             description="SMTP credential connection id. Empty → workspace default → GRAPHYN_SMTP_* env.",
         )
+
+    @classmethod
+    def missing_run_config(cls, config):
+        if not str(getattr(config, "to", "") or "").strip() and not bool(getattr(config, "allow_payload_recipients", False)):
+            return [("to", "send_email: recipient 'to' is required (or enable allow_payload_recipients).")]
+        return []
 
     def process(self, inputs=None, **kwargs):
         if inputs is None:

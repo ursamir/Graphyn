@@ -108,14 +108,19 @@ class MemoryStateStore(DistributedStateStore):
             "events": {},
             "paused_runs": [],
         }
-        self._lock = threading.RLock()
+        # One lock per state kind (F19): a single shared lock deadlocked the API
+        # live — JobQueue held it (queue mutate) while its mutator asked the
+        # WorkerRegistry, and a heartbeat held the registry lock while waiting
+        # for it (workers mutate). Queue and workers never share a lock now, so
+        # the only nesting order left is queue → registry → workers.
+        self._kind_locks = {"queue": threading.RLock(), "workers": threading.RLock()}
         self._versions = {"queue": 0, "workers": 0}
 
     def _bump(self, kind: str) -> None:
         self._versions[kind] = self._versions.get(kind, 0) + 1
 
     def state_version(self, kind: str) -> Any:
-        with self._lock:
+        with self._kind_locks.get(kind, self._kind_locks["queue"]):
             return self._versions.get(kind, 0)
 
     @property
@@ -123,18 +128,18 @@ class MemoryStateStore(DistributedStateStore):
         return "memory"
 
     def load_workers(self) -> dict[str, Any]:
-        with self._lock:
+        with self._kind_locks["workers"]:
             return {k: dict(v) if isinstance(v, dict) else v for k, v in self._workers.items()}
 
     def save_workers(self, workers: dict[str, Any]) -> None:
-        with self._lock:
+        with self._kind_locks["workers"]:
             self._workers = {
                 k: dict(v) if isinstance(v, dict) else v for k, v in (workers or {}).items()
             }
             self._bump("workers")
 
     def load_queue(self) -> dict[str, Any]:
-        with self._lock:
+        with self._kind_locks["queue"]:
             paused = self._queue.get("paused_runs")
             return {
                 "jobs": dict(self._queue.get("jobs") or {}),
@@ -148,7 +153,7 @@ class MemoryStateStore(DistributedStateStore):
             }
 
     def save_queue(self, snapshot: dict[str, Any]) -> None:
-        with self._lock:
+        with self._kind_locks["queue"]:
             paused = snapshot.get("paused_runs")
             self._queue = {
                 "jobs": dict(snapshot.get("jobs") or {}),
@@ -165,7 +170,7 @@ class MemoryStateStore(DistributedStateStore):
     def mutate_queue(
         self, mutator: Callable[[dict[str, Any]], tuple[dict[str, Any], T]]
     ) -> T:
-        with self._lock:
+        with self._kind_locks["queue"]:
             paused = self._queue.get("paused_runs")
             snap = {
                 "jobs": dict(self._queue.get("jobs") or {}),
@@ -195,7 +200,7 @@ class MemoryStateStore(DistributedStateStore):
     def mutate_workers(
         self, mutator: Callable[[dict[str, Any]], tuple[dict[str, Any], T]]
     ) -> T:
-        with self._lock:
+        with self._kind_locks["workers"]:
             snap = {
                 k: dict(v) if isinstance(v, dict) else v for k, v in self._workers.items()
             }
@@ -229,7 +234,12 @@ class DiskStateStore(DistributedStateStore):
 
     def __init__(self, root: Path | str | None = None) -> None:
         self._root = Path(root) if root is not None else None
-        self._lock = threading.RLock()
+        # One lock per state kind (F19): a single shared lock deadlocked the API
+        # live — JobQueue held it (queue mutate) while its mutator asked the
+        # WorkerRegistry, and a heartbeat held the registry lock while waiting
+        # for it (workers mutate). Queue and workers never share a lock now, so
+        # the only nesting order left is queue → registry → workers.
+        self._kind_locks = {"queue": threading.RLock(), "workers": threading.RLock()}
 
     @property
     def backend_id(self) -> str:
@@ -339,7 +349,7 @@ class DiskStateStore(DistributedStateStore):
                     pass
 
     def _with_lock_file(
-        self, lock_path: Path, exclusive: bool, fn: Callable[[], T]
+        self, lock_path: Path, exclusive: bool, fn: Callable[[], T], kind: str = "queue"
     ) -> T:
         """Run ``fn`` while holding an advisory lock file (cross-process).
 
@@ -349,7 +359,7 @@ class DiskStateStore(DistributedStateStore):
 
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         # threading lock serializes in-process; file lock covers cross-process.
-        with self._lock:
+        with self._kind_locks[kind]:
             with open(lock_path, "a+b") as lf:
                 acquire(lf, exclusive=exclusive)
                 try:
@@ -360,12 +370,12 @@ class DiskStateStore(DistributedStateStore):
     def _with_jobs_lock(self, exclusive: bool, fn: Callable[[], T]) -> T:
         """Run ``fn`` while holding the queue lock file (cross-process)."""
         _, _, jobs_lock, _ = self._paths()
-        return self._with_lock_file(jobs_lock, exclusive, fn)
+        return self._with_lock_file(jobs_lock, exclusive, fn, "queue")
 
     def _with_workers_lock(self, exclusive: bool, fn: Callable[[], T]) -> T:
         """Run ``fn`` while holding the workers lock file (cross-process)."""
         _, _, _, workers_lock = self._paths()
-        return self._with_lock_file(workers_lock, exclusive, fn)
+        return self._with_lock_file(workers_lock, exclusive, fn, "workers")
 
     def load_workers(self) -> dict[str, Any]:
         def _load() -> dict[str, Any]:
@@ -484,7 +494,12 @@ class RedisStateStore(DistributedStateStore):
 
     def __init__(self, client: Any | None = None) -> None:
         self._client = client
-        self._lock = threading.RLock()
+        # One lock per state kind (F19): a single shared lock deadlocked the API
+        # live — JobQueue held it (queue mutate) while its mutator asked the
+        # WorkerRegistry, and a heartbeat held the registry lock while waiting
+        # for it (workers mutate). Queue and workers never share a lock now, so
+        # the only nesting order left is queue → registry → workers.
+        self._kind_locks = {"queue": threading.RLock(), "workers": threading.RLock()}
 
     @property
     def backend_id(self) -> str:
@@ -530,7 +545,7 @@ class RedisStateStore(DistributedStateStore):
         if client is None:
             return
         try:
-            with self._lock:
+            with self._kind_locks["workers"]:
                 client.set(
                     self.WORKERS_KEY,
                     json.dumps(workers or {}, default=str),
@@ -570,7 +585,7 @@ class RedisStateStore(DistributedStateStore):
         if client is None:
             return
         try:
-            with self._lock:
+            with self._kind_locks["queue"]:
                 client.set(
                     self.QUEUE_KEY,
                     json.dumps(
@@ -657,7 +672,7 @@ class RedisStateStore(DistributedStateStore):
             )
             lock = None
         try:
-            with self._lock:
+            with self._kind_locks["queue" if key == self.QUEUE_KEY else "workers"]:
                 for _ in range(self.WATCH_RETRIES):
                     pipe = client.pipeline()
                     try:
@@ -704,7 +719,7 @@ class RedisStateStore(DistributedStateStore):
         client = self._redis()
         if client is None:
             # No Redis: mutate in-memory empty snapshot (non-durable).
-            with self._lock:
+            with self._kind_locks["queue"]:
                 _new_snap, result = mutator(self._normalize_queue(None))
                 return result
         return self._cas_mutate(
@@ -720,7 +735,7 @@ class RedisStateStore(DistributedStateStore):
         """WATCH/MULTI CAS (lock only for fairness)."""
         client = self._redis()
         if client is None:
-            with self._lock:
+            with self._kind_locks["workers"]:
                 _new_snap, result = mutator({})
                 return result
         return self._cas_mutate(

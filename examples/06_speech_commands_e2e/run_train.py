@@ -11,9 +11,9 @@ Purpose:
   and INT8 TFLite export.
 
 Two-phase execution:
-  Phase 1 (×6 labels): dataset_ingest → audio_conditioner → segmenter →
+  Phase 1 (×1, all labels): dataset_ingest(recursive) → audio_conditioner → segmenter →
                         audio_quality_gate(snr) → audio_quality_gate(duration) →
-                        augmentation_pipeline → audio_exporter(append)
+                        augmentation_pipeline → audio_exporter
   Phase 2 (×1):        dataset_ingest → feature_frontend → dataset_builder →
                         [build Keras DS-CNN model] → trainer → evaluator → edge_optimizer
 
@@ -104,26 +104,31 @@ def check_inputs() -> bool:
     return ok
 
 
-def _resolve_data_dir(command: str) -> Path:
-    p = DATA_DIR / command
-    if p.exists():
-        return p
-    fallback = EXAMPLE_DIR.parent / "02_speech_commands" / "data" / command
-    if fallback.exists():
+def _resolve_data_root() -> Path:
+    """Folder holding one sub-folder per command (yes/, no/, …)."""
+    if (DATA_DIR / COMMANDS[0]).exists():
+        return DATA_DIR
+    fallback = EXAMPLE_DIR.parent / "02_speech_commands" / "data"
+    if (fallback / COMMANDS[0]).exists():
         return fallback
-    raise FileNotFoundError(f"Data not found for '{command}'. Run prepare_real_data.py first.")
+    raise FileNotFoundError("Speech-commands data not found. Run prepare_real_data.py first.")
 
 
 # ── Phase 1: preprocessing ────────────────────────────────────────────────────
 
-def phase1_preprocess(command: str, append: bool) -> None:
-    """Run preprocessing pipeline for one command label."""
-    data_path = _resolve_data_dir(command)
+def phase1_preprocess() -> None:
+    """Preprocess all command labels in one run (recursive ingest; label = folder name).
+
+    One run instead of six chained ``append=True`` runs: dataset versions are
+    immutable once a run references them, so appending label by label breaks on
+    any re-run.
+    """
+    data_root = _resolve_data_root()
     Pipeline(
         nodes=[
             PipelineNode("dataset_ingest", {
-                "path": str(data_path),
-                "recursive": False,
+                "path": str(data_root),
+                "recursive": True,
                 "source_type": "filesystem",
             }),
             PipelineNode("audio_conditioner", {
@@ -157,7 +162,7 @@ def phase1_preprocess(command: str, append: bool) -> None:
                 "split_ratios": {"train": 0.70, "val": 0.15, "test": 0.15},
                 "version_tag": "v1",
                 "random_seed": 42,
-                "append": append,
+                "append": False,
             }),
         ],
         seed=42,
@@ -283,19 +288,16 @@ def main() -> None:
 
     print(f"\nCommands: {', '.join(COMMANDS)}\n")
 
-    # Phase 1: preprocess all 6 labels
-    print("Phase 1: Data Preprocessing")
+    # Phase 1: preprocess all 6 labels in one run
+    print("Phase 1: Data Preprocessing (all labels, one run)")
     print("-" * 40)
-    for i, cmd in enumerate(COMMANDS, 1):
-        append = (i > 1)
-        print(f"\n[{i}/{len(COMMANDS)}] Processing '{cmd}'...")
-        try:
-            phase1_preprocess(cmd, append=append)
-            print(f"  ✓ '{cmd}' done")
-        except Exception as exc:
-            print(f"\nError processing '{cmd}': {exc}", file=sys.stderr)
-            import traceback; traceback.print_exc()
-            sys.exit(1)
+    try:
+        phase1_preprocess()
+        print("  ✓ dataset written")
+    except Exception as exc:
+        print(f"\nPreprocessing failed: {exc}", file=sys.stderr)
+        import traceback; traceback.print_exc()
+        sys.exit(1)
 
     # Save feature config for inference pipeline
     feature_config_path = OUTPUT_DIR / "feature_config.json"

@@ -77,13 +77,10 @@ def test_process_smoke(installed_cls):
 
 
 def test_process_empty_input(installed_cls):
-    """Empty text list produces empty output."""
+    """No text on the port and no config.text is a clear error, not silent empty output."""
     node = installed_cls(config={"backend": "espeak"}, seed=0)
-    try:
-        result = node.process({"input": []})
-    except ImportError:
-        pytest.skip("espeak-ng not installed — speech_synthesizer backend unavailable")
-    assert result["output"] == []
+    with pytest.raises(ValueError, match="no text"):
+        node.process({"input": []})
 
 
 def test_process_output_is_audio_sample(installed_cls):

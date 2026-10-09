@@ -1,0 +1,82 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-agents-tool-router-mcp",
+    "seed": 42,
+    "description": "Route a request to an allow-listed Graphyn MCP tool (read-only list_pipelines) and call it in-process.",
+    "created_at": null,
+    "tags": [
+      "agents",
+      "mcp",
+      "tools"
+    ],
+    "pack": "Agents",
+    "industry": "general",
+    "marketplace_id": "tpl-agents-tool-router-mcp",
+    "status": "needs-credentials",
+    "source_example": "marketplace/tpl-agents-tool-router-mcp.graph.json",
+    "base_template": "tpl-agents-tool-router-mcp",
+    "requires": [
+      "credential of kind 'graphyn_mcp' (agent token) when platform auth is on"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "prompt_template",
+      "config": {
+        "template": "list pipelines"
+      },
+      "label": "request",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "tool_router",
+      "config": {
+        "tools": [
+          {
+            "name": "list_pipelines",
+            "keywords": [
+              "list pipelines"
+            ]
+          }
+        ],
+        "strict": true
+      },
+      "label": "route",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "mcp_tool_call",
+      "config": {
+        "tool_allowlist": [
+          "list_pipelines"
+        ]
+      },
+      "label": "call",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

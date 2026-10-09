@@ -166,10 +166,10 @@ def get_node_spec_handler(arguments: dict[str, Any] | None = None) -> dict[str, 
     if match is None:
         # Catalog drift safety: synthesize a minimal spec from the live node registry
         # so runtime-complete plugins (e.g. send_email) stay discoverable.
-        try:
-            from app.core.nodes import registry as _node_registry
-            from app.core.nodes.errors import NodeNotFoundError
+        from app.core.nodes import registry as _node_registry
+        from app.core.nodes.errors import NodeNotFoundError
 
+        try:
             cls = _node_registry.get_class(nt)
         except NodeNotFoundError:
             cls = None

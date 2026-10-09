@@ -1,0 +1,28 @@
+[plugin]
+name             = "wakeword-export-onnx"
+version          = "2.0.0"
+description      = "Export the trained wake-word classifier to ONNX (optional INT8) and verify it against PyTorch with onnxruntime (livekit-wakeword)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+tags             = ["wakeword", "onnx", "quantization", "export", "livekit-wakeword"]
+
+# Wraps livekit-wakeword (Apache-2.0). Isolated venv: torch is pre-installed CPU-only.
+dependencies = [
+    "numpy>=1.24",
+    "torch>=2.1",
+    "onnx>=1.15",
+    "onnxscript>=0.1",
+    "onnxruntime>=1.17",
+    "livekit-wakeword[train,export]>=0.2.1,<0.3",
+]
+
+runtime = "isolated"
+node_types = ["wakeword_export_onnx"]
+
+[config_schema.wakeword_export_onnx]
+model_dir = { type = "string", title = "Model dir", default = "", description = "Existing run directory when the input port is not connected." }
+quantize = { type = "boolean", title = "INT8 quantize", default = false, description = "Also write <model>.int8.onnx (onnxruntime dynamic quantisation)." }
+opset = { type = "integer", title = "ONNX opset", default = 18, minimum = 13, maximum = 21 }
+tolerance = { type = "number", title = "FP32 tolerance", default = 0.001, description = "Max |onnx \u2212 torch| score difference accepted for the FP32 export.", exclusiveMinimum = 0 }

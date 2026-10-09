@@ -1,8 +1,17 @@
 # Example 26 — Nightly compliance
 
-schedule_trigger (cron metadata) + dataset_ingest → asr_transcribe (mock) → pii_redact → eval_gate → if_switch → http_request (Slack mock) or csv_table.
+schedule_trigger (cron metadata) + dataset_ingest → asr_transcribe → pii_redact → eval_gate → if_switch → flagged / report
 
-The schedule node is a source with `event_trigger` so agents can bind a timer. Manual `execute_pipeline` still runs because `schedule_trigger.process()` emits a tick (ingest is the audio source).
+The schedule node is a source with `event_trigger` so a timer can be bound; a manual run still works because
+`schedule_trigger` emits one tick and `dataset_ingest` supplies the audio.
+
+| Graph | ASR | Flagged branch | Needs |
+|---|---|---|---|
+| `pipeline.graph.json` | local Whisper (`tiny`) | `csv_table` → `workspace/artifacts/nightly-compliance/flagged.csv` | nothing — runs offline |
+| `pipeline.live.graph.json` | OpenAI-compatible | Slack `chat.postMessage` via `http_request` + `auth_env=SLACK_BOT_TOKEN` | `OPENAI_API_KEY`, `SLACK_BOT_TOKEN` |
+
+Both graphs write the unflagged rows to `workspace/artifacts/nightly-compliance/compliance.csv`
+(`csv_table` paths are relative to the workspace).
 
 ## Plugins
 
@@ -11,14 +20,8 @@ for p in schedule_trigger asr_transcribe pii_redact eval_gate if_switch http_req
   python -m app.cli.main plugin install "PluginPackage/Common/${p}/" --upgrade
 done
 python -m app.cli.main plugin install PluginPackage/Audio/dataset_ingest/ --upgrade
-```
 
-Native Slack nodes are out of v1 — use `http_request` + `auth_env` (env var **name**, never the secret in IR).
-
-```bash
 python -m app.cli.main run --graph examples/26_nightly_compliance/pipeline.graph.json
 ```
 
-## Live vs mock
-
-Live: `pipeline.live.graph.json` uses openai_compat ASR and `http_request` + `auth_env=SLACK_BOT_TOKEN` (no native Slack node). Mock CI: `pipeline.graph.json`.
+There is no native Slack node — the live graph stores only the env var **name** (`auth_env`), never the token.

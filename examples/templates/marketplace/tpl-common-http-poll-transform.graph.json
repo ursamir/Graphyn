@@ -1,0 +1,97 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-common-http-poll-transform",
+    "seed": 42,
+    "description": "On a schedule, GET a public JSON API, pick fields with JSONPath and store the snapshot.",
+    "created_at": null,
+    "tags": [
+      "common",
+      "http",
+      "polling"
+    ],
+    "pack": "Common",
+    "industry": "general",
+    "marketplace_id": "tpl-common-http-poll-transform",
+    "status": "ready",
+    "source_example": "marketplace/tpl-common-http-poll-transform.graph.json",
+    "base_template": "tpl-common-http-poll-transform"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "schedule_trigger",
+      "config": {
+        "interval_s": 3600
+      },
+      "label": "tick",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "http_request",
+      "config": {
+        "method": "GET",
+        "url": "https://huggingface.co/api/models/facebook/mms-tts-eng"
+      },
+      "label": "fetch",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "json_transform",
+      "config": {
+        "mappings": [
+          {
+            "from": "$.id",
+            "to": "model"
+          },
+          {
+            "from": "$.downloads",
+            "to": "downloads"
+          }
+        ]
+      },
+      "label": "transform",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "object_store",
+      "config": {
+        "operation": "put",
+        "prefix": "poll"
+      },
+      "label": "store",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

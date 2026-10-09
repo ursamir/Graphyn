@@ -252,6 +252,27 @@ def create_project(body: CreateProjectBody, request: Request):
             if exc.status_code == 422 and "already exists" in str(exc.detail):
                 raise HTTPException(status_code=409, detail=exc.detail) from exc
             raise
+        from app.core.trust.identity import current_identity
+        from app.core.trust.metering import MeterStoreError, get_meter_store, record_meter_event
+        from app.core.trust.orgs import DEFAULT_ORG_ID, get_org_store
+
+        ident = current_identity() or {}
+        org_id = ident.get("org_id") or DEFAULT_ORG_ID
+        try:
+            get_meter_store().check_quota(str(org_id), "projects")
+        except MeterStoreError as exc:
+            raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": str(exc)}) from exc
+        try:
+            get_org_store().assign_project(body.name, str(org_id))
+            record_meter_event(str(org_id), "project.created", actor=str(ident.get("actor") or ""), resource_type="project", resource_id=body.name)
+            meta = dict(result) if isinstance(result, dict) else {}
+            meta["org_id"] = org_id
+            _pm._write_json(_pm._project_dir(body.name) / "project.json", meta)
+            result = meta
+        except HTTPException:
+            raise
+        except Exception:
+            pass
         complete_idempotent(request, status_code=200, body=result)
     _audit(request, "workspace.created", body.name)
     return result
@@ -1018,10 +1039,46 @@ def put_project_pipeline(
 
 
 @router.delete("/{name}/pipelines/{pipeline}", summary="Delete a project pipeline")
-def delete_project_pipeline(name: str, pipeline: str):
-    """DELETE /projects/{name}/pipelines/{pipeline}."""
+def delete_project_pipeline(name: str, pipeline: str, request: Request):
+    """DELETE /projects/{name}/pipelines/{pipeline}.
+
+    Removes the draft ``.graph.json``, version bundle (versions +
+    environments), and webhook hook. Schedules targeting this pipeline are
+    disabled and marked orphaned. Run history is kept.
+    """
     from app.core.pipelines.project_pipelines import delete_pipeline
+    from app.core.pipelines.schedules import disable_schedules_for_pipeline
 
     project_dir = _handle(_pm._require_project, name)
-    _handle(delete_pipeline, project_dir, pipeline)
-    return {"deleted": True, "name": pipeline}
+    summary = _handle(delete_pipeline, project_dir, pipeline)
+    orphaned = []
+    try:
+        orphaned = disable_schedules_for_pipeline(name, pipeline) or []
+    except Exception as exc:  # pipeline is already deleted; surface in logs
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "delete pipeline %s/%s: could not orphan schedules: %s", name, pipeline, exc
+        )
+        orphaned = []
+    try:
+        from app.core.trust.audit import record_audit
+
+        record_audit(
+            actor=resolve_actor(request),
+            action="pipeline.deleted",
+            resource_type="pipeline",
+            resource_id=f"{name}/{pipeline}",
+            meta={
+                "removed": summary,
+                "schedules_orphaned": len(orphaned),
+            },
+        )
+    except Exception:
+        pass
+    return {
+        "deleted": True,
+        "name": pipeline,
+        "removed": summary,
+        "schedules_orphaned": len(orphaned),
+    }

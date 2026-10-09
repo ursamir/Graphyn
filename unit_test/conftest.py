@@ -326,3 +326,34 @@ def minimal_meta():
         description="Minimal test node.",
         category="Test",
     )
+
+
+# ── F19 (F-02): restricted egress is the default ──────────────────────────────
+#
+# Unit tests use RFC 2606 placeholder hosts (api.example.com, hooks.example.com,
+# smtp.example.com …) that do not resolve offline. Map *only* those reserved
+# names to a public documentation address so restricted-mode checks still run
+# (private / loopback / metadata literals are still blocked for real).
+
+_RFC2606_SUFFIXES = (".example", ".example.com", ".example.org", ".example.net", ".test", ".invalid")
+
+
+@pytest.fixture(autouse=True)
+def _offline_placeholder_dns(monkeypatch):
+    import ipaddress as _ip
+
+    try:
+        from app.core.trust import egress as _egress
+    except Exception:
+        yield
+        return
+    real = _egress._resolve_ips
+
+    def _resolve(hostname: str):
+        host = (hostname or "").lower().rstrip(".")
+        if host in ("example.com", "example.org", "example.net") or host.endswith(_RFC2606_SUFFIXES):
+            return [_ip.ip_address("93.184.216.34")]
+        return real(hostname)
+
+    monkeypatch.setattr(_egress, "_resolve_ips", _resolve)
+    yield

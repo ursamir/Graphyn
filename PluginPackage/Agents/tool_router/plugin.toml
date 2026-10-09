@@ -1,0 +1,21 @@
+[plugin]
+name             = "tool-router"
+version          = "0.1.0"
+description      = "Route tool-calls to registered tools"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["agents", "tool"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["tool_router"]
+
+[config_schema.tool_router]
+tools = { type = "array", title = "Tools", default = [], description = "Tool names or {name, keywords[]} dicts." }
+strict = { type = "boolean", title = "Strict", default = true, description = "When false, unmatched text falls back to the first tool." }

@@ -1,0 +1,43 @@
+[plugin]
+name             = "audio-event-detector"
+version          = "1.0.0"
+description      = "Temporal acoustic event detection with onset/offset timestamps. Built-in YAMNet (521 classes) or custom TFLite/PyTorch model."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "detection",
+    "events",
+    "yamnet",
+    "tflite",
+    "classification",
+    "realtime"
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "librosa>=0.10",
+    "tensorflow>=2.12",
+    "tensorflow-hub>=0.14",
+    "setuptools<81",  # tensorflow_hub imports pkg_resources (removed in setuptools 81)
+]
+
+optional_dependencies = [
+    "tflite-runtime>=2.14",
+    "torch>=2.0",
+]
+
+runtime = "isolated"
+node_types = ["audio_event_detector"]
+
+[config_schema.audio_event_detector]
+model_path = { type = "string", title = "Model path", default = "", description = "Model file under workspace/artifacts (or empty for built-in)." }
+backend = {  type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: yamnet, tflite, pytorch, auto.", enum = ["yamnet", "tflite", "pytorch", "auto"]  }
+threshold = { type = "number", title = "Threshold", default = 0.5, description = "Detection confidence/energy threshold in [0, 1] or dB as documented by the backend." }
+event_types = { type = "array", title = "Event types", default = [], description = "Optional allowlist of event class names to keep (empty = all).", widget = "json" }
+min_event_duration_ms = { type = "number", title = "Min event duration (ms)", default = 100.0, description = "Ignore events shorter than this (milliseconds)." }
+frame_hop_ms = { type = "number", title = "Frame hop (ms)", default = 480.0, description = "Analysis hop between frames in milliseconds." }
+merge_tolerance_ms = { type = "number", title = "Merge tolerance (ms)", default = 10.0, description = "Merge adjacent same-class events closer than this (ms)." }

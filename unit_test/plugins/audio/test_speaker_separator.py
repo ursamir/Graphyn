@@ -61,18 +61,20 @@ def test_construct(installed_cls):
 
 # ── smoke process ─────────────────────────────────────────────────────────────
 
-def test_process_smoke(installed_cls, make_audio_sample):
-    """SpeakerSeparatorNode is SISO — process({"input": [...]}) -> {"output": [...]}."""
-    # Skip if neither pyannote nor speechbrain is available
-    try:
-        import pyannote.audio  # noqa: F401
-    except ImportError:
-        try:
-            import speechbrain  # noqa: F401
-        except ImportError:
-            pytest.skip("Neither pyannote.audio nor speechbrain is installed")
-
+def test_process_requires_setup(installed_cls, make_audio_sample):
+    """process() before setup() is a clear error (the executor always calls setup())."""
     node = installed_cls(config={}, seed=0)
+    with pytest.raises(RuntimeError, match="setup"):
+        node.process({"input": [make_audio_sample()]})
+
+
+@pytest.mark.heavy
+def test_process_smoke(installed_cls, make_audio_sample):
+    """SepFormer (speechbrain, no credentials) separates a mixture into 2 sources."""
+    pytest.importorskip("speechbrain")
+    node = installed_cls(config={"backend": "speechbrain"}, seed=0)
+    node.setup()
     result = node.process({"input": [make_audio_sample()]})
     assert "output" in result
     assert isinstance(result["output"], list)
+    assert len(result["output"]) >= 2

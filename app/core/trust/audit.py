@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 _lock = threading.Lock()
 
 _VALID_RESULTS = frozenset({"success", "failure", "denied"})
-_VALID_ACTOR_KINDS = frozenset({"human", "agent", "system"})
+_VALID_ACTOR_KINDS = frozenset({"human", "agent", "system", "billing_webhook"})
 
 
 def audit_dir(base_dir: str | Path | None = None) -> Path:
@@ -59,6 +59,8 @@ def _infer_actor_kind(actor: str, actor_kind: str | None) -> str | None:
     if actor_kind and actor_kind in _VALID_ACTOR_KINDS:
         return actor_kind
     a = (actor or "").strip().lower()
+    if a == "billing_webhook":
+        return "billing_webhook"
     if a in ("system", "api", "scheduler", "cleanup", "worker"):
         return "system"
     if a.startswith("agent:") or a.startswith("mcp") or a == "agent":
@@ -152,6 +154,12 @@ _ACTION_LABELS: dict[str, str] = {
     "pipeline.promote": "Pipeline promoted",
     "pipeline.promote_request": "Pipeline promotion requested",
     "pipeline.rollback": "Pipeline rolled back",
+    "pipeline.deleted": "Pipeline deleted",
+    "agent.create": "Agent created",
+    "agent.update": "Agent updated",
+    "agent.token_mint": "Agent token minted",
+    "agent.token_revoke": "Agent token revoked",
+    "compliance.export": "Compliance pack exported",
     "template.save": "Template saved",
     "proposal.create": "Proposal created",
     "proposal.accept": "Proposal accepted",

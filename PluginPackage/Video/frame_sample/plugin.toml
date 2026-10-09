@@ -1,0 +1,25 @@
+[plugin]
+name             = "frame-sample"
+version          = "1.0.0"
+description      = "Extract frames from videos or clips (fps, every N-th, keyframes, or uniform N) as JPEGs with exact timestamps."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+tags = ["video", "frames", "sampling", "ffmpeg"]
+
+# Needs the ffmpeg/ffprobe binaries on PATH (present in the Graphyn image).
+dependencies = ["numpy>=1.24"]
+
+runtime = "inprocess"
+node_types = ["frame_sample"]
+
+[config_schema.frame_sample]
+mode = { type = "string", title = "Mode", default = "fps", enum = ["fps", "every_n", "keyframes", "uniform"] }
+fps = { type = "number", title = "Frames per second", default = 1.0, exclusiveMinimum = 0, description = "mode=fps" }
+every_n = { type = "integer", title = "Every N-th frame", default = 30, minimum = 1, description = "mode=every_n" }
+num_frames = { type = "integer", title = "Frames per video", default = 8, minimum = 1, description = "mode=uniform" }
+max_frames = { type = "integer", title = "Max frames per video", default = 200, minimum = 0, description = "0 = no limit." }
+width = { type = "integer", title = "Resize width (px)", default = 0, minimum = 0, description = "0 = keep size; height keeps aspect." }
+jpeg_quality = { type = "integer", title = "JPEG quality (2 best – 31 worst)", default = 3, minimum = 2, maximum = 31 }
+output_dir = { type = "string", title = "Output dir", default = "workspace/datasets/video/frames", ui = { group = "Advanced" } }

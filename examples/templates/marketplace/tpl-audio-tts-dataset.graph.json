@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-audio-tts-dataset",
+    "seed": 42,
+    "description": "Synthesize prompt phrases with Meta MMS-TTS, condition and export them as a dataset.",
+    "created_at": null,
+    "tags": [
+      "audio",
+      "tts",
+      "synthetic"
+    ],
+    "pack": "Audio",
+    "industry": "general",
+    "marketplace_id": "tpl-audio-tts-dataset",
+    "status": "ready",
+    "source_example": "marketplace/tpl-audio-tts-dataset.graph.json",
+    "base_template": "tpl-audio-tts-dataset"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "speech_synthesizer",
+      "config": {
+        "backend": "mms",
+        "text": "turn on the kitchen lights"
+      },
+      "label": "synthesize",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000,
+        "mono": true
+      },
+      "label": "condition",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "audio_exporter",
+      "config": {
+        "format": "wav",
+        "overwrite": true
+      },
+      "label": "export",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

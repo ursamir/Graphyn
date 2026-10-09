@@ -66,7 +66,7 @@ discover packs/nodes
 | Expand catalog → IR | `materialize_template` | P0 | **Implemented** (MCP + `app/core/templates/pipeline_template_materializer.py`) |
 | Ad-hoc chain → IR | `build_graph_from_chain` | P1 | Helper exists |
 | Param validation vs template schema | `validate_template_params` | P1 | Proposed |
-| Pack install aligned to PluginPackage roots | extend `install_plugin` | P1 | Document paths: TinyML/Vision/RAG/… |
+| Pack install aligned to PluginPackage roots | extend `install_plugin` | P1 | Document paths: Audio/Common/Agents/Video/WakeWord |
 | Design-catalog list_nodes | `list_catalog_nodes` | P2 | Proposed — today `list_nodes` = runtime only |
 
 ### Proposed tool sketches
@@ -76,7 +76,7 @@ discover packs/nodes
 - returns: `{templates:[{id,name,pack,industry,lifecycle,status,value_prop}], count}`
 
 **`list_packs` / `describe_pack`**
-- enumerate Audio, Common, TinyML, Vision, RAG, Video, Agents, MLOps, WakeWord + node counts + template family counts
+- enumerate the shipped packs (Audio, Common, Agents, Video, WakeWord) + node counts + template family counts; RAG / Vision / TinyML / MLOps are removed and have no templates
 
 **`get_node_spec`**
 - args: `node_type`
@@ -88,32 +88,24 @@ discover packs/nodes
 
 ## 4. Agent playbooks
 
-### (a) YOLO retail detect train + export
+### (a) Keyword spotting train → TFLite edge
 
-1. `search_templates` pack=Vision industry=retail-shelf tags=[train] → pick `tpl-vision-yolo-detect-train-retail-shelf`
-2. `materialize_template` (or Python materializer) → graph
-3. `validate_graph` → `save_pipeline` project=… pipeline=retail-yolo-detect
-4. `execute_pipeline` → `inspect_run` / `list_artifacts`
-5. `search_templates` … export-onnx … → materialize/save/run export graph
-6. `register_model` → `create_ship_package` → `request_model_prod` / HITL → `promote_ship_package`
-7. Secrets: none for local; HF token via `secrets_set` if pulling weights
+1. `search_templates` pack=Audio tags=[kws] industry=smart-home → `tpl-audio-kws-train-smart-home`
+2. `materialize_template` → graph; `validate_graph` → `save_pipeline`
+3. `execute_pipeline` → `inspect_run` / `list_artifacts`
+4. For the int8 TFLite model: `tpl-audio-kws-edge-tflite-*`
+5. `register_model` → `create_ship_package` → `request_model_prod` / HITL → `promote_ship_package`
 
-### (b) RAG support bot ingest + query
+### (b) Call-center transcripts with PII redaction
 
-1. `secrets_set` name=`slack_token` (if Slack source) — never inline
-2. `search_templates` pack=RAG industry=support tags=[ingest] → `tpl-rag-ingest-slack-markdown-faiss-support` (example)
-3. Materialize → validate → save → execute ingest
-4. Search query/hybrid template → save as second pipeline → execute with user question params
-5. Optional agentic: `tpl-rag-agentic-rag-support` with `guardrail_filter` + `hitl_approve`
-6. `rag_eval` template for eval_gate before promote
+1. `search_templates` pack=Common tags=[asr,pii] industry=callcenter → `tpl-common-asr-pii-redact-callcenter`
+2. Materialize → validate → save → execute (local Whisper; no keys)
+3. Composite analytics: `tpl-cross-call-analytics` (ASR → PII → rule-based extract → eval gate → object store)
 
-### (c) TinyML KWS → TFLM CMSIS pack
+### (c) Wake word "hey graphyn"
 
-1. `search_templates` pack=TinyML tags=[kws,tflm,cmsis-pack] industry=wearable
-2. Materialize with params `target_mcu=cortex-m4`, `quant_mode=ptq`
-3. validate → save → execute (host sim via `tflm_host_sim`)
-4. Flash companion template is **`needs-api`** — agent must surface honesty banner; do **not** call fake flash
-5. `create_ship_package` for the CMSIS-Pack artifact; promote only with HITL
+1. `tpl-wakeword-data-gen` → `tpl-wakeword-features` → `tpl-wakeword-train-export` (ONNX) or `tpl-wakeword-train-int8-detect`
+2. `tpl-wakeword-detect` is `needs-upstream`: it runs once a trained model exists at `workspace/models/wakeword/<model_name>/<model_name>.onnx`
 
 ### (d) Instantiate marketplace template into workspace pipeline
 
@@ -129,12 +121,13 @@ discover packs/nodes
 - **Credentials:** `list/create/get/update/revoke_credential` (redacted). Nodes store **connection ids**, never raw keys. Ops env bootstrap via CLI `secrets` only.
 - **Inline secrets in IR:** `instantiate_template` / `save_pipeline` reject via `InlineSecretError`.
 - **Promote / prod:** require human approval paths already present (`approve_model_prod`, `promote_ship_package`, `hitl_approve` node, `accept_proposal` flag).
-- **needs-api:** agents must not invent Devices/flash tooling.
+- **needs-credentials / needs-endpoint / needs-upstream:** surface the template's `status` and `metadata_extra.requires`; do not fake the missing credential, endpoint or artifact.
 
 ## 6. Regenerating catalog + seeds
 
 ```bash
-python scripts/generate_pipeline_template_catalog.py --min 950 --seed-graphs 32
+python scripts/generate_pipeline_template_catalog.py          # refuses to write invalid entries
+python scripts/generate_pipeline_template_catalog.py --check  # validate only
 python scripts/materialize_pipeline_template.py <template_id> -o /tmp/out.graph.json
 ```
 

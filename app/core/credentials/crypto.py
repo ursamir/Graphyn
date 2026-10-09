@@ -1,9 +1,9 @@
 # app/core/credentials/crypto.py
 """At-rest sealing for credential payloads (stdlib only).
 
-Key source (precedence):
-  1. GRAPHYN_CREDENTIALS_KEY env (urlsafe base64 32-byte, or any passphrase)
-  2. Generated once into {GRAPHYN_HOME}/credentials/.key (mode 0600)
+Key source: app.core.trust.kms.resolve_data_key("credentials")
+  - GRAPHYN_KMS_BACKEND=local (default): GRAPHYN_CREDENTIALS_KEY or {GRAPHYN_HOME}/credentials/.key
+  - GRAPHYN_KMS_BACKEND=envelope: CMK-wrapped DEK under {GRAPHYN_HOME}/kms/
 
 Format: ``v1:`` + urlsafe_b64(nonce || tag || ciphertext)
   - keystream: SHA-256(master || nonce || counter) chunks
@@ -61,6 +61,13 @@ def _derive_master(raw: bytes) -> bytes:
 
 
 def _load_or_create_key() -> bytes:
+    """Resolve credentials DEK via KMS provider (local file or local envelope BYOK)."""
+    try:
+        from app.core.trust.kms import resolve_data_key
+
+        return resolve_data_key("credentials")
+    except Exception as exc:
+        logger.warning("kms resolve failed for credentials (%s); using legacy local key path", exc)
     env = (os.environ.get(_KEY_ENV) or "").strip()
     if env:
         return _derive_master(env.encode("utf-8"))
@@ -70,7 +77,6 @@ def _load_or_create_key() -> bytes:
         data = path.read_bytes().strip()
         if data:
             return _derive_master(data)
-    # Generate once
     raw = base64.urlsafe_b64encode(secrets.token_bytes(32))
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:

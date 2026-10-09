@@ -38,7 +38,7 @@ def test_connection_key_not_sent_to_node_base_url(cred_home):
         name="c", kind="openai_compat",
         payload={"api_key": "sk-conn", "base_url": "https://api.openai.com/v1"},
     )
-    with patch("httpx.post", return_value=_ok_resp()) as mocked:
+    with patch("app.core.trust.egress.egress_post", return_value=_ok_resp()) as mocked:
         with pytest.raises(NeedsCredentialsError, match="base_url"):
             chat_completion(
                 messages=MSG, provider="openai_compat",
@@ -53,7 +53,7 @@ def test_connection_matching_base_url_ok(cred_home):
         payload={"api_key": "sk-conn", "base_url": "https://api.openai.com/v1"},
     )
     with patch("app.core.ml.llm_client.validate_http_egress_url"), \
-            patch("httpx.post", return_value=_ok_resp()) as mocked:
+            patch("app.core.trust.egress.egress_post", return_value=_ok_resp()) as mocked:
         out = chat_completion(
             messages=MSG, provider="openai_compat",
             connection_id=meta["id"], base_url="https://api.openai.com/v1/",
@@ -64,7 +64,7 @@ def test_connection_matching_base_url_ok(cred_home):
 
 def test_env_key_not_sent_to_node_base_url(cred_home, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
-    with patch("httpx.post", return_value=_ok_resp()) as mocked:
+    with patch("app.core.trust.egress.egress_post", return_value=_ok_resp()) as mocked:
         with pytest.raises(NeedsCredentialsError):
             chat_completion(messages=MSG, provider="openai_compat", base_url="https://evil.example/v1")
     mocked.assert_not_called()
@@ -74,7 +74,7 @@ def test_env_key_base_url_allowlist(cred_home, monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "gsk")
     monkeypatch.setenv("GRAPHYN_LLM_BASE_URL_ALLOWLIST", "api.groq.com")
     with patch("app.core.ml.llm_client.validate_http_egress_url"), \
-            patch("httpx.post", return_value=_ok_resp()):
+            patch("app.core.trust.egress.egress_post", return_value=_ok_resp()):
         out = chat_completion(
             messages=MSG, provider="openai_compat",
             base_url="https://api.groq.com/openai/v1", api_secret_name="GROQ_API_KEY",
@@ -88,7 +88,7 @@ def test_internal_env_never_resolved(cred_home, monkeypatch, name):
     assert not env_secret_name_allowed(name)
     assert resolve_secret(name) == ""
     assert resolve_api_key(name) == ""
-    with patch("httpx.post", return_value=_ok_resp()) as mocked:
+    with patch("app.core.trust.egress.egress_post", return_value=_ok_resp()) as mocked:
         with pytest.raises(NeedsCredentialsError):
             chat_completion(messages=MSG, provider="openai_compat", api_secret_name=name)
     mocked.assert_not_called()

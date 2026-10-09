@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-common-csv-transform",
+    "seed": 42,
+    "description": "Read a CSV, derive a column with python_code and write the result CSV.",
+    "created_at": null,
+    "tags": [
+      "common",
+      "csv",
+      "etl"
+    ],
+    "pack": "Common",
+    "industry": "general",
+    "marketplace_id": "tpl-common-csv-transform",
+    "status": "ready",
+    "source_example": "marketplace/tpl-common-csv-transform.graph.json",
+    "base_template": "tpl-common-csv-transform"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "csv_table",
+      "config": {
+        "operation": "read",
+        "path": "datasets/input/csv-data-processing/sample.csv"
+      },
+      "label": "read",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "python_code",
+      "config": {
+        "source": "src = inputs.get('input')\nrows = src.get('rows', src) if isinstance(src, dict) else (src if isinstance(src, (list, tuple)) or src is None else src.rows)\noutput = [dict(r, score_band=('high' if float(r.get('score') or 0) >= 50 else 'low')) for r in (rows or [])]\n"
+      },
+      "label": "transform",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "csv_table",
+      "config": {
+        "operation": "write",
+        "path": "artifacts/templates/csv-transform/out.csv"
+      },
+      "label": "write",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

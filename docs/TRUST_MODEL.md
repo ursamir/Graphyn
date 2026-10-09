@@ -1,9 +1,8 @@
 # Trust model — authorization, secrets, workflow nodes
 
-> Option A (this release): **trusted operators** on a **shared-bearer / single-tenant** deployment.
-> Full RBAC/tenancy and container isolation (Option B) are out of scope — see `KNOWN_ISSUES.md` (RBAC-1).
+> Option A+: **local multi-user RBAC** (F11) plus optional **OIDC/SSO** (Wave 1), **org tenancy** (Wave 2), quotas/metering (Wave 3), **KMS/BYOK + residency + compliance export** (Wave 4), and **opt-in container plugin isolation** (Wave 5; subprocess default), plus **agent principals / MCP RBAC** (Wave 6). Shared bearer / named tokens remain break-glass. TEE/SGX and cloud KMS APIs are **Not shipped** — see `docs/ENTERPRISE_READINESS.md`.
 
-Graphyn today is a **single-operator** platform: one shared API token (when configured) unlocks the entire control plane. There is **no** multi-user identity, **no** per-project ACL, and **no** role matrix. This document makes those boundaries explicit so they are not confused with a shipped IdP.
+Graphyn is a **multi-org, single-control-plane** product: local username/password users (and optional OIDC) carry global roles + per-project membership ACL + **organization membership** with an active `org_id` that scopes listings. A shared `GRAPHYN_API_TOKEN` (and named token map) still works as operator break-glass. There is **no** multi-org / `org_id` SaaS tenancy yet.
 
 ---
 
@@ -14,7 +13,10 @@ Graphyn today is a **single-operator** platform: one shared API token (when conf
 | **Unauthenticated-dev** | `GRAPHYN_API_TOKEN` unset **and** auth not required | All `/api/v1/*` routes and MCP tools accept callers without a token. Intended for local single-user development only. |
 | **Shared bearer** | `GRAPHYN_API_TOKEN` set | REST requires `Authorization: Bearer <token>`; MCP requires `_meta.auth_token`. Same token for every operator and worker. |
 | **Named tokens** | `GRAPHYN_API_TOKENS` and/or `GRAPHYN_API_TOKENS_FILE` set | Each listed token is accepted (REST + MCP) alongside `GRAPHYN_API_TOKEN`. A mapped token **binds the audit actor** (`actor_verified: true`). Text form: `name:token` (operator) or `name:token:worker[:worker_id]`; JSON: `{"token":"name"}` or `{"token":{"name","kind","worker_id"}}`. **Operator** tokens keep full control-plane access. **Worker-scoped** tokens (`kind=worker`) may only act as their bound `worker_id` on `/jobs/*`, worker heartbeat, claim/complete/events, and blob put/get (header `X-Graphyn-Worker-Id` or body/query). Fail closed when auth is configured. |
-| **Fail-closed** | `GRAPHYN_AUTH_REQUIRED=1` **or** `GRAPHYN_ENV` ∈ {`production`,`prod`,`staging`} | Empty `GRAPHYN_API_TOKEN` is rejected (401 / MCP unauthorized). Set a token before exposing the API. |
+| **Local users + sessions** | At least one user in `UserStore` (`GRAPHYN_HOME/auth/users.db`) | `POST /api/v1/auth/login` (username/password) issues a 12 h session bearer (`gxs_…`). Personal API tokens (`gxu_…`) from Access. Identity `kind=user` carries roles + project memberships; RBAC middleware enforces route + project ACL (`app.core.trust.rbac`). |
+| **Organizations** | Always (default org migrated on upgrade) | `GET/POST /orgs`, activate, members. User identity carries `org_id` / `org_role` / `orgs`. Projects, credentials and workers list within the active org. |
+| **OIDC / SSO** | `GRAPHYN_OIDC_ENABLED=1` + issuer + client id | Authorization-code + PKCE; discovery from issuer; callback verifies ID token (JWKS) or userinfo; provisions/links a local user; issues the **same session credential** as password login. Password login remains available unless `GRAPHYN_OIDC_PASSWORD_LOGIN=0`. Public routes: `/auth/oidc/{config,start,callback,finish}`. |
+| **Fail-closed** | `GRAPHYN_AUTH_REQUIRED=1` **or** `GRAPHYN_ENV` ∈ {`production`,`prod`,`staging`} | Empty `GRAPHYN_API_TOKEN` is rejected when no users/OIDC path covers the caller (401 / MCP unauthorized). Set a token or configure users/OIDC before exposing the API. |
 
 **Audit identity.** With the single shared token (or no auth) the actor is the self-declared `X-Actor` header (or `"unidentified"`) and is recorded `actor_verified: false`. `"system"` is reserved for internal background jobs (no HTTP request). `GET /api/v1/me` shows the caller how they will be recorded.
 
@@ -61,20 +63,29 @@ No credential → 401, even in unauthenticated-dev (the hook route never falls b
 | **Deployments** (edge packs / wizard outputs) | Bearer holder (project-scoped files) | Bearer holder | Bearer holder | Package/deploy actions: bearer | n/a |
 | **Proposals** | Bearer holder | Bearer holder / MCP with auth | Accept/reject: bearer | Apply via accept: bearer | n/a |
 
-### Explicitly **not** shipped
+### Shipped vs not (identity)
 
 | Capability | Status |
 |---|---|
-| RBAC / roles (viewer, editor, admin) | **Not shipped** |
-| Per-user accounts / OAuth / OIDC / SSO | **Not shipped** |
-| Per-project isolation (user A cannot read project B) | **Not shipped** — bearer sees all projects |
-| Multi-tenant DB schemas / org boundaries | **Not shipped** |
-| Separate worker credentials vs API token | **Partial (WAVE-1)** — worker-scoped named tokens + route ACL; shared bearer still supported |
+| RBAC / roles (admin, operator, builder, approver, auditor, viewer) | **Shipped (F11)** — `app.core.trust.rbac` |
+| Local per-user accounts + sessions + personal API tokens | **Shipped (F11)** — `app.core.trust.users` |
+| Per-project membership ACL (default deny across projects) | **Shipped (F11)** — membership required unless role has `projects.all` |
+| OIDC / SSO (authorization-code + PKCE) | **Shipped (Wave 1)** — optional via `GRAPHYN_OIDC_*` |
+| Multi-tenant org boundaries (`org_id` + membership + active org) | **Shipped (Wave 2)** |
+| Per-org quotas + metering events + billing webhook seam | **Shipped (Wave 3)** — not a full billing product |
+| Customer-managed KMS / BYOK (local + local envelope) | **Shipped (Wave 4)** — cloud KMS Not shipped (extension point, no stubs) |
+| Org data residency / region pinning (fail-closed opt-in) | **Shipped (Wave 4)** |
+| Compliance export pack + audit retention config | **Shipped (Wave 4)** |
+| Opt-in container plugin sandbox (docker/podman) | **Shipped (Wave 5)** — subprocess remains default |
+| TEE / SGX attested plugin execution | **Not shipped** (no hardware path) |
+| Agent principals + per-agent RBAC (`gxa_…` / MCP) | **Shipped (Wave 6)** — OIDC client_credentials Not shipped |
+| Admin org usage/quotas UI + billing webhook status | **Shipped (Wave 6)** |
+| Stripe Checkout / payment UI | **Not shipped** |
+| Edge OTA closed-loop device fleet | **Partial** — ship packages only; needs hardware |
+| Separate worker credentials vs API token | **Partial** — worker-scoped named tokens + join/enrollment; shared bearer still supported |
 | Fine-grained secret ACL (per-secret readers) | **Not shipped** |
 
-### Future requirement (when multi-user is supported)
-
-Once multi-user identity exists, **cross-project access must be prevented by default** (project membership or equivalent ACL). That is a **future requirement**, not implemented here — do not treat the matrix above as fake RBAC.
+The §2 matrix above still describes **legacy shared-bearer** capabilities (anyone with the break-glass token). User identities are constrained by RBAC + membership; do not cite the bearer matrix as the multi-user model.
 
 ---
 
@@ -103,15 +114,15 @@ Once multi-user identity exists, **cross-project access must be prevented by def
 | Capability | Trust assumption | Hardening today | Not claimed |
 |---|---|---|---|
 | `python_code` | Graph authors are trusted operators | AST import/call filters; any `_`-prefixed attribute rejected; exec/spawn families (`posix_spawn`, `execv*`, `spawn*`, `fork`, `kill`, …) and frame/code introspection attributes (`gi_frame`, `f_globals`, `tb_frame`, …) rejected; `json` / `math` are curated wrapper namespaces (never real modules) and `import` resolves only to them; `str.format`/`format_map` banned; `allow_network=False` by default and refused entirely when egress mode is `restricted`; `open()` needs explicit `allowed_paths` | Process/container sandbox |
-| `http_request` / `http_webhook` | Same; arbitrary HTTP is intentional | Optional `GRAPHYN_HTTP_EGRESS_MODE=restricted` + allowlist; httpx only with `follow_redirects=False` (a 3xx is a failure, so a redirect cannot reach an unchecked host — the `http_webhook` urllib fallback, which followed redirects, was removed); `http_request` caps the streamed body (`max_response_bytes`) and retries only retryable statuses on idempotent methods / with `Idempotency-Key`; credentials come from a named `connection_id` (`http_auth` **requires** non-empty `allowed_hosts`, `webhook` URL as secret) or a secret *name* — never an inline secret field | Full SSRF-proof pin-IP client (TOCTOU remains) |
-| ASR / `structured_llm` HTTP | Calls vendor / configured provider URLs | `validate_http_egress_url` before every `httpx` call (same helper as `http_request` / `http_webhook`) | Pin-IP connect (TOCTOU remains) |
+| `http_request` / `http_webhook` | Same; arbitrary HTTP is intentional | **Restricted egress by default (F19)**: private / loopback / link-local / ULA / metadata denied, resolve-then-connect IP pinning (`EgressTransport`), every hop re-checked; trusted internal targets via `GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW`; optional public allowlist; httpx only with `follow_redirects=False` (a 3xx is a failure, so a redirect cannot reach an unchecked host — the `http_webhook` urllib fallback, which followed redirects, was removed); `http_request` caps the streamed body (`max_response_bytes`) and retries only retryable statuses on idempotent methods / with `Idempotency-Key`; credentials come from a named `connection_id` (`http_auth` **requires** non-empty `allowed_hosts`, `webhook` URL as secret) or a secret *name* — never an inline secret field | Network-layer sandbox (policy is enforced in-process) |
+| LLM providers (`llm_chat`, `structured_llm`, `app/core/ml/llm_client.py`), URL ingest, `send_email` SMTP relay, S3 endpoints (`object_store`, `dataset_ingest`) | Calls vendor / configured provider URLs | Same policy: HTTP via `egress_post` / `egress_client` (validated + IP-pinned); SMTP dials the validated IP (`_PinnedSMTP`, STARTTLS still verifies the hostname); S3 endpoint URL validated before any boto3 call | boto3 connection pinning (endpoint is operator-configured, validated once per node run) |
 | Platform webhooks (`WebhookService`) | Admin-configured callback | Always blocks private/loopback at save/send; POST connects to a validated public IP (`validated_webhook_ips`) with the original Host/SNI | DNS that returns a new public address after the pin is chosen |
 
 ### `python_code` (SEC-002)
 
 `python_code` runs `exec()` in-process after an AST walk. Filters reject dangerous imports (`os`, `subprocess`, …), dunder access, and unrestricted `open()`. That is **defense-in-depth**, not a sandbox:
 
-- Untrusted multi-tenant graphs must **not** expose this node without isolation (future Option B: container / subprocess jail).
+- Untrusted multi-tenant graphs must **not** expose this node without isolation (subprocess isolation is default for isolated plugins; set `GRAPHYN_PLUGIN_ISOLATION=container` for docker/podman — Wave 5).
 - Real module objects are never injected: `json.codecs.sys.modules['os']`-style traversal is impossible because `json` is a `SimpleNamespace(loads, dumps, JSONDecodeError)` and `math` exposes only its public functions/constants. Only `import json` / `import math` (and `from json import loads` style) are accepted; everything else — including network modules even with `allow_network=True` — is refused (`allow_network` is effectively reserved; use an egress-checked HTTP node).
 - Keep `allow_network` off unless the operator intentionally needs it. `allow_network=True` is refused while `GRAPHYN_HTTP_EGRESS_MODE=restricted`.
 - `str.format` / `format_map` calls are rejected (they bypass the dunder-attribute filter).
@@ -125,24 +136,30 @@ Env knobs (read live from the environment — no import-time cache):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `GRAPHYN_HTTP_EGRESS_MODE` | `trusted` | `trusted` = current behaviour (any http(s) URL). `restricted` = block private/link-local/loopback/metadata ranges and enforce optional allowlist. |
-| `GRAPHYN_HTTP_EGRESS_ALLOWLIST` | empty | Comma-separated hosts/domains. When non-empty **and** mode is `restricted`, the URL hostname must match (exact or subdomain). |
+| `GRAPHYN_HTTP_EGRESS_MODE` | `restricted` | **Default since F19.** `restricted` = deny private / loopback / link-local / ULA / CGNAT / reserved / metadata destinations (resolve-then-connect, IP pinned, redirects re-checked). `trusted` = explicit operator opt-out (private targets allowed; metadata still denied). |
+| `GRAPHYN_HTTP_EGRESS_ALLOWLIST` | empty | Comma-separated public hosts/domains. When non-empty **and** mode is `restricted`, the URL hostname must match (exact or subdomain). Also applies to the SMTP relay. |
+| `GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW` | empty | Trusted internal targets that may resolve to private addresses: `host`, `host:port`, `IP`, `IP:port`, `[v6]:port` or CIDR, e.g. `172.17.0.1:11434,ollama:11434`. Port-scoped entries only match that port. `169.254.0.0/16`, `fe80::/10`, `fd00:ec2::254`, `100.100.100.200` and metadata hostnames can **never** be allowlisted. Docker compose sets the host Ollama (`172.17.0.1:11434,host.docker.internal:11434`). |
 | `GRAPHYN_PLUGIN_ALLOWED_SOURCES` | empty | Empty = allow all remotes **only** in unauthenticated-dev. When `auth_required()` (prod/staging/`GRAPHYN_AUTH_REQUIRED`), empty allowlist **denies** remote installs (fail closed). Local paths always allowed. scp-style git remotes (`git@host:owner/repo.git`, `host:repo.git`) and transport-helper forms (`ext::…`) are classified as **remote** (and rejected as an unsupported scheme), never as local paths. `git clone` runs with `-c protocol.allow=never -c protocol.<scheme>.allow=always -c http.followRedirects=false` where `<scheme>` is the source's own http/https/git scheme (`file` only for local-path `.git` sources). |
 | `GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS` | unset | When unset, dataset path jail resolves symlink targets and rejects escapes. Set `1` for Docker layouts that intentionally symlink datasets outside `GRAPHYN_PROJECT_DIR`. `/input-files` StaticFiles uses `follow_symlink=False`. |
 
-Enable restricted mode:
+Restricted mode is the default. Typical hardening on top:
 
 ```bash
-export GRAPHYN_HTTP_EGRESS_MODE=restricted
-export GRAPHYN_HTTP_EGRESS_ALLOWLIST="api.github.com,hooks.example.com"
+export GRAPHYN_HTTP_EGRESS_ALLOWLIST="api.github.com,hooks.example.com"   # public hosts only
+export GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW="172.17.0.1:11434"            # local Ollama
 ```
 
-In restricted mode the shared helper (`app/core/trust/egress.py`) used by `http_request`, `http_webhook`, `asr_transcribe`, and `structured_llm`:
+A denied destination fails the node immediately (no connect attempt) with e.g.
+`HTTP egress blocked: http://169.254.169.254 resolves to 169.254.169.254, a link-local / cloud-metadata address (always denied, cannot be allowlisted).`
+
+In restricted mode the shared helper (`app/core/trust/egress.py`, `check_egress_target` + `EgressTransport`) used by `http_request`, `http_webhook`, `llm_chat` / `structured_llm` / `llm_client`, URL ingest, `send_email` and the S3 endpoints:
 
 1. Allows only `http` / `https`
 2. Blocks known metadata hostnames (`metadata.google.internal`, …)
 3. Optionally requires the host allowlist
 4. Resolves DNS (`getaddrinfo`) and rejects every address that is not `ip.is_global` — private / link-local / loopback / ULA / reserved / multicast / unspecified **and** CGNAT/shared `100.64.0.0/10` (incl. Alibaba metadata `100.100.100.200`), benchmarking, documentation, IETF-protocol ranges; IPv4-mapped / 6to4 / Teredo IPv6 forms are checked against the embedded IPv4 (including `169.254.169.254`). Platform webhooks use the same `is_blocked_ip`.
+
+**DNS rebinding:** `EgressTransport` validates the resolved addresses and connects to one of exactly those IPs (Host header + TLS SNI / certificate check stay on the hostname), so a DNS answer that changes between check and connect cannot retarget the socket. `trust_env` is off so proxies cannot bypass the check.
 
 **Redirects:** workflow HTTP nodes never follow redirects. Egress is validated for the URL actually requested and a `3xx` response fails the node, so a public URL cannot redirect into a private range. (`http_webhook` used to fall back to `urllib` when httpx was missing; `urllib` follows redirects without re-validation, so the fallback was removed and httpx is required.)
 
@@ -191,7 +208,7 @@ Env knobs (read live; lab defaults keep Mode B working without them):
 | `GRAPHYN_BLOB_URL_TTL_S` | `300` | Signed blob URL TTL (seconds), capped at 3600 |
 | `GRAPHYN_WORKER_TOKEN` | unset | Worker-side bearer (preferred over `GRAPHYN_API_TOKEN` on workers) |
 | `GRAPHYN_WORKER_UNBOUND_TOKENS` | unset | `1` = allow `kind=worker` tokens without a `worker_id` binding (lab only; fail closed otherwise unless mTLS supplies the id) |
-| `GRAPHYN_HTTP_EGRESS_MODE` | `trusted` | Set `restricted` on Mode B compose (api↔worker allowlist) |
+| `GRAPHYN_HTTP_EGRESS_MODE` | `restricted` | Default everywhere since F19; Mode B compose also sets a public allowlist |
 | `GRAPHYN_BLOB_ENCRYPTION_KEY` | unset | urlsafe-b64 32-byte key; encrypts blob files at rest (plaintext sha256 keys). Unset = plaintext |
 | `GRAPHYN_BLOB_ENCRYPTION_OLD_KEYS` | unset | Comma-separated retired keys, still tried for decrypt during rotation |
 | `GRAPHYN_POOL_MAX_CLAIMED` | unset | JSON `{"gpu-lab":2}` or `gpu-lab=2,cpu=4` concurrent claimed/running caps per pool |
@@ -220,6 +237,7 @@ Skipped (not shipped): TPM/SGX hardware attestation (no hardware API — plugin 
 ## Related
 
 - Architecture security table: `docs/ARCHITECTURE.md` §10
-- Open RBAC gap: `docs/KNOWN_ISSUES.md` → RBAC-1
+- Billing / per-tenant quotas: `docs/ENTERPRISE_READINESS.md` Wave 3
+- KMS / residency / compliance / container sandbox: Waves 4–5 same file
 - Node reference: `PluginPackage/NODES.md`
 - API auth note: `docs/API_REFERENCE.md` (Bearer / fail-closed)

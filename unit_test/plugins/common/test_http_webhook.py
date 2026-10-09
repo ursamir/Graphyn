@@ -48,7 +48,7 @@ def test_post_json_mocked(installed_cls):
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.text = '{"ok":true}'
-    with patch("httpx.post", return_value=mock_resp) as mocked:
+    with patch("app.core.trust.egress.egress_post", return_value=mock_resp) as mocked:
         out = node.process({"input": {"hello": "world"}})["output"]
     assert out.ok is True
     assert out.status_code == 200
@@ -67,7 +67,7 @@ def test_hmac_header(installed_cls, monkeypatch):
     mock_resp = MagicMock()
     mock_resp.status_code = 204
     mock_resp.text = ""
-    with patch("httpx.post", return_value=mock_resp) as mocked:
+    with patch("app.core.trust.egress.egress_post", return_value=mock_resp) as mocked:
         node.process({"input": {"a": 1}})
     headers = mocked.call_args.kwargs["headers"]
     assert "X-Graphyn-Signature" in headers
@@ -79,7 +79,7 @@ def test_http_error(installed_cls):
     mock_resp = MagicMock()
     mock_resp.status_code = 500
     mock_resp.text = "nope"
-    with patch("httpx.post", return_value=mock_resp):
+    with patch("app.core.trust.egress.egress_post", return_value=mock_resp):
         with pytest.raises(RuntimeError, match="HTTP 500"):
             node.process({"input": {}})
 
@@ -95,7 +95,7 @@ def test_mock_provider_rejected(installed_cls):
 def test_restricted_egress_blocks_metadata(installed_cls, monkeypatch):
     monkeypatch.setenv("GRAPHYN_HTTP_EGRESS_MODE", "restricted")
     node = installed_cls(config={"url": "http://169.254.169.254/latest/meta-data/"}, seed=0)
-    with patch("httpx.post") as mocked:
+    with patch("app.core.trust.egress.egress_post") as mocked:
         with pytest.raises(RuntimeError, match="egress|blocked|private|link-local"):
             node.process({"input": {"x": 1}})
     mocked.assert_not_called()
@@ -130,7 +130,7 @@ def test_redirects_not_followed_and_audited(installed_cls):
     mock_resp = MagicMock()
     mock_resp.status_code = 302
     mock_resp.text = ""
-    with patch("httpx.post", return_value=mock_resp) as mocked:
+    with patch("app.core.trust.egress.egress_post", return_value=mock_resp) as mocked:
         with pytest.raises(RuntimeError, match="HTTP 302") as ei:
             node.process({"input": {}})
     assert mocked.call_args.kwargs["follow_redirects"] is False
@@ -146,7 +146,7 @@ def test_connection_id_webhook_kind(installed_cls, monkeypatch):
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.text = "ok"
-    with patch("httpx.post", return_value=mock_resp) as mocked:
+    with patch("app.core.trust.egress.egress_post", return_value=mock_resp) as mocked:
         out = node.process({"input": {"a": 1}})["output"]
     assert mocked.call_args.args[0] == "https://hooks.example.com/services/SECRET"
     assert "SECRET" not in out.url

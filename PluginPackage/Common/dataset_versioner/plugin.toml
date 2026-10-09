@@ -1,0 +1,25 @@
+[plugin]
+name             = "dataset-versioner"
+version          = "1.0.0"
+description      = "Assign a SHA256 version hash to a dataset. Writes manifest CSV and lineage JSON for reproducibility and lineage tracking."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = ["ml", "dataset", "versioning", "lineage", "governance"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["dataset_versioner"]
+
+[config_schema.dataset_versioner]
+output_dir = { type = "string", title = "Output dir", default = "workspace/datasets/output/versioned", description = "Project root under workspace/datasets/output/{project}; version_tag is appended.", ui = { group = "Advanced" } }
+project = { type = "string", title = "Project", default = "", description = "Optional project name; when set, output_dir becomes workspace/datasets/output/{project}." }
+version_tag = { type = "string", title = "Version tag", default = "v1", description = "Canonical version tag matching vN / vN.N.N (e.g. v1, v1.0.0). Empty defaults to v1 — hash-style tags are rejected." }
+include_metadata = { type = "boolean", title = "Include metadata", default = true, description = "Include the dataset metadata dict and labels in lineage.json." }
+create_snapshot = { type = "boolean", title = "Create Snapshot", default = false, description = "Also write an immutable dataset.npz copy of every split into the version directory." }
+overwrite = { type = "boolean", title = "Overwrite", default = false, description = "Allow replacing an existing version directory whose content hash differs. Re-running identical data is always allowed." }

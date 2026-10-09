@@ -60,8 +60,12 @@ def test_me_unmapped_and_mapped(api_client, aud_env, monkeypatch):
     me = _get(api_client, "/api/v1/me", headers={"Authorization": "Bearer tok-alice", "X-Actor": "bob"})
     assert me["actor"] == "alice" and me["actor_verified"] is True and me["token_mapped"] is True
     assert me["claimed_actor"] == "bob"
+    # F19 (F-20): the shared token is attributed to its bound principal, X-Actor is a claim.
     me = _get(api_client, "/api/v1/me", headers={"Authorization": "Bearer single", "X-Actor": "bob"})
-    assert me["actor"] == "bob" and me["actor_verified"] is False and me["claimed_actor"] is None
+    assert me["actor"] == "operator" and me["actor_verified"] is True and me["claimed_actor"] == "bob"
+    monkeypatch.setenv("GRAPHYN_API_TOKEN_ACTOR", "ops-samir")
+    me = _get(api_client, "/api/v1/me", headers={"Authorization": "Bearer single"})
+    assert me["actor"] == "ops-samir" and me["auth_method"] == "legacy_token"
     status = _get(api_client, "/api/v1/system/auth-status")
     assert status["token_configured"] is True and status["token_map_configured"] is True
 
@@ -85,12 +89,13 @@ def test_mutations_record_token_identity(api_client, aud_env, monkeypatch):
     assert archive["claimed_actor"] == "mallory" and archive["origin"] == "http"
     cleanup = next(e for e in evs if e["action"] == "system.cleanup")
     assert cleanup["actor"] == "alice" and cleanup["actor_verified"] is True
-    # unmapped token: header actor recorded but unverified; never "system"/"api"
+    # shared token: attributed to its bound principal (F19 / F-20), never
+    # "unidentified" / "system" / "api" for an authenticated call
     monkeypatch.setenv("GRAPHYN_API_TOKEN", "single")
     resp = api_client.post(f"/api/v1/runs/{rm.run_id}/restore", headers={"Authorization": "Bearer single"})
     assert resp.status_code == 200
     restore = next(e for e in _events(api_client, headers=h, action="run.restore") if e["resource_id"] == rm.run_id)
-    assert restore["actor"] == "unidentified" and restore["actor_verified"] is False
+    assert restore["actor"] == "operator" and restore["actor_verified"] is True
 
 
 def test_run_meta_and_record_carry_actor_verified(api_client, aud_env, monkeypatch):

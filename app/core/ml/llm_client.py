@@ -26,6 +26,7 @@ import logging
 import os
 from typing import Any
 
+from app.core.trust import egress as _egress
 from app.core.trust.egress import validate_http_egress_url
 
 logger = logging.getLogger(__name__)
@@ -278,7 +279,7 @@ def _chat_openai_compat(
             except ValueError:
                 pass
     timeout = min(max(float(timeout_s or 60.0), 0.5), 300.0)
-    resp = httpx.post(url, headers=headers, json=payload, timeout=timeout)
+    resp = _egress.egress_post(url, headers=headers, json=payload, timeout=timeout)
     resp.raise_for_status()
     body = resp.json()
     content = (((body.get("choices") or [{}])[0].get("message") or {}).get("content")) or ""
@@ -322,7 +323,7 @@ def _chat_anthropic(
     if system:
         payload["system"] = system
     timeout = min(max(float(timeout_s or 60.0), 0.5), 300.0)
-    resp = httpx.post(url, headers=headers, json=payload, timeout=timeout)
+    resp = _egress.egress_post(url, headers=headers, json=payload, timeout=timeout)
     resp.raise_for_status()
     body = resp.json()
     blocks = body.get("content") or []
@@ -377,7 +378,7 @@ def _chat_gemini(
     if system:
         payload["systemInstruction"] = {"parts": [{"text": system}]}
     timeout = min(max(float(timeout_s or 60.0), 0.5), 300.0)
-    resp = httpx.post(url, headers=headers, json=payload, timeout=timeout)
+    resp = _egress.egress_post(url, headers=headers, json=payload, timeout=timeout)
     resp.raise_for_status()
     body = resp.json()
     candidates = body.get("candidates") or []
@@ -394,6 +395,63 @@ def _chat_gemini(
         "usage": usage,
         "raw": body,
     }
+
+
+_AUTO_ORDER = ("ollama", "openai_compat", "anthropic", "gemini")
+
+
+def resolve_auto_provider(connection_id: str | None = None) -> tuple[str, str]:
+    """Pick the configured *real* LLM provider for ``provider='auto'`` (F19 / F-10).
+
+    Order: explicit connection (its kind) > workspace default connection per
+    kind (local Ollama first) > ``OLLAMA_BASE_URL`` env > cloud API key envs.
+    Returns ``(provider, reason)``. Raises :class:`NeedsCredentialsError` with
+    an actionable message when nothing is configured — there is no silent
+    fallback to an echo.
+    """
+    cid = (connection_id or "").strip()
+    if cid:
+        from app.core.credentials.errors import CredentialNotFoundError
+        from app.core.credentials.store import get_payload
+
+        try:
+            kind, _payload = get_payload(cid)
+        except CredentialNotFoundError as exc:
+            raise NeedsCredentialsError(
+                f"needs-credentials: connection {cid!r} not found or revoked"
+            ) from exc
+        if kind not in _AUTO_ORDER:
+            raise NeedsCredentialsError(
+                f"needs-credentials: connection {cid!r} is kind={kind!r}, not an LLM provider "
+                f"({', '.join(_AUTO_ORDER)})"
+            )
+        return kind, f"connection:{cid}"
+    try:
+        from app.core.credentials.store import get_default_for_kind
+
+        for kind in _AUTO_ORDER:
+            if get_default_for_kind(kind) is not None:
+                return kind, "workspace_default"
+    except Exception:  # credential store unavailable — fall through to env
+        pass
+    if (os.environ.get("OLLAMA_BASE_URL") or "").strip():
+        return "ollama", "env:OLLAMA_BASE_URL"
+    for env_name, prov in (
+        ("OPENAI_API_KEY", "openai_compat"),
+        ("GROQ_API_KEY", "openai_compat"),
+        ("ANTHROPIC_API_KEY", "anthropic"),
+        ("GEMINI_API_KEY", "gemini"),
+        ("GOOGLE_API_KEY", "gemini"),
+    ):
+        if (os.environ.get(env_name) or "").strip():
+            return prov, f"env:{env_name}"
+    raise NeedsCredentialsError(
+        "needs-credentials: no LLM provider is configured. Configure one of: a credential "
+        "connection of kind ollama / openai_compat / anthropic / gemini (or a workspace "
+        "default), OLLAMA_BASE_URL for a local Ollama, or OPENAI_API_KEY / ANTHROPIC_API_KEY / "
+        "GEMINI_API_KEY. To test a graph without a model, choose provider='echo' "
+        "(returns your input unchanged — it is not an LLM)."
+    )
 
 
 def chat_completion(
@@ -415,7 +473,7 @@ def chat_completion(
       explicit connection_id / credentials dict > workspace default for kind > env/secret.
     """
     provider = (provider or "openai_compat").strip().lower()
-    if provider in {"stub", "local_stub"}:
+    if provider in {"stub", "local_stub", "echo"}:
         text = stub_content if stub_content is not None else "[stub] llm_client offline reply"
         return {
             "content": text,
@@ -480,7 +538,7 @@ def chat_completion(
             raise NeedsCredentialsError(
                 f"llm_client: provider='openai_compat' needs-credentials — set connection "
                 f"(kind=openai_compat) or secret/env {(api_secret_name or 'OPENAI_API_KEY')!r}. "
-                "For local/no-key use provider='ollama' or provider='stub'."
+                "For local/no-key use provider='ollama' (or provider='echo' for tests; not an LLM)."
             )
         return _chat_openai_compat(
             messages=messages,

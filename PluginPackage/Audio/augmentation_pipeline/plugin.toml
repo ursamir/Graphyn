@@ -21,6 +21,7 @@ optional_dependencies = [
 ]
 
 node_types = ["augmentation_pipeline"]
+runtime    = "inprocess"  # explicit (was the implicit default)
 
 [config_schema.augmentation_pipeline]
 copies_per_sample = { type = "integer", title = "Copies per sample", default = 1, minimum = 0, description = "Augmented copies emitted per input sample in addition to the original (0 = pass originals through only)." }

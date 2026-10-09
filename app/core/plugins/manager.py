@@ -816,6 +816,55 @@ class PluginManager:
                 upgraded += 1
         return upgraded
 
+    def prune_removed_bundled_plugins(self, package_root: Path | None = None) -> list[str]:
+        """Drop registry records of bundled plugins removed from PluginPackage (F19 / F-25).
+
+        A record whose ``source`` lies inside the PluginPackage root but no
+        longer has a ``plugin.toml`` there was installed from a pack that has
+        since been removed; keeping it makes the host CLI advertise node types
+        the server no longer has. Records from other sources (user installs,
+        URLs, other directories) are never touched. Returns pruned names.
+        """
+        from app.core.config import plugin_package_dir as _plugin_package_dir
+
+        root = Path(package_root) if package_root is not None else _plugin_package_dir()
+        if not root.is_dir():
+            return []
+        try:
+            root_r = root.resolve()
+            records = self._store.list()
+        except Exception:
+            return []
+        pruned: list[str] = []
+        for record in records:
+            src = str(record.source or "").strip()
+            if not src or "://" in src:
+                continue
+            try:
+                sp = Path(src).expanduser().resolve()
+            except OSError:
+                continue
+            if not sp.is_relative_to(root_r) or (sp / "plugin.toml").is_file():
+                continue
+            try:
+                self._store.delete(record.name)
+            except Exception as exc:
+                log.warning("Startup: could not prune removed bundled plugin '%s': %s", record.name, exc)
+                continue
+            for nt in list((record.manifest or {}).get("node_types") or []):
+                try:
+                    self._registry.unregister(nt)
+                except Exception:
+                    pass
+            pruned.append(record.name)
+        if pruned:
+            log.warning(
+                "Startup: pruned %d plugin record(s) whose PluginPackage source was removed: %s",
+                len(pruned),
+                ", ".join(sorted(pruned)),
+            )
+        return pruned
+
     def install_bundled_plugins(
         self,
         package_root: Path | None = None,
@@ -903,6 +952,7 @@ class PluginManager:
         if auto_install_plugins() or not loadable:
             did_install = self.install_bundled_plugins(package_root, upgrade=True)
         self._upgrade_bundled_plugins_on_version_drift(package_root)
+        self.prune_removed_bundled_plugins(package_root)
         self.load_enabled_plugins()
         # If everything was stale/pruned and auto-install was off, the first
         # install may have been skipped when records *looked* enabled. After

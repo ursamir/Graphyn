@@ -84,7 +84,7 @@ def find_compatible_nodes(
 
     registry = get_registry()
     try:
-        resolved = registry.type_catalogue.resolve(output_type)
+        resolved = registry.type_catalogue.resolve_expr(output_type)
     except Exception:
         raise HTTPException(
             status_code=400,
@@ -102,6 +102,78 @@ def find_compatible_nodes(
             detail=f"Compatibility check failed: {exc}",
         )
     return [n.model_dump(mode="json") for n in nodes]
+
+
+# ── /nodes/check-connection — must be registered BEFORE /nodes/{node_type} ───
+
+class ConnectionCheck(BaseModel):
+    """Result of a wire-time port compatibility check (F19 / F-22)."""
+
+    compatible: bool
+    source_type: str | None = None
+    target_type: str | None = None
+    reason: str | None = None
+
+
+def _short_type(label: str | None) -> str:
+    import re as _re
+
+    if not label:
+        return "untyped"
+    return _re.sub(r"[A-Za-z_][\w-]*(?:\.[A-Za-z_][\w-]*)+", lambda m: m.group(0).rsplit(".", 1)[-1], label)
+
+
+@router.get(
+    "/nodes/check-connection",
+    summary="Check whether an output port can feed an input port",
+    response_model=ConnectionCheck,
+)
+def check_connection(
+    src_node_type: str = Query(..., description="Upstream node type"),
+    dst_node_type: str = Query(..., description="Downstream node type"),
+    src_port: str = Query("output", description="Upstream output port"),
+    dst_port: str = Query("input", description="Downstream input port"),
+) -> ConnectionCheck:
+    """Same rule the graph validator applies (VAL-TYPE), for one prospective edge.
+
+    The builder calls this when a wire is dropped so an incompatible connection
+    is refused up front instead of failing validation later.
+    """
+    from app.core.nodes.compat import CompatibilityChecker
+    from app.core.nodes.type_names import type_label
+
+    registry = get_registry()
+    try:
+        src_cls = registry.get_class(src_node_type)
+        dst_cls = registry.get_class(dst_node_type)
+    except NodeNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    src_p = (getattr(src_cls, "output_ports", None) or {}).get(src_port)
+    dst_p = (getattr(dst_cls, "input_ports", None) or {}).get(dst_port)
+    if src_p is None:
+        return ConnectionCheck(
+            compatible=False,
+            reason=f"{src_node_type} has no output named '{src_port}'.",
+        )
+    if dst_p is None:
+        return ConnectionCheck(
+            compatible=False,
+            source_type=type_label(src_p.data_type),
+            reason=f"{dst_node_type} has no input named '{dst_port}'.",
+        )
+    s_label, d_label = type_label(src_p.data_type), type_label(dst_p.data_type)
+    ok = CompatibilityChecker.are_compatible(src_p.data_type, dst_p.data_type)
+    return ConnectionCheck(
+        compatible=ok,
+        source_type=s_label,
+        target_type=d_label,
+        reason=None
+        if ok
+        else (
+            f"{src_node_type}.{src_port} produces {_short_type(s_label)}, "
+            f"but {dst_node_type}.{dst_port} expects {_short_type(d_label)}."
+        ),
+    )
 
 
 # ── /nodes ────────────────────────────────────────────────────────────────────

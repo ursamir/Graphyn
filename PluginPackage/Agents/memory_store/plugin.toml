@@ -1,0 +1,23 @@
+[plugin]
+name             = "memory-store"
+version          = "0.1.0"
+description      = "Short/long-term agent memory"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["agents", "memory"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["memory_store"]
+
+[config_schema.memory_store]
+backend = { type = "string", title = "Backend", default = "json", enum = ["json", "memory"], description = "json: locked, atomically-written JSON file; memory: process-local (not persisted)." }
+persist_path = { type = "string", title = "Persist path", default = "workspace/artifacts/agent_memory", description = "*.json file, or a directory that will hold memory.json." }
+namespace = { type = "string", title = "Namespace", default = "default", description = "Key namespace inside the store." }
+key = { type = "string", title = "Record key", default = "", description = "When set, any input that is not a MemoryOp {op?, key, value?} is stored (set) as the value under this key." }

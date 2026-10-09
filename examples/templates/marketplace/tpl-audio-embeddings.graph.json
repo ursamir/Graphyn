@@ -1,0 +1,91 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-audio-embeddings",
+    "seed": 42,
+    "description": "Compute mean-pooled wav2vec2 embeddings per clip and store them as JSON objects.",
+    "created_at": null,
+    "tags": [
+      "audio",
+      "embeddings",
+      "kws"
+    ],
+    "pack": "Audio",
+    "industry": "general",
+    "marketplace_id": "tpl-audio-embeddings",
+    "status": "ready",
+    "source_example": "marketplace/tpl-audio-embeddings.graph.json",
+    "base_template": "tpl-audio-embeddings"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "source_type": "filesystem",
+        "recursive": true,
+        "limit": 8,
+        "path": "workspace/datasets/input/speech-commands"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000,
+        "mono": true
+      },
+      "label": "condition",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "embedding_generator",
+      "config": {
+        "model": "wav2vec2"
+      },
+      "label": "embed",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "object_store",
+      "config": {
+        "operation": "put",
+        "prefix": "embeddings"
+      },
+      "label": "store",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

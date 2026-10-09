@@ -735,7 +735,6 @@ export default function EdgeWizardView() {
           ...(enteredLabels.length ? { labels: enteredLabels } : {}),
           target: { runtime: backend || 'tflite', arch: 'any' },
           env: 'draft',
-          unsigned_allowed: true,
         }),
       })
       const sha = res?.manifest?.checksums?.sha256

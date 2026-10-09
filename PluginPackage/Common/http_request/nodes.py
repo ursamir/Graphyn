@@ -44,8 +44,13 @@ log = logging.getLogger(__name__)
 
 
 def _jsonable(obj: Any) -> Any:
+    from app.core.nodes.payload import unwrap_payload, wrapper_field
+
     if obj is None or isinstance(obj, (str, int, float, bool)):
         return obj
+    if wrapper_field(obj) is not None:
+        # F19 (F-06): send the payload (CodeResult.data, …), not the wrapper.
+        return _jsonable(unwrap_payload(obj))
     if isinstance(obj, dict):
         return {str(k): _jsonable(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
@@ -130,6 +135,11 @@ class HttpRequestNode(Node):
 
     node_type: ClassVar[str] = "http_request"
 
+    @classmethod
+    def idempotent_for(cls, config: dict) -> bool:
+        """F19: GET/HEAD/OPTIONS may be retried after a lost lease; mutating methods may not."""
+        return str((config or {}).get("method") or "GET").upper() in ("GET", "HEAD", "OPTIONS")
+
     metadata: ClassVar[NodeMetadata] = NodeMetadata(
         node_type="http_request",
         label="HTTP Request",
@@ -147,6 +157,7 @@ class HttpRequestNode(Node):
         # Remote responses change over time; every execution is real egress.
         deterministic=False,
         cacheable=False,
+        idempotent=False,
         streaming_support=False,
         realtime_support=False,
     )
@@ -164,7 +175,7 @@ class HttpRequestNode(Node):
     output_ports: ClassVar[dict[str, OutputPort]] = {
         "output": OutputPort(
             name="output",
-            data_type=object,
+            data_type=HttpResponse,
             description="HttpResponse",
         )
     }
@@ -232,6 +243,12 @@ class HttpRequestNode(Node):
         base = float(self.config.retry_backoff_s) * (2 ** attempt)
         return min(cap, base) * random.uniform(0.5, 1.0)
 
+    @classmethod
+    def missing_run_config(cls, config):
+        if not str(getattr(config, "url", "") or "").strip():
+            return [("url", "HttpRequestNode: config.url is required.")]
+        return []
+
     def process(self, inputs):
         payload = inputs.get("input") if isinstance(inputs, dict) else inputs
         url = (self.config.url or "").strip()
@@ -248,8 +265,9 @@ class HttpRequestNode(Node):
         if query:
             sep = "&" if "?" in url else "?"
             url = f"{url}{sep}{urlencode({str(k): str(v) for k, v in query.items()})}"
-        # SEC-003: egress policy (trusted default; restricted blocks SSRF ranges)
-        # — validated BEFORE any credential is resolved or sent.
+        # SEC-003 / F19: egress policy (restricted by default; SSRF ranges blocked)
+        # — validated BEFORE any credential is resolved or sent, then re-checked
+        # and IP-pinned at connect time by the egress transport.
         validate_http_egress_url(url)
         auth, conn_id = self._auth_headers(url)
         headers.update(auth)
@@ -335,7 +353,9 @@ class HttpRequestNode(Node):
         elif body:
             kwargs["content"] = body.encode("utf-8") if isinstance(body, str) else body
         limit = int(self.config.max_response_bytes or DEFAULT_MAX_RESPONSE_BYTES)
-        with httpx.stream(method, url, **kwargs) as resp:
+        from app.core.trust import egress as _egress
+
+        with _egress.egress_stream(method, url, **kwargs) as resp:
             declared = resp.headers.get("content-length") if hasattr(resp.headers, "get") else None
             if declared and str(declared).isdigit() and int(declared) > limit:
                 raise _ResponseTooLarge(

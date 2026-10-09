@@ -1,0 +1,176 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-common-train-track-experiment",
+    "seed": 42,
+    "description": "Train and evaluate a keyword model and log params/metrics/artifacts with the experiment tracker (JSON run store; MLflow when tracking_uri is set).",
+    "created_at": null,
+    "tags": [
+      "common",
+      "kws",
+      "experiments"
+    ],
+    "pack": "Common",
+    "industry": "general",
+    "marketplace_id": "tpl-common-train-track-experiment",
+    "status": "ready",
+    "source_example": "marketplace/tpl-common-train-track-experiment.graph.json",
+    "base_template": "tpl-common-train-track-experiment"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "source_type": "filesystem",
+        "recursive": true,
+        "limit": 8,
+        "path": "workspace/datasets/input/speech-commands"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000,
+        "mono": true
+      },
+      "label": "condition",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "feature_frontend",
+      "config": {
+        "feature_type": "log_mel",
+        "n_mels": 40
+      },
+      "label": "features",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "dataset_builder",
+      "config": {
+        "fixed_length": 100
+      },
+      "label": "dataset",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "model_builder",
+      "config": {
+        "architecture": "ds_cnn",
+        "filters": 32,
+        "num_layers": 2
+      },
+      "label": "model",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n5",
+      "node_type": "trainer",
+      "config": {
+        "epochs": 1,
+        "batch_size": 8,
+        "device": "cpu"
+      },
+      "label": "train",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n6",
+      "node_type": "evaluator",
+      "config": {},
+      "label": "evaluate",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n7",
+      "node_type": "experiment_tracker",
+      "config": {
+        "backend": "json",
+        "experiment_name": "kws-baseline"
+      },
+      "label": "track",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n4",
+      "src_port": "output",
+      "dst_id": "n5",
+      "dst_port": "model",
+      "condition": null
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n5",
+      "dst_port": "dataset",
+      "condition": null
+    },
+    {
+      "src_id": "n5",
+      "src_port": "output",
+      "dst_id": "n6",
+      "dst_port": "model_artifact",
+      "condition": null
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n6",
+      "dst_port": "dataset",
+      "condition": null
+    },
+    {
+      "src_id": "n6",
+      "src_port": "output",
+      "dst_id": "n7",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

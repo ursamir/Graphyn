@@ -37,7 +37,15 @@ from app.core.distributed.models import (
     WorkerResources,
     WorkerStatus,
 )
-from app.core.distributed.queue import get_job_queue
+from app.core.distributed.queue import JobCancelled, get_job_queue
+from app.api.queue_schemas import (
+    ClaimResponse,
+    JobCompleteResponse,
+    JobQueueView,
+    JobStatusView,
+    WorkerRow,
+    doc as _doc,
+)
 from app.core.distributed.registry import get_worker_registry
 
 log = logging.getLogger(__name__)
@@ -184,7 +192,7 @@ class WorkerPatchBody(BaseModel):
     labels: list[str] | None = None
     pools: list[str] | None = None
     node_types: list[str] | None = None
-    max_claimed: int | None = None
+    max_claimed: int | None = Field(None, ge=0)
 
 
 # ── Workers ───────────────────────────────────────────────────────────────────
@@ -217,6 +225,12 @@ def register_worker(
 
     _validate_worker_id(info.worker_id)
     _enforce_worker_acl(request, info.worker_id)
+    if not getattr(info, "org_id", None):
+        from app.core.trust.identity import current_identity
+        from app.core.trust.orgs import DEFAULT_ORG_ID
+
+        ident = current_identity() or {}
+        info = info.model_copy(update={"org_id": ident.get("org_id") or DEFAULT_ORG_ID})
     registry = get_worker_registry()
     existing = registry.get(info.worker_id)
     try:
@@ -291,21 +305,39 @@ def worker_heartbeat(
     return stored.model_dump(mode="json")
 
 
-@router.get("/workers", summary="List workers")
+@router.get("/workers", summary="List workers", responses=_doc(list[WorkerRow]))
 def list_workers(include_stale: bool = Query(False)):
     from app.core.distributed.quotas import parse_pool_max_claimed, usage_snapshot
 
-    from app.core.trust.identity import is_operator_identity
+    from app.core.trust.identity import current_identity, is_operator_identity
 
     workers = get_worker_registry().list(include_stale=include_stale)
     pool_limits = parse_pool_max_claimed()
     operator = is_operator_identity()
+    ident = current_identity() or {}
+    org_id = ident.get("org_id") if ident.get("kind") == "user" else None
     out = []
     for w in workers:
+        if org_id and getattr(w, "org_id", None) and w.org_id != org_id:
+            continue
+        if org_id and not getattr(w, "org_id", None):
+            # Legacy workers without org: visible only in default org.
+            from app.core.trust.orgs import DEFAULT_ORG_ID
+
+            if org_id != DEFAULT_ORG_ID:
+                continue
         row = w.model_dump(mode="json")
         if not operator:
             row.pop("plugin_hashes", None)
         row["usage"] = usage_snapshot(w)
+        from app.core.distributed.slots import slot_snapshot
+
+        slots = slot_snapshot(w)
+        row["max_slots"] = slots["max_slots"]
+        row["used_slots"] = slots["used_slots"]
+        row["free_slots"] = slots["free_slots"]
+        # Keep active_jobs aligned with used_slots for older UI.
+        row["active_jobs"] = slots["used_slots"] if row.get("active_jobs") is None else row["active_jobs"]
         if pool_limits:
             row["pool_max_claimed"] = {
                 p: pool_limits[p] for p in (w.pools or []) if p in pool_limits
@@ -322,7 +354,7 @@ def list_remote_node_types(include_stale: bool = Query(False)):
     return {"node_types": sorted(known_remote_node_types(include_stale=include_stale))}
 
 
-@router.patch("/workers/{worker_id}", summary="Update worker ACL / trust fields")
+@router.patch("/workers/{worker_id}", summary="Update worker ACL / trust fields", responses=_doc(WorkerInfo))
 def patch_worker(request: Request, worker_id: str, body: WorkerPatchBody):
     _validate_worker_id(worker_id)
     _require_operator(request)
@@ -558,7 +590,46 @@ def revoke_worker_route(request: Request, worker_id: str):
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 
 
-@router.post("/jobs/claim", summary="Claim next eligible job")
+@router.get("/jobs/queue", summary="List queued (pending) jobs with position", responses=_doc(JobQueueView))
+def list_job_queue(org_id: str | None = Query(None)):
+    """Global FIFO queue view (F18). Optional ``org_id`` filters to one tenant.
+
+    Each row includes ``queue_position`` (1-based) and ``queue_reason``
+    (``no_capacity`` | ``org_quota`` | ``waiting_worker``).
+    """
+    from app.core.trust.identity import current_identity, is_operator_identity
+
+    queue = get_job_queue()
+    try:
+        queue.refresh_queue_reasons()
+    except Exception:
+        pass
+    ident = current_identity() or {}
+    filter_org = org_id
+    if not is_operator_identity() and ident.get("kind") == "user":
+        # Non-operators only see their active org queue.
+        filter_org = str(ident.get("org_id") or "") or filter_org
+    rows = queue.list_queue(org_id=filter_org or None)
+    # Slot summary for admin visibility
+    from app.core.distributed.slots import slot_snapshot
+
+    workers = get_worker_registry().list(include_stale=False)
+    slot_rows = []
+    for w in workers:
+        snap = slot_snapshot(w)
+        slot_rows.append(
+            {
+                "worker_id": w.worker_id,
+                "max_slots": snap["max_slots"],
+                "used_slots": snap["used_slots"],
+                "free_slots": snap["free_slots"],
+                "status": w.status,
+            }
+        )
+    return {"queue": rows, "pending_count": len(rows), "worker_slots": slot_rows}
+
+
+@router.post("/jobs/claim", summary="Claim next eligible job", responses=_doc(ClaimResponse))
 def claim_job(request: Request, body: ClaimBody):
     _validate_worker_id(body.worker_id)
     _enforce_worker_acl(request, body.worker_id)
@@ -578,6 +649,14 @@ def claim_job(request: Request, body: ClaimBody):
     if job is None:
         return {"job": None}
     record_usage(body.worker_id, claims=1)
+    # F18: refresh used_slots / active_jobs after atomic book (pending→claimed).
+    try:
+        from app.core.distributed.slots import worker_used_slots
+
+        used = worker_used_slots(body.worker_id)
+        get_worker_registry().heartbeat(body.worker_id, active_jobs=used, status="busy")
+    except Exception:
+        pass
     _audit(
         "job.claim",
         resource_type="job",
@@ -586,9 +665,18 @@ def claim_job(request: Request, body: ClaimBody):
             "worker_id": body.worker_id,
             "node_type": job.node_type,
             "run_id": job.run_id,
+            "org_id": getattr(job, "org_id", None),
         },
     )
-    return {"job": job.model_dump(mode="json")}
+    from app.core.distributed.slots import slot_snapshot
+
+    # ``worker_slots`` sits beside ``job`` — never inside it: the worker
+    # validates ``job`` as a strict ``NodeJob`` (extra="forbid"), and nesting it
+    # there (F18) failed every Mode B job with ``extra_forbidden`` (found live, F19).
+    return {
+        "job": job.model_dump(mode="json"),
+        "worker_slots": slot_snapshot(get_worker_registry().get(body.worker_id) or worker),
+    }
 
 
 def _with_control_provenance(events: list | None, worker_id: str | None, node_type: str | None = None) -> list:
@@ -627,7 +715,7 @@ def _with_control_provenance(events: list | None, worker_id: str | None, node_ty
     return kept
 
 
-@router.post("/jobs/{job_id}/complete", summary="Report job result")
+@router.post("/jobs/{job_id}/complete", summary="Report job result", responses=_doc(JobCompleteResponse))
 def complete_job(request: Request, job_id: str, result: JobResult):
     if result.job_id and result.job_id != job_id:
         raise HTTPException(status_code=400, detail="job_id mismatch")
@@ -644,12 +732,26 @@ def complete_job(request: Request, job_id: str, result: JobResult):
         job = get_job_queue().complete(result)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown job {job_id}")
+    except JobCancelled as exc:
+        # RT-CANCEL-003: the result (and any artifacts) of a cancelled job is discarded.
+        raise HTTPException(status_code=409, detail={"code": "run_cancelled", "message": str(exc)})
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     if result.worker_id:
         from app.core.distributed.quotas import record_usage
+        from app.core.distributed.slots import worker_used_slots
 
         record_usage(result.worker_id, completes=1)
+        # F18: release slot on complete/fail/cancel result.
+        try:
+            used = worker_used_slots(result.worker_id)
+            get_worker_registry().heartbeat(
+                result.worker_id,
+                active_jobs=used,
+                status="idle" if used == 0 else "busy",
+            )
+        except Exception:
+            pass
     _audit(
         "job.complete",
         resource_type="job",
@@ -685,13 +787,24 @@ def job_events(request: Request, job_id: str, body: JobEventsBody):
     return {"job_id": job_id, "event_count": count}
 
 
-@router.post("/jobs/{job_id}/cancel", summary="Cancel a job")
+@router.post("/jobs/{job_id}/cancel", summary="Cancel a job", responses=_doc(NodeJob))
 def cancel_job(request: Request, job_id: str):
     _require_operator(request)
     try:
         job = get_job_queue().cancel(job_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown job {job_id}")
+    wid = getattr(job, "claimed_by", None)
+    if wid:
+        try:
+            from app.core.distributed.slots import worker_used_slots
+
+            used = worker_used_slots(wid)
+            get_worker_registry().heartbeat(
+                wid, active_jobs=used, status="idle" if used == 0 else "busy"
+            )
+        except Exception:
+            pass
     _audit(
         "job.cancel",
         resource_type="job",
@@ -701,7 +814,7 @@ def cancel_job(request: Request, job_id: str):
     return job.model_dump(mode="json")
 
 
-@router.get("/jobs/{job_id}", summary="Get job status")
+@router.get("/jobs/{job_id}", summary="Get job status", responses=_doc(JobStatusView))
 def get_job(
     request: Request,
     job_id: str,
@@ -772,6 +885,15 @@ def _authorize_blob_key(key: Optional[str], worker_id: Optional[str]) -> None:
             status_code=403, detail="worker_id is required for jobs/ blob keys"
         )
     job = get_job_queue().get(job_seg)
+    if job is not None and job.status == "cancelled":
+        # RT-CANCEL-003: no artifact commit once the cancel is durable.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "run_cancelled",
+                "message": f"Job {job_seg!r} was cancelled; artifact upload refused",
+            },
+        )
     if (
         job is None
         or job.status not in ("claimed", "running")

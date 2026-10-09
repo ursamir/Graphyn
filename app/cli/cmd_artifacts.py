@@ -89,6 +89,7 @@ def cmd_artifacts_replay(args):
     from app.core.ir.loader import load_ir_from_file
     from app.core.runs.run_journal import RunManager
     from app.core.execution.runtime_backend import get_backend
+    from app.core.config import runs_dir as _runs_dir
 
     run_id = args.run_id
     runs_dir_path = str(_runs_dir())

@@ -1,0 +1,22 @@
+[plugin]
+name             = "video-embed"
+version          = "1.0.0"
+description      = "CLIP embeddings for videos/clips (mean over sampled frames) or frames, with optional zero-shot labels (transformers)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+tags = ["video", "embedding", "clip", "transformers", "zero-shot"]
+
+# Also needs the ffmpeg binary on PATH. Weights download once from huggingface.co.
+dependencies = ["numpy>=1.24", "torch>=2.1", "transformers>=4.40", "pillow>=10"]
+
+runtime = "isolated"
+node_types = ["video_embed"]
+
+[config_schema.video_embed]
+model = { type = "string", title = "CLIP model", default = "openai/clip-vit-base-patch32", description = "Hugging Face CLIP checkpoint id or local path." }
+num_frames = { type = "integer", title = "Frames per video", default = 8, minimum = 1, maximum = 64 }
+pooling = { type = "string", title = "Pooling", default = "mean", enum = ["mean", "none"], description = "mean = one vector per video; none = one per frame." }
+zero_shot_labels = { type = "array", title = "Zero-shot labels", default = [], items = { type = "string" }, description = "Optional text labels; each result gets a probability per label (zero-shot)." }
+batch_size = { type = "integer", title = "Batch size", default = 16, minimum = 1 }

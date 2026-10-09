@@ -64,7 +64,7 @@ def test_construct(installed_cls):
 
 def test_process_smoke_no_transcript(installed_cls, make_audio_sample):
     """AlignmentNode passes through samples with empty alignment when no transcript given."""
-    node = installed_cls(config={"backend": "ctc"}, seed=0)
+    node = installed_cls(config={}, seed=0)
     sample = make_audio_sample()
     # No transcripts provided — node should pass through with empty alignment metadata
     result = node.process({"audio": [sample], "transcripts": []})

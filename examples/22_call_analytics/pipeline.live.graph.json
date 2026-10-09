@@ -3,7 +3,7 @@
   "metadata": {
     "name": "call_analytics_live",
     "seed": 42,
-    "description": "Live call analytics: Deepgram ASR + OpenAI structured extract. Requires DEEPGRAM_API_KEY and OPENAI_API_KEY (secrets store or env). Edit http_webhook url to your callback.",
+    "description": "Call analytics with hosted providers: Deepgram ASR + OpenAI structured extract + HTTP webhook. Needs DEEPGRAM_API_KEY and OPENAI_API_KEY (secrets store) and http_webhook.url set to your callback; without them the run stops at the first node that needs them with a clear error.",
     "created_at": null,
     "tags": [
       "example",
@@ -121,7 +121,7 @@
       "id": "http_webhook_6",
       "node_type": "http_webhook",
       "config": {
-        "url": "https://example.com/webhooks/call-analytics",
+        "url": "",
         "timeout_s": 10.0,
         "hmac_env": "GRAPHYN_WEBHOOK_HMAC",
         "provider": "http"

@@ -77,10 +77,27 @@ _POLICY: tuple[tuple[str, re.Pattern[str], str], ...] = tuple(
         ("GET", r"/me", "authenticated"),
         ("*", r"/me/tokens(/.*)?", "authenticated"),
         ("POST", r"/auth/(logout|login)", "authenticated"),
+        ("GET", r"/auth/oidc(/.*)?", "authenticated"),
+        ("POST", r"/auth/oidc(/.*)?", "authenticated"),
         ("POST", r"/auth/bootstrap", "users.admin"),
+        ("POST", r"/billing/webhook", "authenticated"),
+        ("GET", r"/billing/status", "system.admin"),
         ("POST", r"/me/password", "authenticated"),
         # user admin
         ("*", r"/users(/.*)?", "users.admin"),
+        ("GET", r"/agents(/.*)?", "users.admin"),
+        ("*", r"/agents(/.*)?", "users.admin"),
+        ("GET", r"/compliance(/.*)?", "audit.read"),
+        ("*", r"/compliance(/.*)?", "users.admin"),
+        ("GET", r"/orgs", "authenticated"),
+        ("POST", r"/orgs", "authenticated"),
+        ("GET", rf"/orgs/{_R}", "authenticated"),
+        ("PATCH", rf"/orgs/{_R}", "authenticated"),
+        ("POST", rf"/orgs/{_R}/activate", "authenticated"),
+        ("GET", rf"/orgs/{_R}/members", "authenticated"),
+        ("*", rf"/orgs/{_R}/members(/.*)?", "authenticated"),
+        ("GET", rf"/orgs/{_R}/(usage|quotas|meter-events)", "authenticated"),
+        ("PUT", rf"/orgs/{_R}/quotas", "authenticated"),
         ("GET", rf"/projects/{_R}/members", "read"),
         ("*", rf"/projects/{_R}/members(/.*)?", "project.members"),
         # audit
@@ -122,6 +139,8 @@ _POLICY: tuple[tuple[str, re.Pattern[str], str], ...] = tuple(
         ("POST", rf"/runs/{_R}/gates/{_R}/decision", "approve"),
         ("POST", rf"/proposals/{_R}/(accept|reject)", "approve"),
         ("POST", rf"/models/{_R}/approve-prod", "approve"),
+        # governance: waiving separation of duties is a users/approvals admin power
+        ("PUT", r"/models/promotion-policy", "users.admin"),
         ("POST", rf"/projects/{_R}/pipelines/{_R}/promote", "approve"),
         ("POST", rf"/projects/{_R}/ship/packages/{_R}/promote", "approve"),
         ("POST", rf"/runs/{_R}/promote", "approve"),
@@ -230,10 +249,11 @@ def effective_permissions(ident: dict[str, Any], project: str | None) -> frozens
 def authorize(ident: dict[str, Any] | None, method: str, path: str, query_string: str = "") -> tuple[int, str] | None:
     """None when allowed, else ``(status, message)`` for a user identity.
 
-    Non-user identities (legacy shared token, unauthenticated dev, workers)
-    are not subject to this table — the caller decides.
+    Non-user/agent identities (legacy shared token, unauthenticated dev, workers)
+    are not subject to this table — the caller decides. Agents use the same
+    permission table as users.
     """
-    if not ident or ident.get("kind") != "user":
+    if not ident or ident.get("kind") not in ("user", "agent"):
         return None
     need = required_permission(method, path)
     if need == "authenticated":
@@ -244,16 +264,32 @@ def authorize(ident: dict[str, Any] | None, method: str, path: str, query_string
     if project is None and any(rx.match(path or "") for rx in _BODY_SCOPED):
         for prole in (ident.get("memberships") or {}).values():
             perms = perms | PROJECT_ROLE_PERMISSIONS.get(str(prole), frozenset())
+    # Org boundary: project must belong to the caller's active org (when set).
+    if project and ident.get("org_id"):
+        try:
+            from app.core.trust.orgs import get_org_store
+
+            porg = get_org_store().project_org_id(project)
+            if porg and porg != ident.get("org_id"):
+                return 403, f"Project '{project}' is outside your active organization"
+        except Exception:
+            pass
     if project and not can_see_all_projects(roles) and project not in (ident.get("memberships") or {}):
-        return 403, f"You are not a member of project '{project}'"
+        from app.core.trust.orgs import org_can_see_all_projects
+
+        if not org_can_see_all_projects(ident.get("org_role")):
+            return 403, f"You are not a member of project '{project}'"
     if need in perms or "admin" in perms:
+        return None
+    # Global user admins may manage project membership without being project owner.
+    if need == "project.members" and ("users.admin" in perms or "users.admin" in permissions_for(roles)):
         return None
     return 403, f"Permission '{need}' required for {method.upper()} {path}"
 
 
 def check_project_permission(ident: dict[str, Any] | None, project: str | None, perm: str) -> str | None:
     """Error message when a user may not ``perm`` inside ``project`` (body-scoped requests)."""
-    if not ident or ident.get("kind") != "user":
+    if not ident or ident.get("kind") not in ("user", "agent"):
         return None
     roles = ident.get("roles") or []
     if project and not can_see_all_projects(roles) and project not in (ident.get("memberships") or {}):
@@ -265,11 +301,35 @@ def check_project_permission(ident: dict[str, Any] | None, project: str | None, 
 
 
 def visible_projects_filter(ident: dict[str, Any] | None):
-    """Predicate ``project_name -> bool`` for listings (None = see everything)."""
-    if not ident or ident.get("kind") != "user" or can_see_all_projects(ident.get("roles") or []):
+    """Predicate ``project_name -> bool`` for listings (None = see everything).
+
+    User identities are scoped to the active org's projects. Within the org,
+    global ``projects.all`` or org owner/admin see every org project; others
+    still need project membership. Non-user identities (legacy bearer) are
+    unscoped (break-glass).
+    """
+    if not ident or ident.get("kind") not in ("user", "agent"):
         return None
-    allowed = set((ident.get("memberships") or {}).keys())
-    return lambda name: str(name or "") in allowed
+    org_id = ident.get("org_id")
+    org_projects: set[str] | None = None
+    if org_id:
+        try:
+            from app.core.trust.orgs import get_org_store
+
+            org_projects = get_org_store().projects_in_org(str(org_id))
+        except Exception:
+            org_projects = set()
+    else:
+        # User with no org membership sees nothing (tenancy fail-closed).
+        return lambda name: False
+
+    from app.core.trust.orgs import org_can_see_all_projects
+
+    if can_see_all_projects(ident.get("roles") or []) or org_can_see_all_projects(ident.get("org_role")):
+        return lambda name, _op=org_projects: str(name or "") in _op
+
+    allowed = set((ident.get("memberships") or {}).keys()) & org_projects
+    return lambda name, _a=allowed: str(name or "") in _a
 
 
 __all__ = [

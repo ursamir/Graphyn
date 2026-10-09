@@ -1,0 +1,78 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-common-dataset-report-email",
+    "seed": 42,
+    "description": "Count clips per label with python_code and email the report (dry_run on: the message is rendered and logged, not sent, until you turn dry_run off and configure SMTP).",
+    "created_at": null,
+    "tags": [
+      "common",
+      "kws",
+      "email",
+      "report"
+    ],
+    "pack": "Common",
+    "industry": "general",
+    "marketplace_id": "tpl-common-dataset-report-email",
+    "status": "ready",
+    "source_example": "marketplace/tpl-common-dataset-report-email.graph.json",
+    "base_template": "tpl-common-dataset-report-email"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "source_type": "filesystem",
+        "recursive": true,
+        "limit": 8,
+        "path": "workspace/datasets/input/speech-commands"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "python_code",
+      "config": {
+        "source": "items = inputs.get('input') or []\nper_label = {}\nfor s in items:\n    lab = (s.get('label') if isinstance(s, dict) else s.label) or 'unlabelled'\n    per_label[str(lab)] = per_label.get(str(lab), 0) + 1\noutput = {'total': len(items), 'per_label': per_label}\n"
+      },
+      "label": "report",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "send_email",
+      "config": {
+        "to": "ops@example.com",
+        "allowed_recipient_domains": [
+          "example.com"
+        ],
+        "subject": "Graphyn dataset report",
+        "dry_run": true
+      },
+      "label": "email",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

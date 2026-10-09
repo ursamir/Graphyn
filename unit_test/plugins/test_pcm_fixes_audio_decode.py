@@ -1,45 +1,48 @@
-"""Regression tests for the shared ``_pcm()`` decoder copies and callers.
+"""Regression tests for the shared ``_pcm()`` audio decoder.
 
-Covers the TinyML / WakeWord / Video plugin copies of ``_pcm``: ndarray
-AudioSample data, sample-rate handling, multichannel downmix, WAV bytes at
-several sample widths, no silent window caps, and clear errors on
-undecodable input. Also wakeword_infer model handling.
+The decoder now lives in the WakeWord pack's ``_ww.py`` (exposed as
+``wakeword_infer.nodes._pcm``): ndarray AudioSample data, sample-rate
+handling, multichannel downmix, WAV bytes at several sample widths and clear
+errors on undecodable input.
+
+F20: the TinyML copies (mcu_window / mcu_mfcc / mcu_spectrogram /
+mcu_feature_pipeline / mcu_dataset_ingest / micro_speech_pipeline) and their
+window-cap tests were removed with the TinyML pack (it stays out of the
+product — see docs/reviews/full/SWEEP_TEMPLATES_F20.md). The old
+wakeword_feature_extract copy is gone (features now come from
+livekit-wakeword's ONNX front end) and Video/av_align decodes through ffmpeg.
+The old wakeword_infer logistic-JSON tests were replaced by
+unit_test/plugins/wakeword/test_wakeword_pack.py.
 """
 from __future__ import annotations
 
 import io
-import json
 import wave
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from app.core.nodes.discovery import AutoDiscovery
-from app.core.nodes.registry import NodeRegistry
 from app.models.audio_sample import AudioSample
 
 ROOT = Path(__file__).resolve().parents[2]
 
 PCM_PLUGINS = [
-    "TinyML/mcu_window",
-    "TinyML/mcu_mfcc",
-    "TinyML/mcu_spectrogram",
-    "TinyML/mcu_feature_pipeline",
-    "TinyML/mcu_dataset_ingest",
-    "TinyML/micro_speech_pipeline",
-    "WakeWord/wakeword_feature_extract",
     "WakeWord/wakeword_infer",
-    "Video/av_align",
 ]
 
 
 def _load(rel: str):
+    import importlib
+    import sys
+
     root = ROOT / "PluginPackage" / rel
-    disc = AutoDiscovery(NodeRegistry())
-    if (root / "types.py").is_file():
-        disc._import_file(root / "types.py", package_prefix=None)
-    return disc._import_file(root / "nodes.py", package_prefix=None)
+    parent, name = str(root.parent), root.name
+    if parent not in sys.path:
+        sys.path.insert(0, parent)
+    for k in [k for k in sys.modules if k == name or k.startswith(name + ".")]:
+        del sys.modules[k]
+    return importlib.import_module(f"{name}.nodes")
 
 
 @pytest.fixture(scope="module", params=PCM_PLUGINS)
@@ -148,68 +151,3 @@ def test_plain_list_and_empty(mod):
     assert mod._pcm([0.1, 0.2, 0.3]) == pytest.approx([0.1, 0.2, 0.3])
     assert mod._pcm([]) == []
     assert mod._pcm(AudioSample(path="", sample_rate=16000)) == []
-
-
-# ── window caps removed ───────────────────────────────────────────────────────
-
-
-def test_mcu_window_long_audio_not_capped():
-    m = _load("TinyML/mcu_window")
-    node = m.McuWindowNode(config={"window_ms": 100, "hop_ms": 100})
-    s = AudioSample(path="long.flac", sample_rate=16000, data=_tone(16000 * 10, 16000))
-    out = node.process({"input": [s]})["output"]
-    wins = out[0].payload
-    assert len(wins) == 100  # 10 s / 100 ms, previously capped at 32
-    assert all(len(w) == 1600 for w in wins)
-
-
-def test_mcu_window_honours_rate_and_max_windows():
-    m = _load("TinyML/mcu_window")
-    node = m.McuWindowNode(config={"window_ms": 100, "hop_ms": 100, "sample_rate": 8000, "max_windows": 5})
-    s = AudioSample(path="x", sample_rate=16000, data=_tone(16000, 16000))
-    wins = node.process({"input": [s]})["output"][0].payload
-    assert len(wins) == 5
-    assert all(len(w) == 800 for w in wins)
-
-
-def test_mcu_spectrogram_not_capped():
-    m = _load("TinyML/mcu_spectrogram")
-    node = m.McuSpectrogramNode(config={"n_fft": 64, "hop_length": 1000})
-    s = AudioSample(path="x", sample_rate=16000, data=_tone(64000, 16000))
-    frames = node.process({"input": [s]})["output"][0].payload
-    assert len(frames) == 64  # previously capped at 32
-
-
-# ── wakeword_infer ────────────────────────────────────────────────────────────
-
-
-def test_wakeword_infer_missing_model_raises(tmp_path):
-    m = _load("WakeWord/wakeword_infer")
-    s = AudioSample(path="x", sample_rate=16000, data=_tone(4000, 16000))
-    with pytest.raises(ValueError):
-        m.WakewordInferNode(config={}).process({"input": s})
-    with pytest.raises(FileNotFoundError):
-        m.WakewordInferNode(config={"model_path": str(tmp_path / "nope.json")}).process({"input": s})
-
-
-def test_wakeword_infer_stub_still_allowed():
-    m = _load("WakeWord/wakeword_infer")
-    out = m.WakewordInferNode(config={"stub": True}).process({"input": None})
-    assert out == {"output": []}
-
-
-def test_wakeword_infer_aggregates_all_frames(tmp_path):
-    m = _load("WakeWord/wakeword_infer")
-    model = tmp_path / "model.json"
-    # Per-frame model on c0 (sum of log magnitudes): silence ~ -1179, tone ~ -822.
-    model.write_text(json.dumps({"weights": [1.0], "bias": 1000.0, "labels": ["neg", "pos"], "n_mfcc": 13}))
-    quiet = np.zeros(16000 * 2, dtype=np.float32)
-    loud = quiet.copy()
-    loud[-4000:] = _tone(4000, 16000, amp=0.9)  # wake word only at the very end
-    node = m.WakewordInferNode(config={"model_path": str(model), "threshold": 0.5})
-    r_quiet = node.process({"input": AudioSample(path="q", sample_rate=16000, data=quiet)})["output"]
-    r_loud = node.process({"input": AudioSample(path="l", sample_rate=16000, data=loud)})["output"]
-    assert r_loud["aggregation"] == "max"
-    assert r_loud["frames"] > 64  # whole clip analysed, not only the first frame(s)
-    assert r_loud["score"] > r_quiet["score"]
-    assert r_loud["detected"] and not r_quiet["detected"]

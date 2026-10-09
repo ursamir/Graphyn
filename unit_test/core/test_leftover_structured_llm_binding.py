@@ -119,7 +119,7 @@ def test_structured_llm_env_key_not_sent_to_node_base_url(cred_home, monkeypatch
         seed=0,
     )
     with patch.object(_nodes_mod(llm_cls), "validate_http_egress_url"), \
-            patch("httpx.post", return_value=_ok()) as post:
+            patch("app.core.trust.egress.egress_post", return_value=_ok()) as post:
         with pytest.raises(RuntimeError, match="base_url"):
             node.process({"input": "hello"})
     post.assert_not_called()
@@ -129,7 +129,7 @@ def test_structured_llm_default_base_uses_env_key(cred_home, monkeypatch, llm_cl
     monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
     node = llm_cls(config={"provider": "openai_compat", "json_schema": SCHEMA}, seed=0)
     with patch.object(_nodes_mod(llm_cls), "validate_http_egress_url"), \
-            patch("httpx.post", return_value=_ok()) as post:
+            patch("app.core.trust.egress.egress_post", return_value=_ok()) as post:
         out = node.process({"input": "hello"})["output"]
     assert out.data == {"pain": "x"}
     assert post.call_args.args[0] == "https://api.openai.com/v1/chat/completions"
@@ -145,7 +145,7 @@ def test_structured_llm_allowlisted_base(cred_home, monkeypatch, llm_cls):
         seed=0,
     )
     with patch.object(_nodes_mod(llm_cls), "validate_http_egress_url"), \
-            patch("httpx.post", return_value=_ok()) as post:
+            patch("app.core.trust.egress.egress_post", return_value=_ok()) as post:
         node.process({"input": "hello"})
     assert post.call_args.args[0] == "https://api.groq.com/openai/v1/chat/completions"
     assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer gsk"
@@ -163,7 +163,7 @@ def test_structured_llm_connection_base_used(cred_home, llm_cls):
         seed=0,
     )
     with patch.object(_nodes_mod(llm_cls), "validate_http_egress_url"), \
-            patch("httpx.post", return_value=_ok()) as post:
+            patch("app.core.trust.egress.egress_post", return_value=_ok()) as post:
         node.process({"input": "hello"})
     assert post.call_args.args[0] == "https://llm.example/v1/chat/completions"
     assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer sk-conn"

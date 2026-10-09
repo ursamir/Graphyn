@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-agents-local-llm-chat",
+    "seed": 42,
+    "description": "Render a prompt template and answer with a local Ollama model (no API key).",
+    "created_at": null,
+    "tags": [
+      "agents",
+      "llm",
+      "local"
+    ],
+    "pack": "Agents",
+    "industry": "general",
+    "marketplace_id": "tpl-agents-local-llm-chat",
+    "status": "needs-endpoint",
+    "source_example": "marketplace/tpl-agents-local-llm-chat.graph.json",
+    "base_template": "tpl-agents-local-llm-chat",
+    "requires": [
+      "Ollama reachable at OLLAMA_BASE_URL (host on GRAPHYN_HTTP_EGRESS_ALLOWLIST) with the configured model pulled"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "prompt_template",
+      "config": {
+        "template": "In one sentence, what is a wake word?"
+      },
+      "label": "prompt",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "llm_chat",
+      "config": {
+        "provider": "ollama",
+        "model": "qwen3:0.6b",
+        "temperature": 0.0
+      },
+      "label": "chat",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

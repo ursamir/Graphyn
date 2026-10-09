@@ -99,8 +99,8 @@ def test_direct_prod_rejected_but_approve_path_works(tmp_workspace: Path):
     with pytest.raises(ProdRequiresApproval):
         register_model("m", run_id="r1", slug="demo", stage="prod")
     register_model("m", run_id="r1", slug="demo", stage="staging")
-    request_prod("m")
-    done = approve_prod("m")
+    request_prod("m", actor="alice")
+    done = approve_prod("m", actor="bob")
     assert done["stages"]["prod"]["run_id"] == "r1"
     assert done["pending_prod"] is None
 

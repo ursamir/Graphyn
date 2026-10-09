@@ -15,6 +15,7 @@ dependencies = [
 ]
 
 node_types = ["audio_exporter"]
+runtime    = "inprocess"  # explicit (was the implicit default)
 
 [config_schema.audio_exporter]
 output_dir = { type = "string", title = "Output dir", default = "workspace/datasets/output/audio_export", description = "Folder for the exported dataset; files go to <folder>/<version>/<split>/<label>/. Ignored when Project is set.", ui = { group = "Advanced", help_advanced = "Must resolve inside the working directory (default workspace/datasets/output/audio_export)." } }

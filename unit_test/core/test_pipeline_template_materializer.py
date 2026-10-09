@@ -18,17 +18,19 @@ from app.core.execution.validation import validate_graph_ir
 
 REPO = Path(__file__).resolve().parents[2]
 
+# One sample per shipped family (RAG / Vision / TinyML / MLOps packs are not
+# shipped, so the catalog has no templates for them).
 FAMILY_SAMPLES = [
-    "tpl-audio-kws-smart-home",
-    "tpl-vision-yolo-detect-train-retail-shelf",
-    "tpl-rag-ingest-fs-recursive-faiss-support",
-    "tpl-tinyml-kws-wearable-cortex-m4-ptq-tflm",
-    "tpl-wakeword-en-hey-graphyn-data-gen",
-    "tpl-video-ingest-scene-caption-security",
-    "tpl-agents-run-pipeline-mlops",
-    "tpl-mlops-train-eval-ship-audio",
-    "tpl-common-http-poll-transform-general",
+    "tpl-audio-kws-train-smart-home",
+    "tpl-audio-speech-enhancement",
+    "tpl-wakeword-train-export",
+    "tpl-video-scene-clips-security",
+    "tpl-agents-guarded-reply-memory",
+    "tpl-common-http-poll-transform",
+    "tpl-common-asr-pii-redact-callcenter",
+    "tpl-cross-call-analytics",
 ]
+REMOVED_PACK_PREFIXES = ("tpl-rag-", "tpl-vision-", "tpl-tinyml-", "tpl-mlops-")
 
 
 @pytest.fixture(scope="module")
@@ -46,9 +48,32 @@ def full_registry(tmp_path_factory):
     return reg
 
 
-def test_catalog_has_thousands_of_templates():
+def test_catalog_only_advertises_shipped_packs():
     cat = load_marketplace_catalog()
-    assert len(cat.get("templates") or []) >= 2900
+    templates = cat.get("templates") or []
+    # Honest size: base pipelines x industry presets (see generator docstring).
+    assert len(templates) >= 100
+    assert cat.get("base_pipelines", 0) >= 40
+    assert not [t["id"] for t in templates if t["id"].startswith(REMOVED_PACK_PREFIXES)]
+    assert {t["pack"] for t in templates} <= {"Audio", "Common", "Agents", "Video", "WakeWord"}
+    for t in templates:
+        assert t["edges_hint"] or len(t["node_chain"]) == 1, t["id"]
+        assert t["status"] in {"ready", "needs-credentials", "needs-endpoint", "needs-upstream"}, t["id"]
+        assert t["metadata_extra"].get("base_template"), t["id"]
+
+
+def test_catalog_node_types_exist_in_shipped_plugins(full_registry):
+    cat = load_marketplace_catalog()
+    shipped = set(full_registry._classes)
+    used = {s["node_type"] for t in cat["templates"] for s in t["node_chain"]}
+    assert used <= shipped, sorted(used - shipped)
+
+
+def test_every_base_template_has_a_seed_graph():
+    cat = load_marketplace_catalog()
+    bases = {t["metadata_extra"]["base_template"] for t in cat["templates"]}
+    for b in bases:
+        assert (REPO / "examples" / "templates" / "marketplace" / f"{b}.graph.json").is_file(), b
 
 
 @pytest.mark.parametrize("template_id", FAMILY_SAMPLES)
@@ -159,15 +184,20 @@ def test_materialize_sanitizes_unknown_config_with_registry():
 
 @pytest.mark.slow
 def test_full_catalog_validate_ge_95(full_registry):
+    """Every entry is materialized the way the API does it and validated."""
     cat = load_marketplace_catalog()
-    ok = fail = 0
+    ok = 0
+    failed: dict[str, list] = {}
     for entry in cat["templates"]:
-        graph = materialize_template_entry(entry)
-        ir = load_ir(graph)
-        if validate_graph_ir(ir, full_registry):
-            fail += 1
+        graph = materialize_template_entry(entry, registry=full_registry, ensure_seed_datasets=False)
+        errors = validate_graph_ir(load_ir(graph), full_registry)
+        if errors:
+            failed[entry["id"]] = [str(getattr(e, "message", e))[:160] for e in errors[:2]]
         else:
             ok += 1
-    total = ok + fail
+    total = ok + len(failed)
     pct = 100.0 * ok / total
-    assert pct >= 95.0, f"only {pct:.2f}% validated ({ok}/{total})"
+    assert pct >= 95.0, f"only {pct:.2f}% validated ({ok}/{total}): {dict(list(failed.items())[:5])}"
+    # The generator refuses to write invalid entries, so anything failing here
+    # means the catalog and the plugins drifted apart.
+    assert not failed, failed

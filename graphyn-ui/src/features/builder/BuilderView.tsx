@@ -162,6 +162,7 @@ import { runTitle } from '../runs/runResults'
 import { diffGraphs, parsePipelineDrift, unscopeRunPaths } from './graphDrift'
 import { RunDriftBanner } from './RunDriftBanner'
 import { compactNodeLabel } from '../runs/runRecord'
+import { connectionRefusal, type ConnectionCheck } from './portTypes'
 
 const nodeTypes = { graphyn: GraphynNode }
 /**
@@ -1344,22 +1345,25 @@ function BuilderInner() {
       const targetNode = nodesRef.current.find((n) => n.id === connection.target)
       const outPort = canonicalPort(connection.sourceHandle, 'output')
       const inPort = canonicalPort(connection.targetHandle, 'input')
-      const sourceType = sourceNode?.data.outputs?.find((p) => p.name === outPort)?.data_type
-      if (sourceType) {
+      const sourcePort = sourceNode?.data.outputs?.find((p) => p.name === outPort)
+      // Error-route handles are IR 1.3 on_error wiring, not data ports.
+      if (sourceNode && targetNode && sourcePort?.data_type !== 'error') {
         try {
-          const compatible = await apiJson<Array<{ node_type?: string } | string>>(
-            '/nodes/compatible',
-            { query: { output_type: sourceType, direction: 'input' } },
-          )
-          const types = compatible.map((c) => (typeof c === 'string' ? c : c.node_type))
-          if (targetNode && types.length > 0 && !types.includes(targetNode.data.nodeType)) {
-            pushToast(
-              `Port type may be incompatible: ${sourceType} → ${targetNode.data.nodeType}.${inPort}`,
-              'info',
-            )
+          const check = await apiJson<ConnectionCheck>('/nodes/check-connection', {
+            query: {
+              src_node_type: sourceNode.data.nodeType,
+              src_port: outPort,
+              dst_node_type: targetNode.data.nodeType,
+              dst_port: inPort,
+            },
+          })
+          const refusal = connectionRefusal(check)
+          if (refusal) {
+            pushToast(refusal, 'error')
+            return
           }
         } catch {
-          /* soft check */
+          /* Type info unavailable (e.g. remote-only node type): allow the wire; validation still checks it. */
         }
       }
       setEdges((eds) => addEdge({ ...connection, id: `${connection.source}-${outPort}->${connection.target}-${inPort}`, ...defaultEdgeOptions }, eds))

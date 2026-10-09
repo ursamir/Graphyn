@@ -69,8 +69,14 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(connections)")}
+    if "org_id" not in cols:
+        conn.execute("ALTER TABLE connections ADD COLUMN org_id TEXT")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_connections_kind ON connections(kind)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_connections_org ON connections(org_id)"
     )
     conn.commit()
 
@@ -98,6 +104,7 @@ def _row_meta(row: sqlite3.Row, *, include_redacted: bool = True) -> dict[str, A
         "is_default": bool(row["is_default"]),
         "revoked": bool(row["revoked"]),
         "created_at": row["created_at"],
+        "org_id": (row["org_id"] if "org_id" in row.keys() else None),
         "updated_at": row["updated_at"],
         "meta": meta,
         "fields": payload,
@@ -114,6 +121,7 @@ def create_connection(
     payload: dict[str, Any],
     is_default: bool = False,
     meta: dict[str, Any] | None = None,
+    org_id: str | None = None,
 ) -> dict[str, Any]:
     """Create a connection. Returns redacted metadata (never raw secrets)."""
     require_kind(kind)
@@ -137,8 +145,8 @@ def create_connection(
             conn.execute(
                 """
                 INSERT INTO connections
-                (id, name, kind, sealed_payload, is_default, revoked, created_at, updated_at, meta_json)
-                VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+                (id, name, kind, sealed_payload, is_default, revoked, created_at, updated_at, meta_json, org_id)
+                VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
                 """,
                 (
                     cid,
@@ -149,6 +157,7 @@ def create_connection(
                     now,
                     now,
                     meta_json,
+                    (org_id or "").strip() or None,
                 ),
             )
             conn.commit()
@@ -164,6 +173,7 @@ def list_connections(
     *,
     kind: str | None = None,
     include_revoked: bool = False,
+    org_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """List connection metadata (redacted fields only)."""
     with _LOCK:
@@ -175,6 +185,9 @@ def list_connections(
             if kind:
                 sql += " AND kind=?"
                 args.append(kind.strip().lower())
+            if org_id:
+                sql += " AND org_id=?"
+                args.append(org_id.strip())
             if not include_revoked:
                 sql += " AND revoked=0"
             sql += " ORDER BY kind, name"

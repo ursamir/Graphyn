@@ -7,7 +7,10 @@ Covers:
   - Construction and smoke process
   - audio_generator is SISO: process(list[str]) -> list[AudioSample]
     Input is a list of text prompts (optional — uses config.prompt if empty).
-    Requires AudioCraft (musicgen/audiogen) — raises ImportError if not installed.
+  - Real MusicGen generation (transformers, facebook/musicgen-small, ~2.4 GB
+    weights) is ``heavy`` (GRAPHYN_RUN_HEAVY=1). The AudioCraft skips that
+    used to hide a missing backend are gone: audiogen was removed and MusicGen
+    runs through transformers.
 """
 from __future__ import annotations
 from unit_test.plugins._helpers import materialize_isolated_class
@@ -60,43 +63,37 @@ def test_construct(installed_cls):
     assert node is not None
 
 
-# ── smoke process ─────────────────────────────────────────────────────────────
-# audio_generator requires AudioCraft (audiocraft package).
-# If not installed, _resolve_backend() raises ImportError — skip gracefully.
+# ── validation (no model needed) ─────────────────────────────────────────────
 
-def test_process_smoke(installed_cls):
-    """Smoke test: SISO process with text prompt returns output AudioSamples."""
-    node = installed_cls(config={"prompt": "test sound"}, seed=0)
-    try:
-        result = node.process({"input": ["test sound"]})
-    except ImportError:
-        pytest.skip("audiocraft not installed — audio_generator backend unavailable")
-    assert "output" in result
-    assert isinstance(result["output"], list)
-    assert len(result["output"]) >= 1
+def test_no_prompt_is_a_clear_error(installed_cls, tmp_path):
+    node = installed_cls(config={"output_dir": str(tmp_path)}, seed=0)
+    with pytest.raises(ValueError, match="prompt"):
+        node.process({"input": []})
 
 
-def test_process_empty_input_uses_config_prompt(installed_cls):
-    """Empty input list falls back to config.prompt."""
-    node = installed_cls(config={"prompt": "ambient music"}, seed=0)
-    try:
-        result = node.process({"input": []})
-    except ImportError:
-        pytest.skip("audiocraft not installed — audio_generator backend unavailable")
-    assert "output" in result
-    assert isinstance(result["output"], list)
-    assert len(result["output"]) >= 1
+def test_schema_has_only_working_options(installed_cls):
+    from typing import get_args
+
+    fields = installed_cls.Config.model_fields
+    assert "backend" not in fields  # MusicGen is the only engine; audiogen was removed (needs audiocraft)
+    with pytest.raises(Exception):
+        installed_cls.Config(duration_s=60)
 
 
-def test_process_output_is_audio_sample(installed_cls):
-    """Output items are AudioSample objects with sample_rate and data."""
+# ── real generation (heavy) ───────────────────────────────────────────────────
+
+@pytest.mark.heavy
+def test_musicgen_generates_and_writes_wav(installed_cls, tmp_path):
+    pytest.importorskip("transformers")
+    import soundfile as sf
+
     from app.models.audio_sample import AudioSample
-    node = installed_cls(config={"prompt": "test"}, seed=0)
-    try:
-        result = node.process({"input": ["test"]})
-    except ImportError:
-        pytest.skip("audiocraft not installed — audio_generator backend unavailable")
-    for sample in result["output"]:
-        assert isinstance(sample, AudioSample)
-        assert sample.sample_rate > 0
-        assert sample.data is not None
+
+    node = installed_cls(config={"prompt": "calm piano", "duration_s": 1.0, "output_dir": str(tmp_path)}, seed=0)
+    out = node.process({"input": []})["output"]
+    assert len(out) == 1 and isinstance(out[0], AudioSample)
+    assert out[0].sample_rate == 32000 and out[0].data.size > 20000
+    data, sr = sf.read(tmp_path / "generated_0.wav")
+    assert sr == 32000 and len(data) == out[0].data.size
+    trees = node.take_published_file_trees()
+    assert trees and trees[0]["files"][0]["path"] == "generated_0.wav"

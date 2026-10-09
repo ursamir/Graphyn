@@ -7,7 +7,7 @@ import logging
 import re
 import time
 from typing import Any, ClassVar, Literal
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from app.core.trust.egress import validate_http_egress_url
 from app.core.nodes.base import Node
@@ -30,6 +30,11 @@ log = logging.getLogger(__name__)
 
 
 def _text_of(value: Any) -> str:
+    from app.core.nodes.payload import wrapper_field, unwrap_payload
+
+    # F19 (F-06): read the payload, not the upstream wrapper.
+    if wrapper_field(value) is not None:
+        value = unwrap_payload(value)
     if value is None:
         return ""
     if isinstance(value, str):
@@ -68,94 +73,93 @@ def _schema_default(prop_schema: dict) -> Any:
     return ""
 
 
-def _heuristic_extract(text: str, schema: dict) -> dict:
-    """Deterministic keyword / sentence extract for E2E when no LLM key is available.
+_NEG = ("angry", "upset", "terrible", "frustrated", "cancel", "unhappy", "disappointed")
+_POS = ("great", "thanks", "happy", "love", "excellent", "pleased")
 
-    Not a substitute for a real LLM — fills schema properties from transcript text
-    using simple rules so call-analytics / meeting-crm graphs can complete locally.
+
+def _rule_based_extract(text: str, schema: dict) -> tuple[dict, list[str]]:
+    """Deterministic, explicitly *non-LLM* field extraction (F19 / F-23).
+
+    Only fills a field when a concrete rule matches the text; every other field
+    is ``None`` and reported in ``unfilled``. It never copies the whole input
+    into fields to look complete.
     """
     props = (schema or {}).get("properties") or {}
-    required = list((schema or {}).get("required") or [])
     raw = (text or "").strip()
     lowered = raw.lower()
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", raw) if s.strip()]
-    first = sentences[0] if sentences else (raw[:240] if raw else "no transcript")
-    words = re.findall(r"[A-Za-z][A-Za-z0-9_\-]{2,}", raw)
+
+    def _sentences_with(words: tuple[str, ...]) -> list[str]:
+        return [s for s in sentences if any(w in s.lower() for w in words)]
 
     out: dict[str, Any] = {}
     for name, prop in props.items():
-        if not isinstance(prop, dict):
-            prop = {}
+        prop = prop if isinstance(prop, dict) else {}
         key = str(name).lower()
         ptype = prop.get("type") or "string"
-
-        if key in {"summary", "pain", "next_step", "owner", "customer_id"}:
-            if key == "summary":
-                out[name] = first
-            elif key == "pain":
-                hit = next((s for s in sentences if any(w in s.lower() for w in ("pain", "issue", "problem", "blocked", "frustrat"))), first)
-                out[name] = hit
-            elif key == "next_step":
-                hit = next((s for s in sentences if any(w in s.lower() for w in ("next", "follow", "schedule", "action", "will"))), first)
-                out[name] = hit
-            elif key == "owner":
-                m = re.search(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b", raw)
-                out[name] = m.group(1) if m else "owner"
-            elif key == "customer_id":
-                m = re.search(r"\b(?:cust(?:omer)?[_-]?id|id)[:\s#]*([A-Za-z0-9\-]+)\b", raw, re.I)
-                out[name] = m.group(1) if m else "unknown"
-            continue
-
-        if key == "sentiment":
-            if any(w in lowered for w in ("angry", "upset", "terrible", "frustrated", "cancel")):
-                out[name] = "negative"
-            elif any(w in lowered for w in ("great", "thanks", "happy", "love", "excellent")):
-                out[name] = "positive"
-            else:
-                out[name] = "neutral"
-            continue
-
-        if key in {"topics", "action_items", "objections"} and ptype == "array":
-            if key == "topics":
-                # top unique content words
-                stop = {"the", "and", "for", "that", "this", "with", "from", "have", "will", "your", "our"}
-                topics = []
-                for w in words:
-                    wl = w.lower()
-                    if wl in stop or wl in topics:
-                        continue
-                    topics.append(wl)
-                    if len(topics) >= 5:
-                        break
-                out[name] = topics or ["general"]
-            elif key == "action_items":
-                items = [s for s in sentences if any(w in s.lower() for w in ("will", "should", "need", "action", "follow", "schedule"))]
-                out[name] = items[:5] or ([first] if first else [])
-            else:  # objections
-                items = [s for s in sentences if any(w in s.lower() for w in ("but", "however", "concern", "object", "expensive", "risk"))]
-                out[name] = items[:5]
-            continue
-
-        # generic fill
-        if ptype == "array":
-            out[name] = [first] if first else []
-        elif ptype == "integer":
-            m = re.search(r"\b(\d+)\b", raw)
-            out[name] = int(m.group(1)) if m else 0
-        elif ptype == "number":
-            m = re.search(r"\b(\d+(?:\.\d+)?)\b", raw)
-            out[name] = float(m.group(1)) if m else 0.0
+        enum = prop.get("enum") if isinstance(prop.get("enum"), list) else None
+        val: Any = None
+        if enum:
+            hits = [e for e in enum if isinstance(e, str) and re.search(rf"\b{re.escape(e.lower())}\b", lowered)]
+            val = hits[0] if len(hits) == 1 else None
+        elif key == "sentiment":
+            neg = any(w in lowered for w in _NEG)
+            pos = any(w in lowered for w in _POS)
+            val = "negative" if neg and not pos else "positive" if pos and not neg else None
+        elif key == "summary" and ptype == "string" and sentences:
+            val = sentences[0]  # extractive: the first sentence, labelled rule_based
+        elif key in ("pain", "issue", "problem"):
+            hits = _sentences_with(("pain", "issue", "problem", "blocked", "frustrat"))
+            val = (hits if ptype == "array" else hits[0]) if hits else None
+        elif key in ("next_step", "action_items"):
+            hits = _sentences_with(("next step", "follow up", "follow-up", "schedule", "action item", " will "))
+            val = (hits[:5] if ptype == "array" else hits[0]) if hits else None
+        elif key == "objections":
+            hits = _sentences_with(("however", "concern", "too expensive", "expensive", "risk", " but "))
+            val = hits[:5] if hits else None
+        elif key in ("email", "contact_email"):
+            m = re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", raw)
+            val = m.group(0) if m else None
+        elif key in ("customer_id", "id", "ticket_id", "order_id"):
+            m = re.search(r"\b(?:cust(?:omer)?[_ -]?id|ticket|order|id)[:\s#]*([A-Za-z0-9\-]{3,})\b", raw, re.I)
+            val = m.group(1) if m else None
+        elif ptype in ("integer", "number"):
+            m = re.search(rf"\b{re.escape(key)}\b\D{{0,12}}(\d+(?:\.\d+)?)", lowered)
+            if m:
+                val = int(float(m.group(1))) if ptype == "integer" else float(m.group(1))
         elif ptype == "boolean":
-            out[name] = any(w in lowered for w in ("yes", "true", "confirm"))
-        elif ptype == "object":
-            out[name] = {"text": first}
-        else:
-            out[name] = first
+            m = re.search(rf"\b{re.escape(key)}\b\W{{0,6}}(yes|no|true|false)\b", lowered)
+            if m:
+                val = m.group(1) in ("yes", "true")
+        out[name] = val
+    unfilled = [n for n, v in out.items() if v is None]
+    return out, unfilled
 
-    for req in required:
-        if req not in out:
-            out[req] = _schema_default((props.get(req) or {}))
-    return out
+
+_FENCE = re.compile(r"^\s*```(?:json)?\s*\n?(.*?)\n?```\s*$", re.S | re.I)
+
+
+def _parse_json_object(content: Any) -> dict:
+    """Parse a model reply into a JSON object (code fences tolerated)."""
+    if isinstance(content, dict):
+        return content
+    text = str(content or "").strip()
+    m = _FENCE.match(text)
+    if m:
+        text = m.group(1).strip()
+    try:
+        data = json.loads(text)
+    except Exception:
+        start, end = text.find("{"), text.rfind("}")
+        data = None
+        if 0 <= start < end:
+            try:
+                data = json.loads(text[start : end + 1])
+            except Exception:
+                data = None
+        if data is None:
+            return {"raw": content}
+    return data if isinstance(data, dict) else {"value": data}
 
 
 class StructuredLlmNode(Node):
@@ -167,8 +171,10 @@ class StructuredLlmNode(Node):
         node_type="structured_llm",
         label="Structured LLM",
         description=(
-            "Extract JSON matching a schema from text. "
-            "Providers: openai_compat (OPENAI_API_KEY / Groq), local_heuristic (free E2E)."
+            "Extract JSON matching a schema from text with a real LLM. provider=auto (default) "
+            "uses the configured provider (connection / workspace default, local Ollama, or an "
+            "API key) and fails clearly when none is configured. rule_based is an explicit "
+            "non-LLM keyword extractor: unmatched fields stay null and are listed as unfilled."
         ),
         category="Processing",
         version="1.1.0",
@@ -177,7 +183,7 @@ class StructuredLlmNode(Node):
         supports_cpu=True,
         supports_edge=True,
         # Remote LLM output is not reproducible and each run is real egress:
-        # never cache, never claim determinism (local_heuristic is the free path).
+        # never cache, never claim determinism.
         deterministic=False,
         cacheable=False,
         streaming_support=False,
@@ -197,20 +203,34 @@ class StructuredLlmNode(Node):
     output_ports: ClassVar[dict[str, OutputPort]] = {
         "output": OutputPort(
             name="output",
-            data_type=object,
+            data_type=StructuredDocument,
             description="StructuredDocument with extracted JSON",
         )
     }
 
     class Config(NodeConfig):
-        provider: Literal["openai_compat", "ollama", "local_heuristic"] = Field(
-            default="openai_compat",
+        provider: Literal["auto", "openai_compat", "ollama", "anthropic", "gemini", "rule_based"] = Field(
+            default="auto",
             title="Provider",
-            description="LLM backend: openai_compat (HTTP) or local_heuristic (deterministic, free).",
+            description=(
+                "auto (default): the configured LLM (connection / workspace default, local Ollama "
+                "via OLLAMA_BASE_URL, or an API key); fails clearly if none. openai_compat | ollama | "
+                "anthropic | gemini: that provider. rule_based: deterministic keyword rules, NOT an "
+                "LLM — unmatched fields are left empty and listed as unfilled in the result."
+            ),
         )
+
+        @model_validator(mode="before")
+        @classmethod
+        def _legacy_provider(cls, data: Any) -> Any:
+            if isinstance(data, dict) and str(data.get("provider") or "").strip().lower() == "local_heuristic":
+                data = dict(data)
+                data["provider"] = "rule_based"
+                log.warning("structured_llm: provider 'local_heuristic' is now 'rule_based' (not an LLM)")
+            return data
         json_schema: dict = Field(default={}, title="JSON Schema", description="JSON Schema object the model must satisfy.")
         schema_name: str = Field(default="extracted", title="Schema name", description="Name attached to the structured-output schema for the provider.")
-        model: str = Field(default="gpt-4o-mini", title="Model", description="Chat model id (default gpt-4o-mini). Requires OPENAI_API_KEY or Groq.")
+        model: str = Field(default="gpt-4o-mini", title="Model", description="Chat model id. Ollama uses OLLAMA_MODEL / the connection default when left as gpt-*.")
         base_url: str = Field(default="", title="Base URL", description="OpenAI-compatible base URL override. Groq: https://api.groq.com/openai/v1")
         timeout_s: float = Field(default=30.0, title="Timeout (s)", description="Request/operation timeout in seconds.")
         system_prompt: str = Field(
@@ -226,24 +246,34 @@ class StructuredLlmNode(Node):
 
     def process(self, value):
         schema = self.config.json_schema or {"type": "object", "properties": {}}
-        provider = (self.config.provider or "openai_compat").strip().lower()
+        provider = (self.config.provider or "auto").strip().lower()
         text = _text_of(value)
-        if provider == "local_heuristic":
-            data = _heuristic_extract(text, schema)
+        if provider in ("rule_based", "local_heuristic"):
+            data, unfilled = _rule_based_extract(text, schema)
             return StructuredDocument(
                 data=data,
                 schema_name=self.config.schema_name,
-                provider="local_heuristic",
+                provider="rule_based",
                 raw_text=text,
-                metadata={"mode": "heuristic"},
+                metadata={"mode": "rule_based", "is_llm": False, "unfilled": unfilled},
             )
-        
-        if provider == "ollama":
+        selected_by = "explicit"
+        if provider == "auto":
+            from app.core.ml.llm_client import NeedsCredentialsError, resolve_auto_provider
+
+            try:
+                provider, selected_by = resolve_auto_provider(
+                    (getattr(self.config, "connection_id", "") or "") or None
+                )
+            except NeedsCredentialsError as exc:
+                raise NeedsCredentialsError(f"structured_llm: {exc}") from exc
+
+        if provider in ("ollama", "anthropic", "gemini"):
             from app.core.ml.llm_client import chat_completion
             import json as _json
-            model = self.config.model or "llama3.2"
-            if str(model).startswith("gpt-"):
-                model = "llama3.2"
+            model = self.config.model or ""
+            if provider == "ollama" and str(model).startswith("gpt-"):
+                model = ""  # llm_client picks OLLAMA_MODEL / connection default
             schema = self.config.json_schema or {"type": "object", "properties": {}}
             sys_prompt = (
                 (self.config.system_prompt or "Extract JSON matching the schema. Reply with JSON only.")
@@ -256,7 +286,7 @@ class StructuredLlmNode(Node):
             _t0 = time.monotonic()
             result = chat_completion(
                 messages=_msgs,
-                provider="ollama",
+                provider=provider,
                 model=model,
                 temperature=0.0,
                 base_url=(self.config.base_url or "") or None,
@@ -266,29 +296,25 @@ class StructuredLlmNode(Node):
             )
             content = result.get("content") or "{}"
             self.record_external_call(
-                "llm", "POST", str(result.get("base_url") or "llm://ollama"), 200,
+                "llm", "POST", str(result.get("base_url") or f"llm://{provider}"), 200,
                 request_sha256=self.body_sha256({"model": model, "messages": _msgs}),
                 response_sha256=str(content), duration_ms=(time.monotonic() - _t0) * 1000.0,
                 connection_id=(getattr(self.config, "connection_id", "") or "") or None,
             )
-            try:
-                data = _json.loads(content) if isinstance(content, str) else content
-            except Exception:
-                data = {"raw": content}
-            if not isinstance(data, dict):
-                data = {"value": data}
+            data = _parse_json_object(content)
             return StructuredDocument(
                 data=data,
                 schema_name=self.config.schema_name,
-                provider="ollama",
+                provider=provider,
                 raw_text=text,
-                metadata={"mode": "ollama"},
+                metadata={"mode": provider, "is_llm": True, "model": str(result.get("model") or model),
+                          "provider_selected_by": selected_by},
             )
         if provider != "openai_compat":
 
             raise RuntimeError(
                 f"StructuredLlmNode: unknown provider {provider!r}. "
-                "Use openai_compat, ollama, or local_heuristic."
+                "Use auto, openai_compat, ollama, anthropic, gemini, or rule_based."
             )
         # Same credential precedence + endpoint binding as llm_client.chat_completion:
         # a resolved key is never sent to a node base_url it is not bound to.
@@ -306,7 +332,7 @@ class StructuredLlmNode(Node):
             )
         except NeedsCredentialsError as exc:
             raise RuntimeError(
-                f"StructuredLlmNode: {exc} For a free local path use provider='local_heuristic'."
+                f"StructuredLlmNode: {exc} For a non-LLM keyword extractor use provider='rule_based'."
             ) from exc
         api_key = endpoint["api_key"]
         base = endpoint["base_url"]
@@ -316,7 +342,7 @@ class StructuredLlmNode(Node):
             schema_name=self.config.schema_name,
             provider="openai_compat",
             raw_text=text,
-            metadata={},
+            metadata={"mode": "openai_compat", "is_llm": True, "provider_selected_by": selected_by},
         )
 
     def _post_audited(self, httpx: Any, url: str, api_key: str, payload: dict) -> Any:
@@ -324,7 +350,10 @@ class StructuredLlmNode(Node):
         t0 = time.monotonic()
         conn = (getattr(self.config, "connection_id", "") or "") or None
         try:
-            resp = httpx.post(
+            from app.core.trust import egress as _egress
+
+            # F19: egress-checked, IP-pinned POST (DNS-rebinding safe).
+            resp = _egress.egress_post(
                 url,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json=payload,
@@ -390,7 +419,4 @@ class StructuredLlmNode(Node):
         resp.raise_for_status()
         body = resp.json()
         content = (((body.get("choices") or [{}])[0].get("message") or {}).get("content")) or "{}"
-        parsed = json.loads(content) if isinstance(content, str) else content
-        if not isinstance(parsed, dict):
-            return {"value": parsed}
-        return parsed
+        return _parse_json_object(content)

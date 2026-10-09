@@ -1039,10 +1039,14 @@ def apply_headline_metrics(row: dict[str, Any], summary: dict[str, Any] | None) 
     out = dict(row)
     out["metrics_path"] = {"path_id": head["path_id"], "label": head["path_label"]}
     out["metrics_by_path"] = head["metrics_by_path"]
+    existing = out.get("metrics") if isinstance(out.get("metrics"), dict) else {}
     if len(head["metrics_by_path"]) > 1:
-        existing = out.get("metrics") if isinstance(out.get("metrics"), dict) else {}
         if existing:
             out["metrics_first_found"] = existing
+        out["metrics"] = dict(head["metrics"])
+    elif not existing and head["metrics"]:
+        # F19 (F-15): single-path run whose finalize-time meta.metrics is empty
+        # (metrics.json lives in a node folder) — the path's metrics ARE the run's.
         out["metrics"] = dict(head["metrics"])
     return out
 

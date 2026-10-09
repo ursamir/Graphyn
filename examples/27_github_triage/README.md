@@ -1,17 +1,19 @@
-# Example 27 — GitHub triage
+# Example 27 — Issue triage
 
-http_request (mock GitHub issues, `auth_env=GITHUB_TOKEN`) plus ingest → asr → pii → structured_llm → if_switch → http_request (mock comment).
+ingest voice notes → asr → pii → structured_llm (severity, summary, labels) → if_switch on severity → queue / backlog
 
-No native GitHub node in v1. Put the token in the environment; the IR only stores the **variable name**.
+| Graph | Providers | Output | Needs |
+|---|---|---|---|
+| `pipeline.graph.json` | local Whisper (`tiny`), rule-based extract (`rule_based`) | `workspace/artifacts/github-triage/queue.csv` (severity set) and `backlog.csv` (otherwise) | nothing — runs offline |
+| `pipeline.live.graph.json` | OpenAI-compatible ASR + LLM, GitHub REST via `http_request` + `auth_env=GITHUB_TOKEN` | issue list + comment on the issue | `OPENAI_API_KEY`, `GITHUB_TOKEN`, your repo URLs |
+
+There is no native GitHub node; the live graph stores only the env var **name**. Edit the
+`api.github.com/repos/example/app/...` URLs before running it.
 
 ```bash
-for p in http_request asr_transcribe pii_redact structured_llm if_switch; do
+for p in http_request asr_transcribe pii_redact structured_llm if_switch csv_table; do
   python -m app.cli.main plugin install "PluginPackage/Common/${p}/" --upgrade
 done
 python -m app.cli.main plugin install PluginPackage/Audio/dataset_ingest/ --upgrade
 python -m app.cli.main run --graph examples/27_github_triage/pipeline.graph.json
 ```
-
-## Live vs mock
-
-Live: `pipeline.live.graph.json` uses `http_request` + `auth_env=GITHUB_TOKEN` (no native GitHub node) and openai_compat. Mock CI: `pipeline.graph.json`.

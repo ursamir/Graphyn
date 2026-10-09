@@ -28,9 +28,14 @@ def restricted(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GRAPHYN_HTTP_EGRESS_ALLOWLIST", raising=False)
 
 
-def test_default_mode_is_trusted(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_mode_is_restricted(monkeypatch: pytest.MonkeyPatch) -> None:
+    # F19 (F-02): SSRF-safe by default.
     monkeypatch.delenv("GRAPHYN_HTTP_EGRESS_MODE", raising=False)
-    assert http_egress_mode() == "trusted"
+    assert http_egress_mode() == "restricted"
+    with pytest.raises(HttpEgressError, match="loopback"):
+        validate_http_egress_url("http://127.0.0.1:8001/health")
+    with pytest.raises(HttpEgressError, match="metadata"):
+        validate_http_egress_url("http://169.254.169.254/latest/meta-data/")
 
 
 def test_invalid_mode_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -39,9 +44,10 @@ def test_invalid_mode_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
         http_egress_mode()
 
 
-def test_trusted_permits_private_literal(trusted: None) -> None:
+def test_trusted_permits_private_literal_but_never_metadata(trusted: None) -> None:
     validate_http_egress_url("http://127.0.0.1:8080/admin")
-    validate_http_egress_url("http://169.254.169.254/latest/meta-data/")
+    with pytest.raises(HttpEgressError, match="metadata"):
+        validate_http_egress_url("http://169.254.169.254/latest/meta-data/")
 
 
 def test_restricted_blocks_loopback(restricted: None) -> None:

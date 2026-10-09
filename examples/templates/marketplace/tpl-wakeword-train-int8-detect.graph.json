@@ -1,0 +1,134 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-wakeword-train-int8-detect",
+    "seed": 42,
+    "description": "Train, export INT8 ONNX and run sliding-window detection on recorded clips.",
+    "created_at": null,
+    "tags": [
+      "wakeword",
+      "int8",
+      "detect"
+    ],
+    "pack": "WakeWord",
+    "industry": "general",
+    "marketplace_id": "tpl-wakeword-train-int8-detect",
+    "status": "ready",
+    "source_example": "marketplace/tpl-wakeword-train-int8-detect.graph.json",
+    "base_template": "tpl-wakeword-train-int8-detect"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "wakeword_data_gen",
+      "config": {
+        "model_name": "ok_graphyn",
+        "output_dir": "workspace/models/wakeword",
+        "target_phrases": [
+          "ok graphyn"
+        ],
+        "n_samples": 24,
+        "n_samples_val": 8,
+        "n_background_samples": 8,
+        "n_background_samples_val": 2,
+        "tts_backend": "auto"
+      },
+      "label": "generate",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "wakeword_feature_extract",
+      "config": {
+        "augment": true,
+        "rounds": 1
+      },
+      "label": "features",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "wakeword_train",
+      "config": {
+        "steps": 600,
+        "device": "cpu"
+      },
+      "label": "train",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "wakeword_export_onnx",
+      "config": {
+        "quantize": true
+      },
+      "label": "export",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "dataset_ingest",
+      "config": {
+        "source_type": "filesystem",
+        "recursive": true,
+        "limit": 8,
+        "path": "workspace/datasets/input/wake-word"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n5",
+      "node_type": "wakeword_infer",
+      "config": {
+        "use_int8": true
+      },
+      "label": "detect",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "run",
+      "dst_id": "n1",
+      "dst_port": "run",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "run",
+      "dst_id": "n2",
+      "dst_port": "run",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "run",
+      "dst_id": "n3",
+      "dst_port": "run",
+      "condition": null
+    },
+    {
+      "src_id": "n4",
+      "src_port": "output",
+      "dst_id": "n5",
+      "dst_port": "audio",
+      "condition": null
+    },
+    {
+      "src_id": "n3",
+      "src_port": "run",
+      "dst_id": "n5",
+      "dst_port": "model",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

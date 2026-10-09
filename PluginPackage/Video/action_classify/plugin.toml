@@ -1,0 +1,24 @@
+[plugin]
+name             = "action-classify"
+version          = "1.0.0"
+description      = "Recognise human actions in clips: torchvision Kinetics-400 video ResNets (r3d_18, mc3_18, r2plus1d_18) or a custom ONNX model."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+tags = ["video", "action-recognition", "kinetics", "torchvision", "onnx"]
+
+# Also needs the ffmpeg binary on PATH. Weights download once from download.pytorch.org.
+dependencies = ["numpy>=1.24", "torch>=2.1", "torchvision>=0.16"]
+optional_dependencies = ["onnxruntime>=1.16"]
+
+runtime = "isolated"
+node_types = ["action_classify"]
+
+[config_schema.action_classify]
+backend = { type = "string", title = "Backend", default = "torchvision", enum = ["torchvision", "onnx"] }
+arch = { type = "string", title = "Architecture (torchvision)", default = "r3d_18", enum = ["r3d_18", "mc3_18", "r2plus1d_18"] }
+model_path = { type = "string", title = "ONNX model path", default = "", description = "backend=onnx: model file (input 1x3xTx112x112)." }
+labels = { type = "array", title = "Labels (onnx)", default = [], items = { type = "string" }, description = "Class names in model output order (backend=onnx)." }
+num_frames = { type = "integer", title = "Frames per clip", default = 16, minimum = 4, maximum = 64 }
+top_k = { type = "integer", title = "Top-k", default = 5, minimum = 1, maximum = 50 }

@@ -271,6 +271,44 @@ def disable_schedules_for_project(
     return _mutate(path, _orphan)
 
 
+def disable_schedules_for_pipeline(
+    project: str,
+    pipeline: str,
+    *,
+    reason: str | None = None,
+    base_dir: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Disable every schedule targeting ``project``/``pipeline`` and mark it orphaned.
+
+    Called when a project pipeline is deleted (F19 / F-04). No-op (and no file
+    created) when no ``schedules.json`` exists. Returns the updated schedules.
+    """
+    path = schedules_path(base_dir)
+    if not path.is_file():
+        return []
+    why = reason or f"Pipeline deleted: {project}/{pipeline}"
+    now = _now().isoformat()
+
+    def _orphan(
+        items: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        changed: list[dict[str, Any]] = []
+        for it in items:
+            if str(it.get("project") or "") != project:
+                continue
+            if str(it.get("pipeline") or "") != pipeline:
+                continue
+            it["enabled"] = False
+            it["next_run_at"] = None
+            it["orphaned"] = True
+            it["disabled_reason"] = why
+            it["orphaned_at"] = now
+            changed.append({**it})
+        return items, changed
+
+    return _mutate(path, _orphan)
+
+
 def create_schedule(
     *,
     name: str,

@@ -2,11 +2,12 @@
 
 doc_parse_chunk → eval_gate (non-empty chunks) → object_store put (local root)
 
-Sample files live in `examples/25_doc_rag_ingest/data/`.
+Sample files live in `examples/25_doc_rag_ingest/data/`; `venv/bin/python scripts/heal_e2e_local_data.py`
+links them to `workspace/datasets/input/doc-rag-ingest/`, which is what the graph reads.
 
 ## Output
 
-Markdown chunk files under `examples/25_doc_rag_ingest/output/store/chunks/`.
+Chunk records under `workspace/artifacts/doc-rag-ingest/store/chunks/`.
 
 ## Run
 
@@ -18,6 +19,5 @@ python -m app.cli.main plugin install PluginPackage/Common/object_store/ --upgra
 python -m app.cli.main run --graph examples/25_doc_rag_ingest/pipeline.graph.json
 ```
 
-## Live vs mock
-
-`pipeline.live.graph.json` is the same local-files path (no cloud providers).
+`pipeline.live.graph.json` is the same local-files path (no hosted providers involved).
+Embedding and vector-store nodes are not shipped (the RAG pack is removed), so this example stops at chunk storage.

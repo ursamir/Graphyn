@@ -1,0 +1,28 @@
+[plugin]
+name             = "doc-parse-chunk"
+version          = "1.0.0"
+description      = "Ingest text/md/html/plain files and split into structure-aware chunks. No vector DB."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["document", "chunk", "ingest", "common"]
+
+dependencies = []
+
+optional_dependencies = [
+    "unstructured>=0.14",
+]
+
+runtime = "inprocess"
+node_types = ["doc_parse_chunk"]
+
+[config_schema.doc_parse_chunk]
+path = { type = "string", title = "Path", default = "", description = "Dataset path under workspace/ (relative path preferred)." }
+recursive = { type = "boolean", title = "Recursive", default = true, description = "Walk subdirectories when scanning the filesystem (On/Off)." }
+max_chars = { type = "integer", title = "Max chars", default = 1200, description = "Maximum characters per chunk when splitting documents." }
+use_unstructured = { type = "boolean", title = "Use Unstructured", default = false, description = "Parse with optional unstructured (PDF/DOCX/etc); False = built-in text/md/html." }
+chunk_strategy = { type = "string", title = "Chunk strategy", default = "structure", description = "Chunking strategy. One of: structure, fixed, recursive, markdown.", enum = ["structure", "fixed", "recursive", "markdown"] }
+overlap = { type = "integer", title = "Overlap", default = 0, description = "Character overlap between adjacent chunks (0 disables)." }
+metadata_keys = { type = "array", title = "Metadata keys", default = [], description = "File attributes copied onto each Chunk: name, stem, suffix, parent, size, mtime (suffix is always set).", items = { type = "string", enum = ["name", "stem", "suffix", "parent", "size", "mtime"] } }

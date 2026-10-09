@@ -29,17 +29,17 @@ def test_list_packs():
     assert out["count"] == 9
 
 
-def test_get_node_spec_yolo_and_needs_api():
-    yolo = get_node_spec_handler({"node_type": "yolo_train"})
-    assert yolo["ok"] is True
-    assert yolo["status"] == "Proposed"
-    flash = get_node_spec_handler({"node_type": "mcu_flash_ota"})
-    assert flash["ok"] is True
-    assert flash["honesty"]["needs_api"] is True
+def test_get_node_spec_shipped_and_removed():
+    # F19 (F-07): Vision / TinyML packs are not shipped on this branch.
+    trainer = get_node_spec_handler({"node_type": "trainer"})
+    assert trainer["ok"] is True
+    assert trainer["status"] == "Shipped"
+    gone = get_node_spec_handler({"node_type": "yolo_train"})
+    assert gone.get("ok") is not True
 
 
 def test_materialize_template():
-    out = materialize_template_handler({"template_id": "tpl-audio-kws-smart-home"})
+    out = materialize_template_handler({"template_id": "tpl-audio-kws-train-smart-home"})
     assert out["ok"] is True
     graph = out["graph"]
     assert graph["schema_version"] == "1.1"
@@ -47,8 +47,9 @@ def test_materialize_template():
     assert len(graph["edges"]) >= 1
 
 
-def test_describe_pack_vision():
-    out = describe_pack_handler({"pack": "Vision", "template_limit": 5})
+def test_describe_pack_audio():
+    # F19 (F-07): Vision was removed; describe a shipped pack instead.
+    out = describe_pack_handler({"pack": "Audio", "template_limit": 5})
     assert out["ok"] is True
-    assert out["node_count"] >= 20
+    assert out["node_count"] >= 10
     assert out["template_sample_count"] >= 1

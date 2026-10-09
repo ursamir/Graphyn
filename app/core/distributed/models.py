@@ -4,7 +4,7 @@ Bounded Context:  BC5 — Execution Runtime
 Responsibility:   Pydantic contracts for distributed workers, node jobs,
                   and job results (control ↔ worker protocol).
 Owns:             WorkerResources, WorkerInfo, NodeJob, JobResult,
-                  JobStatus, WorkerStatus.
+                  JobStatus, QueueReason, WorkerStatus.
 Public Surface:   All model classes and type aliases above.
 Must NOT:         Import from app.domain, app.api, orchestrator, or nodes.
 Dependencies:     pydantic, stdlib (datetime, typing), app.core.ir.models
@@ -31,6 +31,8 @@ JobStatus = Literal[
     "failed",
     "cancelled",
 ]
+# Why a pending job has not been claimed yet (F18 queue visibility).
+QueueReason = Literal["no_capacity", "org_quota", "waiting_worker"]
 WorkerStatus = Literal["idle", "busy", "draining", "offline"]
 
 
@@ -73,7 +75,8 @@ class WorkerInfo(BaseModel):
     """Lab default True. When auth_required and GRAPHYN_WORKER_TRUST_REQUIRED=1,
     untrusted workers cannot claim."""
     max_claimed: int | None = None
-    """Optional per-worker concurrent claimed/running cap (admin PATCH)."""
+    """Optional per-worker concurrent claimed/running cap (admin PATCH).
+    F18 alias: max_slots — used_slots = count of claimed/running jobs."""
     usage_claims: int = 0
     """Durable claim counter (incremented on successful claim)."""
     usage_completes: int = 0
@@ -86,6 +89,8 @@ class WorkerInfo(BaseModel):
     heartbeat_at: datetime = Field(default_factory=_utcnow)
     status: WorkerStatus = "idle"
     active_jobs: int = 0
+    org_id: str | None = None
+    """Owning organization for tenancy isolation (Wave 2)."""
 
     @field_validator("worker_id")
     @classmethod
@@ -128,7 +133,14 @@ class NodeJob(BaseModel):
     attempts: int = 0
     """Times this job was reclaimed after lease expiry (P1-12)."""
     max_attempts: int = 5
-    """Stop requeueing after this many reclaim cycles (P1-12)."""
+    """Stop requeueing after this many reclaim cycles (P1-12). Set from the
+    node's IR ``retry.max_attempts`` (executions) as ``max_attempts - 1``."""
+    idempotent: bool = True
+    """False → a lost lease fails the job instead of requeueing it (F19)."""
+    org_id: str | None = None
+    """Owning organization for fair-share + org concurrent quotas (F18)."""
+    queue_reason: QueueReason | None = None
+    """Set while status=pending: no_capacity | org_quota | waiting_worker."""
     finished_at: datetime | None = None
     """Set when the job reaches a terminal status (history trim ordering)."""
     result_consumed_at: datetime | None = None

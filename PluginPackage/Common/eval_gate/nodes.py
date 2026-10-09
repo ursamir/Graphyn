@@ -111,7 +111,7 @@ class EvalGateNode(Node):
         ),
         "report": OutputPort(
             name="report",
-            data_type=object,
+            data_type=EvalReport,
             description="EvalReport with checks and failures",
         ),
     }
@@ -123,29 +123,36 @@ class EvalGateNode(Node):
         fail_if_empty_list: bool = Field(default=True, title="Fail If Empty List", description="Enable fail if empty list.")
 
     def process(self, inputs: dict) -> dict:
+        from app.core.nodes.payload import unwrap_payload, wrapper_field
+
         value = (inputs or {}).get("input")
+        # F19 (F-06): gate on the payload (CodeResult.data, CsvTableResult.rows, …);
+        # the original value is forwarded unchanged.
+        payload = unwrap_payload(value) if wrapper_field(value) is not None else value
         failures: list[str] = []
         checks: list[str] = []
 
         if self.config.check_empty_transcript:
             checks.append("empty_transcript")
-            text = _text_of(value)
-            is_structured = isinstance(_as_mapping(value), dict) and (
-                hasattr(value, "data") or (isinstance(value, dict) and "data" in value)
+            text = _text_of(payload)
+            is_structured = (
+                (wrapper_field(value) is not None and isinstance(payload, (dict, list)))
+                or (isinstance(payload, dict) and "data" in payload)
+                or isinstance(payload, list)
+                or hasattr(payload, "data")
             )
-            is_list = isinstance(value, list)
-            if not is_structured and not is_list and not str(text).strip():
+            if not is_structured and not str(text).strip():
                 failures.append("empty transcript")
 
         if self.config.fail_if_empty_list:
             checks.append("empty_list")
-            if isinstance(value, list) and len(value) == 0:
+            if isinstance(payload, (list, tuple)) and len(payload) == 0:
                 failures.append("empty list")
 
         keys = list(self.config.required_keys or [])
         if keys:
             checks.append("required_keys")
-            mapping = _as_mapping(value)
+            mapping = _as_mapping(payload)
             missing = [k for k in keys if k not in mapping or mapping.get(k) in (None, "")]
             if missing:
                 failures.append("missing required keys: " + ", ".join(missing))
@@ -159,7 +166,7 @@ class EvalGateNode(Node):
                 raise EvalGateError(
                     f"EvalGateNode: invalid pii_regex {pattern!r}: {exc}"
                 ) from exc
-            blob = _text_of(value) or str(_as_mapping(value))
+            blob = _text_of(payload) or str(_as_mapping(payload)) or str(payload)
             if rx.search(blob or ""):
                 failures.append(f"residual PII matched /{pattern}/")
 

@@ -47,6 +47,9 @@ export type MeInfo = {
   permissions: string[]
   /** project → owner | builder | approver | viewer */
   memberships: Record<string, string>
+  orgId: string
+  orgRole: string
+  orgs: Array<{ id: string; slug: string; name: string; role: string }>
 }
 
 function strList(v: unknown): string[] {
@@ -74,6 +77,14 @@ export function parseMe(raw: unknown): MeInfo | null {
     memberships: Object.fromEntries(
       Object.entries(asRec(r.memberships) ?? {}).map(([k, v]) => [k, str(v)] as const).filter(([, v]) => v),
     ),
+    orgId: str(r.org_id),
+    orgRole: str(r.org_role),
+    orgs: Array.isArray(r.orgs)
+      ? (r.orgs as unknown[]).map((o) => {
+          const x = asRec(o) || {}
+          return { id: str(x.id), slug: str(x.slug), name: str(x.name), role: str(x.role) }
+        }).filter((o) => o.id)
+      : [],
   }
 }
 

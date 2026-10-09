@@ -1,0 +1,27 @@
+[plugin]
+name             = "stream-processor"
+version          = "1.0.0"
+description      = "Rolling window buffering for streaming audio: configurable window/hop, optional Hann taper, resampling to the output rate, latency monitoring, buffer health."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = ["audio", "streaming", "realtime", "windowing", "buffer"]
+
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+]
+
+runtime = "inprocess"
+
+node_types = ["stream_processor"]
+
+[config_schema.stream_processor]
+window_ms = { type = "integer", title = "Window (ms)", default = 1000, description = "Segment/window length in milliseconds." }
+hop_ms = { type = "integer", title = "Hop (ms)", default = 500, description = "Hop between processing windows in milliseconds." }
+target_latency_ms = { type = "integer", title = "Target latency (ms)", default = 200, description = "Soft latency budget for the streaming processor." }
+max_buffer_size = { type = "integer", title = "Max buffer size", default = 100, description = "Maximum buffered frames/chunks before dropping oldest." }
+sample_rate = { type = "integer", title = "Sample rate", default = 16000, description = "Output sample rate in Hz; chunks at another rate are resampled." }
+overlap_add = {  type = "boolean", title = "Hann windows", default = false, description = "Multiply each window by a Hann taper (for overlap-add resynthesis downstream)."  }

@@ -1,6 +1,6 @@
 # AudioBuilder — Examples
 
-This directory contains **30 numbered examples** (`01`–`30`) that cover the full feature set of the platform — from audio ML pipelines to agent-native MCP operation, parallel execution, provenance tracking, plugin development, and general-purpose workflow execution.
+This directory contains **numbered examples** (`01`–`31`) that cover the full feature set of the platform — from audio ML pipelines to agent-native MCP operation, parallel execution, provenance tracking, plugin development, and general-purpose workflow execution.
 
 ---
 
@@ -45,15 +45,16 @@ Use this table to find the example that demonstrates a specific feature:
 | Capability-aware scheduling | 19 |
 | Retry + fault tolerance | 20 |
 | Runtime control (pause / resume / cancel) | 21 |
-| Call analytics (ASR → PII → LLM → webhook; live Deepgram/OpenAI in pipeline.live.graph.json) | 22 |
+| Call analytics (offline: local Whisper → PII → rule-based extract → object store; live: Deepgram/OpenAI → webhook) | 22 |
 | Meeting CRM extract | 23 |
 | Caption export (SRT/VTT) | 24 |
 | Doc chunk ingest → object store | 25 |
-| Nightly compliance (schedule + IF + HTTP mock/CSV) | 26 |
-| GitHub triage via http_request + IF | 27 |
+| Nightly compliance (schedule + IF → CSV offline; Slack via http_request live) | 26 |
+| Issue triage (offline: IF → queue/backlog CSV; live: GitHub REST via http_request) | 27 |
 | ASR + python_code fan-out → merge → CSV | 28 |
 | Distributed placement / worker labels | 29 |
 | Edge optimize → package (deploy wizard) | 30 |
+| Video pack: scenes, CLIP tags, actions, captions (`31_video_demo/README.md`) | 31 |
 
 ---
 

@@ -54,6 +54,23 @@ _MAX_LOG_ENTRIES = 10_000
 _MAX_PROGRESS_PER_NODE = 500
 
 
+
+def _needs_credentials(error) -> bool:
+    """True when *error* is (or was caused by) ``NeedsCredentialsError``.
+
+    Isolated plugin failures cross a process boundary, so their chained
+    traceback text is checked for the qualified class name as well.
+    """
+    seen = 0
+    exc = error
+    while exc is not None and seen < 8:
+        if type(exc).__name__ == "NeedsCredentialsError" or getattr(exc, "error_type", None) == "NeedsCredentialsError":
+            return True
+        exc = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+        seen += 1
+    tb_text = getattr(error, "traceback_text", None) or ""
+    return "app.core.credentials.errors.NeedsCredentialsError" in str(tb_text)
+
 class PipelineLogger:
     def __init__(self, queue: Queue | None = None):
         # Use a bounded deque so the logs list never grows beyond _MAX_LOG_ENTRIES (B-09 fix)
@@ -263,7 +280,17 @@ class PipelineLogger:
         exception type and traceback as attributes; everything else uses the
         host exception and its ``__traceback__``.
         """
-        _log.error("[%s] %s — FAILED: %s", index, node_type, error)
+        if getattr(error, "cancelled", False):
+            # Requested cancellation (run cancel → remote job cancelled) is an
+            # expected outcome, not an error — keep ERROR lines for real failures.
+            _log.info("[%s] %s — CANCELLED: %s", index, node_type, error)
+        elif _needs_credentials(error):
+            # Missing connection/secret is an operator setup state (the catalog
+            # labels such templates "needs-credentials"), not a platform fault:
+            # the run still fails with the full message; the server log warns.
+            _log.warning("[%s] %s — FAILED (needs credentials): %s", index, node_type, error)
+        else:
+            _log.error("[%s] %s — FAILED: %s", index, node_type, error)
         err_type = getattr(error, "error_type", None) or type(error).__name__
         tb_text = getattr(error, "traceback_text", None)
         if not tb_text and isinstance(error, BaseException) and error.__traceback__ is not None:

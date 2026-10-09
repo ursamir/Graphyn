@@ -3,7 +3,7 @@
   "metadata": {
     "name": "github_triage",
     "seed": 42,
-    "description": "GitHub triage: http_request issues \u2192 openai_compat ASR/LLM extract \u2192 IF \u2192 comment http_request. Requires GITHUB_TOKEN (auth_env) and OPENAI_API_KEY. Edit repo URLs before running.",
+    "description": "Issue triage, offline: transcribe voice notes with local Whisper, redact PII, rule-based severity/summary/labels extract, if_switch on severity, write the triage queue CSV. No tokens. pipeline.live.graph.json reads and comments on GitHub issues (GITHUB_TOKEN) with an OpenAI-compatible LLM.",
     "created_at": null,
     "tags": [
       "example",
@@ -14,24 +14,12 @@
   },
   "nodes": [
     {
-      "id": "gh_list",
-      "node_type": "http_request",
-      "config": {
-        "provider": "http",
-        "method": "GET",
-        "url": "https://api.github.com/repos/example/app/issues",
-        "auth_env": "GITHUB_TOKEN"
-      },
-      "label": null,
-      "capability_metadata": null,
-      "event_trigger": null
-    },
-    {
       "id": "asr",
       "node_type": "asr_transcribe",
       "config": {
-        "provider": "openai_compat",
-        "language": "en"
+        "provider": "local_whisper",
+        "language": "en",
+        "model": "tiny"
       },
       "label": null,
       "capability_metadata": null,
@@ -64,7 +52,7 @@
       "id": "llm",
       "node_type": "structured_llm",
       "config": {
-        "provider": "openai_compat",
+        "provider": "rule_based",
         "schema_name": "triage",
         "json_schema": {
           "type": "object",
@@ -103,13 +91,22 @@
       "event_trigger": null
     },
     {
-      "id": "gh_comment",
-      "node_type": "http_request",
+      "id": "queue",
+      "node_type": "csv_table",
       "config": {
-        "provider": "http",
-        "method": "POST",
-        "url": "https://api.github.com/repos/example/app/issues/42/comments",
-        "auth_env": "GITHUB_TOKEN"
+        "operation": "write",
+        "path": "artifacts/github-triage/queue.csv"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "backlog",
+      "node_type": "csv_table",
+      "config": {
+        "operation": "write",
+        "path": "artifacts/github-triage/backlog.csv"
       },
       "label": null,
       "capability_metadata": null,
@@ -148,7 +145,14 @@
     {
       "src_id": "branch",
       "src_port": "true",
-      "dst_id": "gh_comment",
+      "dst_id": "queue",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "branch",
+      "src_port": "false",
+      "dst_id": "backlog",
       "dst_port": "input",
       "condition": null
     }

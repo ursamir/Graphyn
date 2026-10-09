@@ -273,6 +273,44 @@ def prepare_05_speech_enhancement(limit: int = 100) -> None:
     print(f"  noise/: {n} files  (source: train/_background_noise_)")
 
 
+# ── Example 31: Video demo ───────────────────────────────────────────────────
+
+BBB_TRAILER_URL = "https://download.blender.org/peach/trailer/trailer_400p.ogg"
+
+
+def prepare_31_video_demo() -> None:
+    """Big Buck Bunny trailer (CC-BY 3.0, Blender Foundation) → 480p H.264/AAC MP4.
+
+    Used by the Video-pack templates. Needs ffmpeg with libx264.
+    """
+    import shutil
+    import subprocess
+
+    print("\n[31] Video demo (Big Buck Bunny trailer, CC-BY 3.0 Blender Foundation)")
+    dest = EXAMPLES / "31_video_demo" / "data" / "clip.mp4"
+    if dest.exists() and dest.stat().st_size > 100_000:
+        print(f"  ✓ Present: {dest}")
+        return
+    if not shutil.which("ffmpeg"):
+        print("  ✗ ffmpeg not found — install ffmpeg to build the video demo clip")
+        return
+    src = RAW_ROOT / "bbb_trailer_400p.ogg"
+    if not src.exists():
+        # download.blender.org rejects urllib's default User-Agent (403).
+        src.parent.mkdir(parents=True, exist_ok=True)
+        print(f"  ↓ Downloading: {BBB_TRAILER_URL}")
+        req = urllib.request.Request(BBB_TRAILER_URL, headers={"User-Agent": "graphyn-examples/1.0"})
+        with urllib.request.urlopen(req, timeout=120) as resp, open(src, "wb") as fh:
+            shutil.copyfileobj(resp, fh)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y", "-i", str(src), "-t", "30",
+        "-vf", "scale=480:-2", "-c:v", "libx264", "-preset", "medium", "-crf", "28", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-ac", "1", "-ar", "16000", "-b:a", "48k", "-movflags", "+faststart", str(dest),
+    ], check=True)
+    print(f"  ✓ Wrote {dest} ({dest.stat().st_size // 1024} KB)")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -295,6 +333,7 @@ def main() -> None:
     prepare_03_environmental_sounds(limit=200)
     prepare_04_speaker_verification(n_speakers=6, utterances_per_speaker=20)
     prepare_05_speech_enhancement(limit=100)
+    prepare_31_video_demo()
 
     print("\n" + "=" * 60)
     print("Done! Example data directories:")

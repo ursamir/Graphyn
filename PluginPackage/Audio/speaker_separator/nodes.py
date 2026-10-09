@@ -1,0 +1,434 @@
+"""SpeakerSeparatorNode — separate speakers or sources from mixed audio.
+
+Backends:
+    speechbrain — SpeechBrain SepFormer (wsj0-2mix) 2-source separation; in
+                  diarization_only mode each source's voice-activity spans
+                  become that speaker's segments. No credentials. [default]
+    pyannote    — pyannote.audio speaker diarization (gated Hugging Face
+                  model: needs a HF token with the model terms accepted;
+                  fails clearly without one)
+    auto        — pyannote when installed AND a HF token resolves, else speechbrain
+
+output_mode:
+    per_speaker      — one AudioSample per detected speaker segment
+    diarization_only — original audio with metadata["speaker_segments"] populated
+"""
+from __future__ import annotations
+
+import copy
+import logging
+from typing import ClassVar, Literal
+
+from pydantic import Field
+
+import numpy as np
+
+from app.core.nodes.base import Node
+from app.core.nodes.config import NodeConfig
+from app.core.nodes.metadata import NodeMetadata
+from app.core.nodes.ports import InputPort, OutputPort
+from app.models.audio_sample import AudioSample
+
+log = logging.getLogger(__name__)
+
+
+def _model_dir(name: str) -> str:
+    import os
+    from pathlib import Path
+
+    base = os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+    return str(Path(base) / "speechbrain" / name)
+
+
+def _load_sepformer():
+    from speechbrain.inference.separation import SepformerSeparation  # type: ignore
+
+    return SepformerSeparation.from_hparams(
+        source="speechbrain/sepformer-wsj02mix", savedir=_model_dir("sepformer-wsj02mix"))
+
+
+def _load_pyannote(token: str):
+    if not token:
+        raise RuntimeError(
+            "SpeakerSeparatorNode: backend='pyannote' needs a Hugging Face token (secret/env named by "
+            "auth_token_env, default HUGGINGFACE_TOKEN) for an account that accepted the "
+            "pyannote/speaker-diarization-3.1 terms. Use backend='speechbrain' for a credential-free path.")
+    from pyannote.audio import Pipeline as PyannotePipeline  # type: ignore
+
+    try:
+        pipeline = PyannotePipeline.from_pretrained("pyannote/speaker-diarization-3.1", token=token)
+    except TypeError:  # pyannote.audio < 3.3
+        pipeline = PyannotePipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=token)
+    if pipeline is None:
+        raise RuntimeError("SpeakerSeparatorNode: pyannote model download refused (token lacks access?)")
+    return pipeline
+
+
+def _source_spans(sources: list[np.ndarray], sr: int, min_len_s: float,
+                  frame_s: float = 0.03) -> list[list[tuple[float, float]]]:
+    """Per-source speaking spans from separated signals.
+
+    A frame belongs to source *i* when its RMS is within 20 dB of that
+    source's loud frames AND within 6 dB of the loudest source in that frame
+    (residual bleed of the other speaker is dropped). Gaps < 0.2 s merge."""
+    hop = max(int(frame_s * sr), 1)
+    n = min(len(y) for y in sources) // hop
+    if n == 0:
+        return [[] for _ in sources]
+    rms = np.stack([np.sqrt(np.mean(y[: n * hop].reshape(n, hop) ** 2, axis=1) + 1e-12) for y in sources])
+    loudest = rms.max(axis=0)
+    out: list[list[tuple[float, float]]] = []
+    for r in rms:
+        ref = np.percentile(r, 95)
+        active = (r > max(ref * 0.1, 1e-4)) & (r >= 0.5 * loudest)
+        spans: list[list[float]] = []
+        for i, on in enumerate(active):
+            if not on:
+                continue
+            t0, t1 = i * frame_s, (i + 1) * frame_s
+            if spans and t0 - spans[-1][1] < 0.2:
+                spans[-1][1] = t1
+            else:
+                spans.append([t0, t1])
+        out.append([(round(x, 3), round(y, 3)) for x, y in spans if y - x >= min_len_s])
+    return out
+
+
+class SpeakerSeparatorNode(Node):
+    """Separate speakers or sources from mixed audio.
+
+    Config:
+        backend (str): "pyannote" | "speechbrain" | "auto"
+        num_speakers (int): expected number of speakers; 0 = auto-detect
+        min_speakers (int): minimum speakers for auto-detection (default 1)
+        max_speakers (int): maximum speakers for auto-detection (default 10)
+        output_mode (str): "per_speaker" | "diarization_only"
+            per_speaker      — emit one AudioSample per speaker segment
+            diarization_only — emit original sample with speaker_segments metadata
+        auth_token_env (str): secret/env NAME holding the HF token (pyannote)
+        min_segment_s (float): discard speaker segments shorter than this (default 0.5)
+    """
+
+    node_type: ClassVar[str] = "speaker_separator"
+
+    metadata: ClassVar[NodeMetadata] = NodeMetadata(
+        node_type="speaker_separator",
+        label="Speaker Separator",
+        description=(
+            "Separate speakers from mixed audio via diarization (pyannote.audio) "
+            "or source separation (SpeechBrain SepFormer)."
+        ),
+        category="Enhancement",
+        version="1.0.0",
+        tags=["audio", "diarization", "speaker", "separation", "pyannote", "speechbrain"],
+        requires_gpu=False,
+        supports_cpu=True,
+        supports_edge=False,
+        deterministic=False,
+        cacheable=False,
+        streaming_support=False,
+        realtime_support=True,
+    )
+
+    input_ports: ClassVar[dict[str, InputPort]] = {
+        "input": InputPort(
+            name="input",
+            data_type=list[AudioSample],
+            cardinality="single",
+            required=True,
+            description="Mixed audio samples to separate",
+        )
+    }
+
+    output_ports: ClassVar[dict[str, OutputPort]] = {
+        "output": OutputPort(
+            name="output",
+            data_type=list[AudioSample],
+            description=(
+                "Per-speaker AudioSamples (per_speaker mode) or "
+                "original samples with speaker_segments metadata (diarization_only mode)"
+            ),
+        )
+    }
+
+    class Config(NodeConfig):
+        backend: Literal["pyannote", "speechbrain", "auto"] = Field(default='speechbrain', title="Backend", description="speechbrain: SepFormer 2-source separation (no credentials); pyannote: diarization (needs a HF token, gated model); auto: pyannote when installed and a token resolves, else speechbrain.")
+        num_speakers: int = Field(default=0, title="Num speakers", description="Exact speaker count when known (0 = auto / use min–max range).")
+        min_speakers: int = Field(default=1, title="Min speakers", description="Lower bound on speaker count for diarization.")
+        max_speakers: int = Field(default=10, title="Max speakers", description="Upper bound on speaker count for diarization.")
+        output_mode: Literal["per_speaker", "diarization_only"] = Field(default='per_speaker', title="Output mode", description="Output mode. One of: per_speaker, diarization_only.")
+        auth_token_env: str = Field(default='HUGGINGFACE_TOKEN', title="Auth token env", description="Env var or Graphyn secret NAME for HuggingFace token (preferred). Default HUGGINGFACE_TOKEN.")
+        min_segment_s: float = Field(default=0.5, title="Min segment (s)", description="Drop diarization segments shorter than this many seconds.")
+
+
+    def _resolve_hf_token(self) -> str:
+        """Resolve HF token from auth_token_env / secrets, falling back to deprecated auth_token."""
+        env_name = (getattr(self.config, "auth_token_env", None) or "HUGGINGFACE_TOKEN").strip() or "HUGGINGFACE_TOKEN"
+        token = ""
+        # Guarded: auth_token_env is graph-author controlled.
+        from app.core.trust.secrets import resolve_secret
+        return (resolve_secret(env_name) or "").strip()
+
+    # ── setup ─────────────────────────────────────────────────────────────────
+
+    def setup(self) -> None:
+        self._resolved_backend = self._resolve_backend()
+        log.debug("SpeakerSeparatorNode: using backend '%s'", self._resolved_backend)
+
+        # Pre-load models once to avoid reloading on every process() call
+        self._pyannote_pipeline = None
+        self._sepformer_model = None
+
+        token = self._resolve_hf_token()
+
+        if self._resolved_backend == "pyannote":
+            # _resolve_backend() already verified the import succeeds; any
+            # exception here (network, bad token, model not found) should
+            # propagate so setup() fails loudly rather than silently leaving
+            # _pyannote_pipeline=None and causing per-call model reloads.
+            self._pyannote_pipeline = _load_pyannote(token)
+            log.info("SpeakerSeparatorNode: pyannote pipeline loaded")
+        elif self._resolved_backend == "speechbrain":
+            self._sepformer_model = _load_sepformer()
+            log.info("SpeakerSeparatorNode: SepFormer model loaded")
+
+    def _resolve_backend(self) -> str:
+        if self.config.backend == "pyannote":
+            self._check_pyannote()
+            return "pyannote"
+        if self.config.backend == "speechbrain":
+            self._check_speechbrain()
+            return "speechbrain"
+        # auto: pyannote only when it can actually run (installed + token)
+        try:
+            self._check_pyannote()
+            if self._resolve_hf_token():
+                return "pyannote"
+        except ImportError:
+            pass
+        try:
+            self._check_speechbrain()
+            return "speechbrain"
+        except ImportError:
+            raise ImportError(
+                "SpeakerSeparatorNode: no backend available. Install one of:\n"
+                "  pip install pyannote.audio>=3.0\n"
+                "  pip install speechbrain>=0.5"
+            )
+
+    def _check_pyannote(self) -> None:
+        try:
+            import pyannote.audio  # type: ignore  # noqa: F401
+        except ImportError:
+            raise ImportError(
+                "SpeakerSeparatorNode: 'pyannote.audio' required for backend='pyannote'. "
+                "Install with: pip install pyannote.audio>=3.0"
+            )
+
+    def _check_speechbrain(self) -> None:
+        try:
+            import speechbrain  # type: ignore  # noqa: F401
+        except ImportError:
+            raise ImportError(
+                "SpeakerSeparatorNode: 'speechbrain' required for backend='speechbrain'. "
+                "Install with: pip install speechbrain>=0.5"
+            )
+
+    # ── SISO process ──────────────────────────────────────────────────────────
+
+    def process(self, samples: list[AudioSample]) -> list[AudioSample]:
+        if not hasattr(self, "_resolved_backend"):
+            raise RuntimeError(
+                "SpeakerSeparatorNode.setup() must be called before process(). "
+                "The NodeExecutor calls setup() automatically — do not call process() directly."
+            )
+        backend = self._resolved_backend
+        output: list[AudioSample] = []
+
+        for sample in samples:
+            if sample.data is None or len(sample.data) == 0:
+                log.warning(
+                    "SpeakerSeparatorNode: skipping zero-length sample %s", sample.path
+                )
+                continue
+            if backend == "pyannote":
+                results = self._separate_pyannote(sample)
+            else:
+                results = self._separate_speechbrain(sample)
+            output.extend(results)
+
+        return output
+
+    # ── pyannote backend ──────────────────────────────────────────────────────
+
+    def _separate_pyannote(self, sample: AudioSample) -> list[AudioSample]:
+        """Diarize using pyannote.audio, then slice audio per speaker segment."""
+        import torch  # type: ignore
+        from pyannote.audio import Pipeline as PyannotePipeline  # type: ignore
+
+        # Use cached pipeline from setup(); fall back to loading if needed
+        if getattr(self, "_pyannote_pipeline", None) is not None:
+            pipeline = self._pyannote_pipeline
+        else:
+            pipeline = _load_pyannote(self._resolve_hf_token())
+
+        y = sample.data.astype(np.float32)
+        if y.ndim > 1:
+            y = y.mean(axis=1)  # mix stereo/multi-channel to mono
+        sr = sample.sample_rate
+
+        # pyannote expects a file path or waveform dict
+        waveform = torch.from_numpy(y).unsqueeze(0)  # (1, N)
+        audio_in = {"waveform": waveform, "sample_rate": sr}
+
+        # Run diarization
+        kwargs: dict = {}
+        if self.config.num_speakers > 0:
+            kwargs["num_speakers"] = self.config.num_speakers
+        else:
+            kwargs["min_speakers"] = self.config.min_speakers
+            kwargs["max_speakers"] = self.config.max_speakers
+
+        diarization = pipeline(audio_in, **kwargs)
+        # pyannote.audio 4 returns DiarizeOutput; 3.x returns an Annotation
+        diarization = getattr(diarization, "speaker_diarization", diarization)
+
+        # Collect speaker segments
+        speaker_segments: list[dict] = []
+        for turn, _, speaker in diarization.itertracks(yield_label=True):
+            speaker_segments.append({
+                "speaker_id": speaker,
+                "start": turn.start,
+                "end": turn.end,
+            })
+
+        if self.config.output_mode == "diarization_only":
+            new_sample = copy.deepcopy(sample)
+            new_sample.metadata["speaker_segments"] = speaker_segments
+            new_sample.metadata["speaker_separator"] = {
+                "backend": "pyannote",
+                "num_segments": len(speaker_segments),
+            }
+            return [new_sample]
+
+        # per_speaker: slice audio per segment
+        return self._slice_segments(sample, speaker_segments, backend="pyannote")
+
+    # ── speechbrain backend ───────────────────────────────────────────────────
+
+    def _separate_speechbrain(self, sample: AudioSample) -> list[AudioSample]:
+        """Source separation using SpeechBrain SepFormer."""
+        import torch  # type: ignore
+        from speechbrain.inference.separation import SepformerSeparation  # type: ignore
+
+        # Use cached model from setup(); fall back to loading if needed
+        if getattr(self, "_sepformer_model", None) is not None:
+            model = self._sepformer_model
+        else:
+            model = _load_sepformer()
+
+        # SepFormer wsj02mix separates exactly 2 sources — warn for 3+ speakers
+        if self.config.num_speakers > 2:
+            log.warning(
+                "SpeakerSeparatorNode: speechbrain backend uses sepformer-wsj02mix which "
+                "separates exactly 2 sources. num_speakers=%d will be ignored; "
+                "remaining speakers will be mixed into the 2 output sources.",
+                self.config.num_speakers,
+            )
+
+        y = sample.data.astype(np.float32)
+        if y.ndim > 1:
+            y = y.mean(axis=1)  # mix stereo/multi-channel to mono; SepFormer expects 1D
+        sr = sample.sample_rate
+
+        # SepFormer expects 8kHz mono
+        if sr != 8000:
+            import librosa  # type: ignore
+            y_in = librosa.resample(y=y, orig_sr=sr, target_sr=8000)
+            in_sr = 8000
+        else:
+            y_in = y
+            in_sr = sr
+
+        audio_tensor = torch.from_numpy(y_in).unsqueeze(0)  # (1, N)
+        est_sources = model.separate_batch(audio_tensor)  # (1, N, num_sources)
+
+        num_sources = est_sources.shape[-1]
+        results: list[AudioSample] = []
+        if self.config.output_mode == "diarization_only":
+            segments: list[dict] = []
+            srcs = [est_sources[0, :, i].detach().cpu().numpy() for i in range(num_sources)]
+            for i, spans in enumerate(_source_spans(srcs, in_sr, self.config.min_segment_s)):
+                for start, end in spans:
+                    segments.append({"speaker_id": f"source_{i}", "start": start, "end": end})
+            segments.sort(key=lambda d: (d["start"], d["speaker_id"]))
+            new_sample = copy.deepcopy(sample)
+            new_sample.metadata["speaker_segments"] = segments
+            new_sample.metadata["speaker_separator"] = {
+                "backend": "speechbrain", "num_segments": len(segments), "total_sources": num_sources,
+            }
+            return [new_sample]
+
+        for i in range(num_sources):
+            src = est_sources[0, :, i].detach().cpu().numpy()
+            # Resample back to original sr
+            if in_sr != sr:
+                import librosa  # type: ignore
+                src = librosa.resample(y=src, orig_sr=in_sr, target_sr=sr)
+
+            new_sample = copy.deepcopy(sample)
+            new_sample.data = src.astype(np.float32)
+            new_sample.sample_rate = sr
+            new_sample.metadata.update({
+                "speaker_id": f"source_{i}",
+                "speaker_separator": {
+                    "backend": "speechbrain",
+                    "source_index": i,
+                    "total_sources": num_sources,
+                },
+            })
+            results.append(new_sample)
+
+        return results
+
+    # ── shared: slice audio per diarization segment ───────────────────────────
+
+    def _slice_segments(
+        self,
+        sample: AudioSample,
+        segments: list[dict],
+        backend: str,
+    ) -> list[AudioSample]:
+        """Slice sample.data into per-speaker AudioSamples."""
+        y = sample.data
+        sr = sample.sample_rate
+        min_samples = int(self.config.min_segment_s * sr)
+        results: list[AudioSample] = []
+
+        for seg in segments:
+            start_s = float(seg["start"])
+            end_s = float(seg["end"])
+            speaker_id = str(seg.get("speaker_id", "unknown"))
+
+            start_i = int(start_s * sr)
+            end_i = min(int(end_s * sr), len(y))
+            chunk = y[start_i:end_i]
+
+            if len(chunk) < min_samples:
+                continue
+
+            new_sample = copy.deepcopy(sample)
+            new_sample.data = chunk.copy().astype(np.float32)
+            new_sample.metadata.update({
+                "speaker_id": speaker_id,
+                "start": start_s,
+                "end": end_s,
+                "parent": str(sample.path),
+                "speaker_separator": {
+                    "backend": backend,
+                    "output_mode": "per_speaker",
+                },
+            })
+            results.append(new_sample)
+
+        return results

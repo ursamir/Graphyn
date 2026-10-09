@@ -1,15 +1,15 @@
 # app/core/distributed/quotas.py
 """
 Bounded Context:  BC5 — Execution Runtime (Mode B WAVE-2)
-Responsibility:   Pool / per-worker concurrent claim quotas and durable usage
-                  counters (claims, completes, bytes in/out). Not multi-tenant
-                  SaaS — single-operator pool limits only.
+Responsibility:   Pool / per-worker concurrent claim quotas, durable usage
+                  counters, and F18 org fair-share / queue-reason helpers.
 Owns:             parse_pool_max_claimed(), worker_at_quota(), pool_at_quota(),
-                  count_active_claims(), record_usage(), usage_snapshot().
+                  count_active_claims(), record_usage(), usage_snapshot(),
+                  org concurrent helpers, fair_share_key(), infer_queue_reason().
 Public Surface:   Functions above + QuotaExceeded.
-Must NOT:         Import app.api / app.domain / invent org tables.
-Dependencies:     stdlib, app.core.distributed.models / registry / queue (lazy).
-Reason To Change: Quota env syntax or usage metric set evolves.
+Must NOT:         Import app.api / invent a parallel broker.
+Dependencies:     stdlib, models / registry / queue / trust.metering (lazy).
+Reason To Change: Quota env syntax, org fair-share, or slot metrics evolve.
 """
 from __future__ import annotations
 
@@ -220,3 +220,183 @@ def usage_snapshot(worker: Any) -> dict[str, int]:
         "bytes_in": int(getattr(worker, "usage_bytes_in", 0) or 0),
         "bytes_out": int(getattr(worker, "usage_bytes_out", 0) or 0),
     }
+
+
+# ── F18: org fair-share + queue reasons ───────────────────────────────────────
+
+
+def _job_field(job: Any, key: str, default: Any = None) -> Any:
+    if isinstance(job, dict):
+        return job.get(key, default)
+    return getattr(job, key, default)
+
+
+def count_org_jobs(
+    org_id: str | None,
+    *,
+    statuses: tuple[str, ...] = ("claimed", "running"),
+    jobs: list[Any] | None = None,
+) -> int:
+    """Count jobs for ``org_id`` in the given statuses."""
+    if jobs is None:
+        try:
+            from app.core.distributed.queue import get_job_queue
+
+            q = get_job_queue()
+            jobs = q.list() if hasattr(q, "list") else list(getattr(q, "_jobs", {}).values())
+        except Exception as exc:
+            log.warning("count_org_jobs: queue unavailable: %s", exc)
+            return 0
+    n = 0
+    for job in jobs or []:
+        status = _job_field(job, "status")
+        if status not in statuses:
+            continue
+        joid = _job_field(job, "org_id")
+        if org_id is None:
+            n += 1
+            continue
+        if str(joid or "") == str(org_id):
+            n += 1
+    return n
+
+
+def org_concurrent_limit(org_id: str | None) -> int | None:
+    """Per-org max concurrent claimed/running jobs (None = unlimited)."""
+    if not org_id:
+        return None
+    try:
+        from app.core.trust.metering import get_meter_store
+
+        q = get_meter_store().get_quota(str(org_id))
+        return q.max_concurrent_jobs
+    except Exception as exc:
+        log.warning("org_concurrent_limit(%s) failed: %s", org_id, exc)
+        return None
+
+
+def org_queued_limit(org_id: str | None) -> int | None:
+    """Per-org max pending (queued) jobs (None = unlimited)."""
+    if not org_id:
+        return None
+    try:
+        from app.core.trust.metering import get_meter_store
+
+        q = get_meter_store().get_quota(str(org_id))
+        return q.max_queued_jobs
+    except Exception as exc:
+        log.warning("org_queued_limit(%s) failed: %s", org_id, exc)
+        return None
+
+
+def org_at_concurrent_quota(
+    org_id: str | None,
+    *,
+    jobs: list[Any] | None = None,
+    upcoming: int = 0,
+) -> bool:
+    """True when org already holds max_concurrent_jobs active claims."""
+    limit = org_concurrent_limit(org_id)
+    if limit is None:
+        return False
+    used = count_org_jobs(org_id, statuses=("claimed", "running"), jobs=jobs)
+    return used + upcoming >= int(limit)
+
+
+def org_at_queue_depth(
+    org_id: str | None,
+    *,
+    jobs: list[Any] | None = None,
+    upcoming: int = 0,
+) -> bool:
+    """True when org pending count would exceed max_queued_jobs."""
+    limit = org_queued_limit(org_id)
+    if limit is None:
+        return False
+    used = count_org_jobs(org_id, statuses=("pending",), jobs=jobs)
+    return used + upcoming > int(limit)
+
+
+def fair_share_key(
+    org_id: str | None,
+    *,
+    jobs: list[Any] | None = None,
+    fifo_index: int = 0,
+) -> tuple[float, int]:
+    """Sort key for fair-share dispatch: lower utilization first, then FIFO.
+
+    utilization = running / max_concurrent (absolute running when unlimited).
+    Prefer the org with fewer running jobs relative to its quota so one tenant
+    cannot starve others under a shared worker pool.
+    """
+    limit = org_concurrent_limit(org_id)
+    running = count_org_jobs(org_id, statuses=("claimed", "running"), jobs=jobs)
+    if limit is None or int(limit) <= 0:
+        util = float(running)
+    else:
+        util = float(running) / float(limit)
+    return (util, int(fifo_index))
+
+
+def infer_queue_reason(
+    job: Any,
+    *,
+    workers: list[Any] | None = None,
+    jobs: list[Any] | None = None,
+) -> str:
+    """Derive why a pending job is waiting (F18 visibility).
+
+    Priority: org_quota → no_capacity (pinned/all full) → waiting_worker.
+    """
+    org_id = _job_field(job, "org_id")
+    if org_at_concurrent_quota(org_id, jobs=jobs) or org_at_queue_depth(org_id, jobs=jobs):
+        return "org_quota"
+
+    placement = _job_field(job, "placement")
+    pin = None
+    if placement is not None:
+        mode = getattr(placement, "mode", None) or (
+            placement.get("mode") if isinstance(placement, dict) else None
+        )
+        if mode == "worker":
+            pin = getattr(placement, "worker", None) or (
+                placement.get("worker") if isinstance(placement, dict) else None
+            )
+    if workers is None:
+        try:
+            from app.core.distributed.registry import get_worker_registry
+
+            workers = get_worker_registry().list(include_stale=False)
+        except Exception:
+            workers = []
+    if pin:
+        target = None
+        for w in workers or []:
+            if getattr(w, "worker_id", None) == pin:
+                target = w
+                break
+        if target is not None and worker_at_quota(target, jobs=jobs):
+            return "no_capacity"
+        if target is None:
+            return "waiting_worker"
+
+    from app.core.distributed.models import NodeJob
+    from app.core.distributed.placement import worker_eligible_for_job
+
+    try:
+        nj = job if isinstance(job, NodeJob) else NodeJob.model_validate(job)
+    except Exception:
+        return "waiting_worker"
+    eligible_free = False
+    for w in workers or []:
+        try:
+            if not worker_eligible_for_job(w, nj):
+                continue
+        except Exception:
+            continue
+        if not worker_at_quota(w, jobs=jobs):
+            eligible_free = True
+            break
+    if not eligible_free and workers:
+        return "no_capacity"
+    return "waiting_worker"

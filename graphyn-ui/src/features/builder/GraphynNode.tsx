@@ -12,6 +12,7 @@ import { LayersEditor } from './LayersEditor'
 import { SplitRatiosEditor } from './SplitRatiosEditor'
 import { StringListEditor } from './StringListEditor'
 import { outputsWithErrorPort, portCaptions, type NodeOnError, type NodeRetry } from './workflowIr'
+import { shortTypeLabel } from './portTypes'
 
 export type GraphynNodeData = {
   nodeType: string
@@ -604,7 +605,7 @@ export default function GraphynNode({ id, data, selected }: NodeProps<GraphynNod
       {inputs.flatMap((p, i) => {
         const top = `${((i + 1) / (inputs.length + 1)) * 100}%`
         const left = `${((i + 1) / (inputs.length + 1)) * 100}%`
-        const title = `Input “${p.name}”${p.data_type ? ` · ${p.data_type}` : ''} — drop a wire here`
+        const title = `Input “${p.name}”${p.data_type ? ` · ${shortTypeLabel(p.data_type)}` : ''} — drop a wire here`
         return [
           <Handle key={`in-l-${p.name}`} id={p.name} type="target" position={Position.Left} style={{ top }} className="graphyn-handle graphyn-handle-in" title={title} aria-label={title} />,
           <Handle key={`in-t-${p.name}`} id={`${p.name}::top`} type="target" position={Position.Top} style={{ left }} className="graphyn-handle graphyn-handle-in" title={`${title} (top)`} aria-label={`${title} (top)`} />,
@@ -732,7 +733,7 @@ export default function GraphynNode({ id, data, selected }: NodeProps<GraphynNod
         const left = `${((i + 1) / (outputs.length + 1)) * 100}%`
         const title = p.isError
           ? `Error branch “${p.name}” — runs when this step fails (on_error = route)`
-          : `Output “${p.name}”${p.data_type ? ` · ${p.data_type}` : ''} — drag to an input handle`
+          : `Output “${p.name}”${p.data_type ? ` · ${shortTypeLabel(p.data_type)}` : ''} — drag to an input handle`
         const cls = clsx('graphyn-handle graphyn-handle-out', p.isError && 'graphyn-handle-error')
         return [
           <Handle key={`out-r-${p.name}`} id={p.name} type="source" position={Position.Right} style={{ top }} className={cls} title={title} aria-label={title} />,

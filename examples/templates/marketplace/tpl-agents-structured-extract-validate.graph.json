@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-agents-structured-extract-validate",
+    "seed": 42,
+    "description": "Extract JSON fields from text (rule-based extractor, or an LLM provider when configured) and validate them against a JSON schema.",
+    "created_at": null,
+    "tags": [
+      "agents",
+      "extraction",
+      "schema"
+    ],
+    "pack": "Agents",
+    "industry": "general",
+    "marketplace_id": "tpl-agents-structured-extract-validate",
+    "status": "ready",
+    "source_example": "marketplace/tpl-agents-structured-extract-validate.graph.json",
+    "base_template": "tpl-agents-structured-extract-validate"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "prompt_template",
+      "config": {
+        "template": "Customer Jane reports the invoice is wrong. Next step: refund by Friday."
+      },
+      "label": "text",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "structured_llm",
+      "config": {
+        "provider": "rule_based",
+        "schema_name": "ticket",
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "label": "extract",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "output_schema_validate",
+      "config": {
+        "json_schema": {
+          "type": "object"
+        },
+        "strict": false
+      },
+      "label": "validate",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

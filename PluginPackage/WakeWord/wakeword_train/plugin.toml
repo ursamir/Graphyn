@@ -1,0 +1,36 @@
+[plugin]
+name             = "wakeword-train"
+version          = "2.0.0"
+description      = "Train a DNN / RNN / conv-attention wake-word classifier on speech embeddings (3-phase schedule, focal loss, checkpoint averaging, threshold search; livekit-wakeword)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+tags             = ["wakeword", "training", "pytorch", "livekit-wakeword"]
+
+# Wraps livekit-wakeword (Apache-2.0). Isolated venv: torch is pre-installed CPU-only.
+dependencies = [
+    "numpy>=1.24",
+    "torch>=2.1",
+    "livekit-wakeword[train]>=0.2.1,<0.3",
+]
+
+runtime = "isolated"
+node_types = ["wakeword_train"]
+
+[config_schema.wakeword_train]
+model_dir = { type = "string", title = "Model dir", default = "", description = "Existing run directory when the input port is not connected." }
+model_type = { type = "string", title = "Architecture", default = "conv_attention", enum = ["conv_attention", "dnn", "rnn"] }
+model_size = { type = "string", title = "Size", default = "small", description = "tiny 16\u00d71, small 32\u00d71, medium 128\u00d72, large 256\u00d73 (layer dim \u00d7 blocks).", enum = ["tiny", "small", "medium", "large"] }
+steps = { type = "integer", title = "Steps", default = 2000, description = "Phase-1 steps (phases 2 and 3 add 10% each).", minimum = 10, maximum = 500000 }
+learning_rate = { type = "number", title = "Learning rate", default = 0.0001, maximum = 1.0, exclusiveMinimum = 0 }
+weight_decay = { type = "number", title = "Weight decay", default = 0.01, minimum = 0 }
+label_smoothing = { type = "number", title = "Label smoothing", default = 0.05, minimum = 0, exclusiveMaximum = 0.5 }
+max_negative_weight = { type = "number", title = "Max negative weight", default = 50.0, description = "End of the linear negative-class weight ramp. ~50 suits a few hundred synthetic negatives; upstream uses 1500 with ACAV100M-scale negatives.", minimum = 1.0 }
+target_fp_per_hour = { type = "number", title = "Target FP/hour", default = 0.2, description = "Validation false positives per hour that trigger negative re-weighting; also the threshold-search target.", exclusiveMinimum = 0 }
+batch_positive = { type = "integer", title = "Positives / batch", default = 50, minimum = 1 }
+batch_negative = { type = "integer", title = "Adversarial negatives / batch", default = 50, minimum = 1 }
+batch_background = { type = "integer", title = "Background / batch", default = 50, minimum = 0 }
+batch_acav = { type = "integer", title = "ACAV100M / batch", default = 1024, description = "Used only when ACAV100M features exist.", minimum = 0 }
+acav_features = { type = "string", title = "ACAV100M features", default = "", description = "Path to openwakeword_features_ACAV100M_2000_hrs_16bit.npy (empty \u2192 <data_dir>/features/ if present)." }
+device = { type = "string", title = "Device", default = "auto", enum = ["auto", "cpu", "cuda"] }

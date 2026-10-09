@@ -94,6 +94,11 @@ class NodeMetadata(BaseModel):
     cacheable: bool = True
     """Whether the node's outputs can be safely cached."""
 
+    idempotent: bool = True
+    """Safe to execute again after a lost worker lease (no external side effects
+    such as sending mail or a mutating HTTP call). Mode B requeues a job whose
+    lease expired only when this is True; otherwise the job fails clearly."""
+
     streaming_support: bool = False
     """Whether the node supports streaming execution via process_stream."""
 

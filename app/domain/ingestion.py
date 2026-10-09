@@ -332,7 +332,10 @@ class IngestionService:
                 from urllib.parse import urljoin
 
                 current = url
-                with httpx.Client(follow_redirects=False, timeout=60.0) as client:
+                from app.core.trust.egress import egress_client
+
+                # F19: every hop re-validated + IP-pinned by the egress transport.
+                with egress_client(follow_redirects=False, timeout=60.0) as client:
                     response_cm = None
                     for _hop in range(8):
                         validate_http_egress_url(current)
@@ -353,10 +356,10 @@ class IngestionService:
                         if response_cm is not None:
                             response_cm.__exit__(None, None, None)
                         raise ValueError(f"Too many redirects while downloading {url!r}")
+                    size_exceeded = False
                     try:
                         response.raise_for_status()
                         total_bytes = 0
-                        size_exceeded = False
                         with open(dest_path, "wb") as out_f:
                             for chunk in response.iter_bytes(chunk_size=65536):
                                 total_bytes += len(chunk)

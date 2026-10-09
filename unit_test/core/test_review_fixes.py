@@ -200,20 +200,5 @@ def test_reject_tree_symlinks(tmp_path):
         reject_tree_symlinks(root)
 
 
-def test_hybrid_retrieve_real_returns_hits():
-    text = Path("PluginPackage/RAG/hybrid_retrieve/nodes.py").read_text()
-    assert "Re-enter stub branch" not in text
-    assert "raise NotImplementedError" not in text
-    import sys
-
-    root = str(Path("PluginPackage/RAG").resolve())
-    sys.path.insert(0, root)
-    try:
-        import hybrid_retrieve.nodes as mod
-    finally:
-        sys.path.remove(root)
-    node = mod.HybridRetrieveNode(config={"stub": False})
-    out = node.process({"query": "alpha", "corpus": [{"text": "alpha beta", "chunk_id": "c1"}]})
-    hits = out["output"]
-    assert hits
-    assert "alpha" in str(getattr(hits[0], "text", hits[0]))
+# F20: test_hybrid_retrieve_real_returns_hits removed — the RAG pack (hybrid_retrieve)
+# is not shipped (F8 3cc62d7: "RAG/Vision/TinyML/MLOps stay out").

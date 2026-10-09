@@ -74,7 +74,13 @@ class CreateShipPackageBody(BaseModel):
     target: dict[str, Any] = Field(..., description="runtime/arch and optional extras")
     env: Optional[str] = Field("draft", description="draft|staging")
     notes: Optional[str] = None
-    unsigned_allowed: bool = True
+    unsigned_allowed: bool = Field(
+        False,
+        description=(
+            "Development opt-in: allow an unsigned package when signing is unavailable. "
+            "Packages are Ed25519-signed by default; unsigned ones can never reach prod."
+        ),
+    )
 
 
 class PromoteShipPackageBody(BaseModel):
@@ -110,6 +116,7 @@ def create_ship_package(name: str, body: CreateShipPackageBody, request: Request
     from app.core.mlops.ship_packages import (
         InvalidPackageTransition,
         LabelsMismatch,
+        RuntimeFormatMismatch,
         create_package,
     )
 
@@ -166,6 +173,17 @@ def create_ship_package(name: str, body: CreateShipPackageBody, request: Request
                     "labels_source": exc.source,
                 },
             ) from exc
+        except RuntimeFormatMismatch as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "runtime_format_mismatch",
+                    "message": str(exc),
+                    "runtime": exc.runtime,
+                    "model_format": exc.model_format,
+                    "accepted_formats": exc.accepted,
+                },
+            ) from exc
         except FileNotFoundError as exc:
             raise HTTPException(
                 status_code=404,
@@ -190,6 +208,61 @@ def get_ship_package(name: str, package_id: str):
     project_dir = _require_project(name)
     try:
         return get_package(project_dir, package_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": str(exc)},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "validation_failed", "message": str(exc)},
+        ) from exc
+
+
+class ShipSignatureCheck(BaseModel):
+    signed: bool
+    valid: bool
+    checksum_ok: Optional[bool] = None
+    key_id: Optional[str] = None
+    reason: str = ""
+
+
+class ShipSigningKey(BaseModel):
+    alg: str
+    key_id: str
+    public_key_pem: str
+
+
+@router.get(
+    "/{name}/ship/signing-key",
+    summary="Public key that signs this server's ship packages",
+    response_model=ShipSigningKey,
+)
+def ship_signing_key(name: str):
+    from app.core.mlops.ship_signing import public_key_info
+
+    _require_project(name)
+    try:
+        return public_key_info()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "signing_unavailable", "message": str(exc)},
+        ) from exc
+
+
+@router.get(
+    "/{name}/ship/packages/{package_id}/verify",
+    summary="Verify a ship package's checksum and Ed25519 signature",
+    response_model=ShipSignatureCheck,
+)
+def verify_ship_package(name: str, package_id: str):
+    from app.core.mlops.ship_packages import verify_package
+
+    project_dir = _require_project(name)
+    try:
+        return verify_package(project_dir, package_id)
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=404,
@@ -230,6 +303,9 @@ def download_ship_package(name: str, package_id: str, request: Request):
     }
     if sha:
         headers["X-Content-SHA256"] = sha
+    sigs = [s for s in (man.get("signatures") or []) if isinstance(s, dict) and s.get("alg") == "ed25519"]
+    if sigs:
+        headers["X-Graphyn-Signature"] = f"ed25519 keyid={sigs[0].get('key_id')} sig={sigs[0].get('value')}"
     from app.api.download_audit import audit_bytes_download
 
     try:
@@ -262,7 +338,11 @@ def promote_ship_package(
 ):
     """Promote — Idempotency-Key required."""
     from app.api.idempotency import begin_idempotent, complete_idempotent, idempotency_guard
-    from app.core.mlops.ship_packages import InvalidPackageTransition, promote_package
+    from app.core.mlops.ship_packages import (
+        InvalidPackageTransition,
+        SignatureRequired,
+        promote_package,
+    )
 
     key = request.headers.get("Idempotency-Key") or request.headers.get("idempotency-key")
     if not key or not str(key).strip():
@@ -308,6 +388,11 @@ def promote_ship_package(
             ) from exc
         except InvalidPackageTransition as exc:
             raise _invalid_transition(package_id, exc.current, exc.action) from exc
+        except SignatureRequired as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "signature_required", "message": str(exc)},
+            ) from exc
         except ValueError as exc:
             msg = str(exc)
             code = "validation_failed"

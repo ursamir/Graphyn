@@ -1,0 +1,40 @@
+[plugin]
+name             = "speech-enhancer"
+version          = "1.0.0"
+description      = "Speech cleanup: denoising (noisereduce spectral gating or SpeechBrain SepFormer-WHAM), WPE dereverberation, vocal isolation, telephony bandpass."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "enhancement",
+    "denoising",
+    "speech",
+    "speechbrain",
+    "preprocessing"
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "librosa>=0.10",
+    "noisereduce>=3.0,<4",
+    "nara-wpe>=0.0.9",
+    "torch>=2.1",
+    "torchaudio>=2.1",
+    "speechbrain>=1.0",
+]
+
+runtime = "isolated"
+node_types = ["speech_enhancer"]
+
+[config_schema.speech_enhancer]
+backend = { type = "string", title = "Backend", default = "spectral", description = "Denoiser: spectral (noisereduce gating), speechbrain (SepFormer-WHAM neural, 16 kHz), auto (speechbrain when installed, else spectral).", enum = ["spectral", "speechbrain", "auto"] }
+denoise = {  type = "boolean", title = "Denoise", default = true, description = "Apply noise reduction / spectral gating (On/Off)."  }
+dereverb = { type = "boolean", title = "Dereverb", default = false, description = "WPE dereverberation (nara-wpe)." }
+vocal_isolation = { type = "boolean", title = "Vocal Isolation", default = false, description = "Enable vocal isolation." }
+telephony_mode = { type = "boolean", title = "Telephony Mode", default = false, description = "Enable telephony mode." }
+stationary_noise = { type = "boolean", title = "Stationary Noise", default = true, description = "Enable stationary noise." }
+prop_decrease = { type = "number", title = "Prop decrease", default = 0.75, description = "Noise reduction strength for spectral gating (0–1)." }

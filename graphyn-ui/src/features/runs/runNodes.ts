@@ -385,7 +385,7 @@ export function extractRunFailure(input: {
     const error = errText(ev.error_message) || errText(ev.error) || (t === 'error' ? errText(ev.message) : '')
     if (error) {
       const n = nodeOf(ev)
-      return { nodeId: n.nodeId, nodeType: n.nodeType, error }
+      return { nodeId: n.nodeId, nodeType: n.nodeType, error, ...(str(ev.error_type) ? { errorType: str(ev.error_type) } : {}) }
     }
     if (!failedNode && (ev.status === 'failed' || t === 'node_failed') && str(ev.node_id)) failedNode = nodeOf(ev)
   }

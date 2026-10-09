@@ -24,10 +24,33 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-import mcp.server.stdio
-import mcp.types as types
-from mcp.server.lowlevel import NotificationOptions, Server
-from mcp.server.models import InitializationOptions
+# The MCP SDK is an optional extra (setup.py extras_require["mcp"]); the API
+# image does not bake it (its pins conflict with FastAPI's starlette). Only the
+# stdio transport needs it — the tool catalog (get_tool / _TOOLS) used
+# in-process by the mcp_tool_call node must import without it.
+try:
+    import mcp.server.stdio
+    import mcp.types as types
+    from mcp.server.lowlevel import NotificationOptions, Server
+    from mcp.server.models import InitializationOptions
+
+    MCP_SDK_IMPORT_ERROR: ImportError | None = None
+except ImportError as _sdk_exc:  # pragma: no cover - exercised in a subprocess test
+    MCP_SDK_IMPORT_ERROR = _sdk_exc
+    types = None  # type: ignore[assignment]
+    NotificationOptions = InitializationOptions = None  # type: ignore[assignment]
+
+    class Server:  # type: ignore[no-redef]
+        """Stand-in so the protocol handlers below still define without the SDK."""
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def list_tools(self):
+            return lambda fn: fn
+
+        def call_tool(self):
+            return lambda fn: fn
 
 from app.mcp.auth import check_auth
 
@@ -205,7 +228,16 @@ def _startup() -> None:
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+def _require_sdk() -> None:
+    if MCP_SDK_IMPORT_ERROR is not None:
+        raise RuntimeError(
+            "graphyn mcp (stdio server) needs the MCP SDK: pip install -e \".[mcp]\" "
+            f"(mcp==1.27.0) — {MCP_SDK_IMPORT_ERROR}"
+        )
+
+
 async def _run_server() -> None:
+    _require_sdk()
     async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
         await _server.run(
             read_stream,
@@ -228,6 +260,7 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         stream=sys.stderr,  # Req 1.11: log to stderr, not stdout (stdout = JSON-RPC)
     )
+    _require_sdk()
     _startup()
     try:
         asyncio.run(_run_server())

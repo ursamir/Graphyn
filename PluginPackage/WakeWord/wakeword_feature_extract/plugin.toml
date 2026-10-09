@@ -1,0 +1,33 @@
+[plugin]
+name             = "wakeword-feature-extract"
+version          = "2.0.0"
+description      = "Augment wake-word clips (EQ, distortion, RIR, background SNR mix) and extract frozen mel + speech-embedding features (bundled ONNX, livekit-wakeword)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+tags             = ["wakeword", "augmentation", "features", "onnx", "livekit-wakeword"]
+
+# Wraps livekit-wakeword (Apache-2.0). Isolated venv: torch is pre-installed CPU-only.
+dependencies = [
+    "numpy>=1.24",
+    "soundfile>=0.12",
+    "scipy>=1.11",
+    "onnxruntime>=1.17",
+    "torch>=2.1",
+    "livekit-wakeword[train]>=0.2.1,<0.3",
+    "huggingface-hub>=0.20",
+]
+
+runtime = "isolated"
+node_types = ["wakeword_feature_extract"]
+
+[config_schema.wakeword_feature_extract]
+model_dir = { type = "string", title = "Model dir", default = "", description = "Existing run directory when the input port is not connected." }
+augment = { type = "boolean", title = "Augment", default = true, description = "Apply EQ / distortion / RIR / background mixing before extraction (False = align only)." }
+rounds = { type = "integer", title = "Rounds", default = 1, description = "Augmentation rounds (each compounds on the previous).", minimum = 1, maximum = 10 }
+clip_duration = { type = "number", title = "Clip duration (s)", default = 2.0, description = "Training window; \u22651.3 s gives the 16 embedding steps the classifier needs.", minimum = 1.3, maximum = 5.0 }
+background_dirs = { type = "array", title = "Background dirs", default = [], description = "Extra folders of background WAVs for mixing (added to the run's own).", items = { type = "string" } }
+rir_dirs = { type = "array", title = "RIR dirs", default = [], description = "Folders of room-impulse-response WAVs.", items = { type = "string" } }
+align_negatives = { type = "string", title = "Align negatives", default = "end", description = "end: negatives are end-aligned like positives (word position is no cue \u2014 recommended without ACAV100M); center: upstream behaviour.", enum = ["end", "center"] }
+download_rirs = { type = "boolean", title = "Download RIRs", default = false, description = "Fetch MIT environmental impulse responses (\u22488 MB, huggingface.co) into <data_dir>/rirs." }

@@ -65,6 +65,11 @@ from app.api.routers.models import router as models_router
 from app.api.routers.ship import router as ship_router
 from app.api.routers.identity import router as identity_router
 from app.api.routers.auth import router as auth_router, public_router as auth_public_router
+from app.api.routers.orgs import router as orgs_router
+from app.api.routers.compliance import router as compliance_router
+from app.api.routers.agents import router as agents_router
+from app.api.routers.billing import public_router as billing_public_router
+from app.api.routers.billing import router as billing_router
 from app.api.routers.hooks import public_router as hooks_public_router
 from app.api.routers.hooks import router as hooks_router
 from app.api.routers.gates import router as gates_router
@@ -144,7 +149,30 @@ async def _lifespan(_app: FastAPI):
         _ticker_thread.start()
         _logger.info("Schedule ticker started (60s interval, cross-process lease)")
 
+    # DIST-ORPHAN-1: reconcile in-flight runs against their owner process,
+    # the job queue and worker leases — once at startup, then periodically.
+    _skip_orphan_sweep = (
+        "pytest" in sys.modules
+        or os.environ.get("GRAPHYN_SKIP_ORPHAN_SWEEP", "").strip().lower()
+        in ("1", "true", "yes")
+    )
+    if not _skip_orphan_sweep:
+        try:
+            from app.core.runs.orphans import start_orphan_sweeper
+
+            start_orphan_sweeper()
+        except Exception as exc:
+            _logger.warning("orphan sweeper not started: %s", exc)
+
     yield
+
+    if not _skip_orphan_sweep:
+        try:
+            from app.core.runs.orphans import stop_orphan_sweeper
+
+            stop_orphan_sweeper()
+        except Exception:
+            pass
 
     # OPS-005 / OPS-011: graceful SIGTERM drain — refuse new runs, wait/cancel in-flight.
     try:
@@ -181,13 +209,19 @@ _PUBLIC_API_PATHS = frozenset(
         "/api/v1/system/auth-status",
         "/api/v1/auth/login",
         "/api/v1/workers/join",
+        "/api/v1/billing/webhook",
     }
+)
+_PUBLIC_API_PREFIXES = (
+    "/api/v1/auth/oidc",
 )
 
 
 def _is_public_api_path(path: str) -> bool:
     p = (path or "").rstrip("/") or "/"
-    return p in _PUBLIC_API_PATHS
+    if p in _PUBLIC_API_PATHS:
+        return True
+    return any(p == pref or p.startswith(pref + "/") for pref in _PUBLIC_API_PREFIXES)
 
 
 def _auth_dep(
@@ -248,7 +282,14 @@ def _auth_dep_request(request: Request) -> None:
 
 # ── App factory ───────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Graphyn API", version="2.0.0", lifespan=_lifespan)
+from app.api.safe_json import SafeJSONResponse  # noqa: E402  (F19: NaN/Inf → null, never 500)
+
+app = FastAPI(
+    title="Graphyn API",
+    version="2.0.0",
+    lifespan=_lifespan,
+    default_response_class=SafeJSONResponse,
+)
 
 
 # API-ERR-001: normative error envelope for all /api/v1 non-2xx JSON responses.
@@ -398,7 +439,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS", "DELETE", "PUT", "PATCH"],
     # Enumerate specific headers — allow_headers=["*"] is forbidden by the CORS
     # spec when allow_credentials=True and causes browsers to reject responses.
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Request-Id", "Accept", "X-Actor", "Idempotency-Key", "X-Graphyn-Worker-Id"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Request-Id", "Accept", "X-Actor", "Idempotency-Key", "X-Graphyn-Worker-Id", "X-Graphyn-Org-Id"],
 )
 # Compress large JSON (Outputs listings, run journals). Clients send Accept-Encoding: gzip.
 # Selective: NDJSON run streams, zips and media are passed through untouched.
@@ -428,12 +469,17 @@ app.include_router(models_router,      prefix="/api/v1", dependencies=_deps)
 app.include_router(ship_router,        prefix="/api/v1", dependencies=_deps)
 app.include_router(identity_router,    prefix="/api/v1", dependencies=_deps)
 app.include_router(auth_router,        prefix="/api/v1", dependencies=_deps)
+app.include_router(orgs_router,        prefix="/api/v1", dependencies=_deps)
+app.include_router(compliance_router,  prefix="/api/v1", dependencies=_deps)
+app.include_router(agents_router,      prefix="/api/v1", dependencies=_deps)
 app.include_router(hooks_router,       prefix="/api/v1", dependencies=_deps)
 app.include_router(gates_router,       prefix="/api/v1", dependencies=_deps)
 # Inbound webhooks authenticate themselves (HMAC signature or bearer token —
 # see app/api/routers/hooks.py); they must NOT carry the global bearer dep.
 app.include_router(hooks_public_router, prefix="/api/v1")
 app.include_router(auth_public_router, prefix="/api/v1")
+app.include_router(billing_public_router, prefix="/api/v1")
+app.include_router(billing_router, prefix="/api/v1", dependencies=_deps)
 
 
 @app.get("/")

@@ -1,0 +1,26 @@
+[plugin]
+name             = "clip-segment"
+version          = "1.0.0"
+description      = "Cut videos into clips at detected scenes or fixed windows; writes H.264 clips with ffmpeg (or emits virtual segments)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+tags = ["video", "clips", "segmentation", "ffmpeg"]
+
+# Needs the ffmpeg/ffprobe binaries (with libx264) on PATH (present in the Graphyn image).
+dependencies = ["numpy>=1.24"]
+
+runtime = "inprocess"
+node_types = ["clip_segment"]
+
+[config_schema.clip_segment]
+mode = { type = "string", title = "Mode", default = "scenes", enum = ["scenes", "fixed"], description = "scenes = cut at scene boundaries (needs the scenes input); fixed = fixed windows." }
+window_s = { type = "number", title = "Window (s)", default = 10.0, exclusiveMinimum = 0, description = "Clip length for mode=fixed." }
+hop_s = { type = "number", title = "Hop (s)", default = 0.0, minimum = 0, description = "Step between fixed windows (0 = window_s, no overlap)." }
+min_clip_s = { type = "number", title = "Min clip (s)", default = 0.5, minimum = 0, description = "Drop clips shorter than this." }
+max_clip_s = { type = "number", title = "Max clip (s)", default = 0.0, minimum = 0, description = "Split longer scenes into pieces of at most this (0 = no limit)." }
+max_clips = { type = "integer", title = "Max clips per video", default = 0, minimum = 0, description = "0 = no limit." }
+write_files = { type = "boolean", title = "Write clip files", default = true, description = "Encode each clip to its own MP4; off = virtual segments." }
+output_dir = { type = "string", title = "Output dir", default = "workspace/datasets/video/clips", ui = { group = "Advanced" } }
+crf = { type = "integer", title = "H.264 CRF", default = 23, minimum = 0, maximum = 51, description = "Quality for written clips (lower = better)." }

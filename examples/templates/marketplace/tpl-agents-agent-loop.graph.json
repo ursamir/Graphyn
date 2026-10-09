@@ -1,0 +1,58 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-agents-agent-loop",
+    "seed": 42,
+    "description": "Run a bounded ReAct-style agent loop on a local Ollama model and return its final answer.",
+    "created_at": null,
+    "tags": [
+      "agents",
+      "llm",
+      "loop"
+    ],
+    "pack": "Agents",
+    "industry": "general",
+    "marketplace_id": "tpl-agents-agent-loop",
+    "status": "needs-endpoint",
+    "source_example": "marketplace/tpl-agents-agent-loop.graph.json",
+    "base_template": "tpl-agents-agent-loop",
+    "requires": [
+      "Ollama reachable at OLLAMA_BASE_URL (host on GRAPHYN_HTTP_EGRESS_ALLOWLIST) with the configured model pulled"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "prompt_template",
+      "config": {
+        "template": "Give three tips for recording clean keyword audio."
+      },
+      "label": "goal",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "agent_loop",
+      "config": {
+        "provider": "ollama",
+        "model": "qwen3:0.6b",
+        "max_steps": 2,
+        "tool_allowlist": []
+      },
+      "label": "agent",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "goal",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

@@ -34,6 +34,7 @@ services:
       GRAPHYN_JOB_WAIT_POLL_S: "4.0"
       GRAPHYN_HTTP_EGRESS_MODE: restricted
       GRAPHYN_HTTP_EGRESS_ALLOWLIST: "graphyn-api,api.openai.com,api.groq.com,huggingface.co,objects.githubusercontent.com"
+      GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW: ${GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW:-172.17.0.1:11434,host.docker.internal:11434}
       # WAVE-2: blob encrypt-at-rest (optional), pool quotas, mTLS (overlay file)
       GRAPHYN_BLOB_SIGNING_KEY: ${GRAPHYN_BLOB_SIGNING_KEY:-}
       GRAPHYN_BLOB_ENCRYPTION_KEY: ${GRAPHYN_BLOB_ENCRYPTION_KEY:-}
@@ -96,6 +97,7 @@ services:
       GRAPHYN_JOB_WAIT_POLL_S: "4.0"
       GRAPHYN_HTTP_EGRESS_MODE: restricted
       GRAPHYN_HTTP_EGRESS_ALLOWLIST: "graphyn-api,api.openai.com,api.groq.com,huggingface.co,objects.githubusercontent.com"
+      GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW: ${GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW:-172.17.0.1:11434,host.docker.internal:11434}
       GRAPHYN_BLOB_ENCRYPTION_KEY: ${GRAPHYN_BLOB_ENCRYPTION_KEY:-}
       GRAPHYN_WORKER_SPOOL: ${GRAPHYN_WORKER_SPOOL:-1}
       GRAPHYN_MTLS_ENABLED: ${GRAPHYN_MTLS_ENABLED:-0}

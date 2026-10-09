@@ -1,0 +1,92 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-audio-stream-monitor",
+    "seed": 42,
+    "description": "Stream a file (or microphone/URL) in 100 ms chunks, window it, quality-gate and export windows.",
+    "created_at": null,
+    "tags": [
+      "audio",
+      "streaming",
+      "monitoring"
+    ],
+    "pack": "Audio",
+    "industry": "general",
+    "marketplace_id": "tpl-audio-stream-monitor",
+    "status": "ready",
+    "source_example": "marketplace/tpl-audio-stream-monitor.graph.json",
+    "base_template": "tpl-audio-stream-monitor"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "stream_ingest",
+      "config": {
+        "source": "file_stream",
+        "duration_s": 1.0,
+        "file_path": "workspace/datasets/input/speech-commands/go/0ea0e2f4_nohash_0.wav"
+      },
+      "label": "stream",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "stream_processor",
+      "config": {
+        "window_ms": 500,
+        "hop_ms": 250
+      },
+      "label": "window",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "audio_quality_gate",
+      "config": {
+        "min_snr_db": 0.0,
+        "check_bandwidth": false,
+        "min_duration_s": 0.1
+      },
+      "label": "quality",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "audio_exporter",
+      "config": {
+        "format": "wav",
+        "overwrite": true
+      },
+      "label": "export",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

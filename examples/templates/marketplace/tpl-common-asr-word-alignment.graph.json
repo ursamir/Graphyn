@@ -1,0 +1,118 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-common-asr-word-alignment",
+    "seed": 42,
+    "description": "Transcribe locally then force-align words to audio with torchaudio MMS_FA for word timings.",
+    "created_at": null,
+    "tags": [
+      "common",
+      "captions",
+      "alignment"
+    ],
+    "pack": "Common",
+    "industry": "general",
+    "marketplace_id": "tpl-common-asr-word-alignment",
+    "status": "ready",
+    "source_example": "marketplace/tpl-common-asr-word-alignment.graph.json",
+    "base_template": "tpl-common-asr-word-alignment"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "source_type": "filesystem",
+        "recursive": true,
+        "limit": 8,
+        "path": "workspace/datasets/input/speech-commands"
+      },
+      "label": "ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000,
+        "mono": true
+      },
+      "label": "condition",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "asr_transcribe",
+      "config": {
+        "provider": "local_whisper",
+        "model": "tiny",
+        "language": "en"
+      },
+      "label": "transcribe",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "alignment_node",
+      "config": {
+        "language": "en",
+        "level": "word"
+      },
+      "label": "align",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "audio_exporter",
+      "config": {
+        "format": "wav",
+        "overwrite": true
+      },
+      "label": "export",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "audio",
+      "condition": null
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "transcripts",
+      "condition": null
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

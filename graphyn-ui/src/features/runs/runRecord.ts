@@ -1042,6 +1042,11 @@ export type FailureView = {
  * Failed-step text: backend `error_type` + `error` / `message` + `traceback`,
  * else parse a "Traceback (most recent call last): … \nValueError: msg" blob.
  */
+/** Backend reason codes (not exception classes) → readable label. */
+const ERROR_TYPE_LABELS: Record<string, string> = {
+  orphaned_by_restart: 'Orphaned by restart',
+}
+
 export function failureView(input: {
   error?: unknown
   errorType?: unknown
@@ -1059,6 +1064,11 @@ export function failureView(input: {
     message = last
   }
   if (!message && !tb) return null
+  const reasonCode = errorType || (message.match(/^([a-z][a-z0-9_]+):\s/) || [])[1] || ''
+  if (ERROR_TYPE_LABELS[reasonCode]) {
+    if (message.startsWith(`${reasonCode}:`)) message = message.slice(reasonCode.length + 1).trim()
+    errorType = ERROR_TYPE_LABELS[reasonCode]
+  }
   // "ValueError: msg" → type + msg (only when the prefix looks like an exception class).
   const m = message.match(/^([A-Za-z_][\w.]*(?:Error|Exception|Exit|Interrupt|Warning|Fault|Failure))\s*:\s*([\s\S]*)$/)
   if (m) {

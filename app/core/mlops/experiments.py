@@ -286,7 +286,17 @@ def compare_runs(run_ids: list[str], runs_root: Path | None = None) -> dict[str,
     metric_keys: set[str] = set()
     for row in selected:
         param_keys.update(_as_dict(row.get("parameters")).keys())
-        metric_keys.update(_as_dict(row.get("metrics")).keys())
+        metrics = _as_dict(row.get("metrics"))
+        if not metrics:
+            # F19 (F-15): fall back to the best path's metrics (metrics_by_path).
+            best = next(
+                (p for p in (row.get("metrics_by_path") or []) if isinstance(p, dict) and p.get("best")),
+                None,
+            )
+            if best and isinstance(best.get("metrics"), dict):
+                metrics = dict(best["metrics"])
+                row["metrics"] = metrics
+        metric_keys.update(metrics.keys())
 
     preferred = [k for k in PREFERRED_METRIC_KEYS if k in metric_keys]
     rest = sorted(k for k in metric_keys if k not in preferred)

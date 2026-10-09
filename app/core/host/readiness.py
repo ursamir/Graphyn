@@ -222,13 +222,21 @@ def _compute_snapshot() -> dict[str, Any]:
 
     backend_id = (os.environ.get("GRAPHYN_BACKEND") or "local_python").strip() or "local_python"
     backend_mode = "distributed" if backend_id == "distributed" else "local"
+    # F19 / F-03: ``worker_count`` is *live* workers (fresh heartbeat), the same
+    # set GET /workers returns; stale registrations are reported separately so
+    # readiness can no longer claim a worker that is gone.
     worker_count = 0
+    stale_worker_count = 0
     try:
         from app.core.distributed.registry import get_worker_registry
 
-        worker_count = len(get_worker_registry().list(include_stale=True))
+        _wreg = get_worker_registry()
+        _all = _wreg.list(include_stale=True)
+        worker_count = len([w for w in _all if not _wreg.is_stale(w)])
+        stale_worker_count = len(_all) - worker_count
     except Exception:
         worker_count = 0
+        stale_worker_count = 0
     reg_ready = is_registry_ready()
     init_err = registry_init_error()
 
@@ -270,6 +278,7 @@ def _compute_snapshot() -> dict[str, Any]:
         "backend": backend_id,
         "backend_mode": backend_mode,
         "worker_count": worker_count,
+        "stale_worker_count": stale_worker_count,
         "registry_ready": reg_ready,
         "registry_init_error": init_err,
         "node_type_count": node_type_count,

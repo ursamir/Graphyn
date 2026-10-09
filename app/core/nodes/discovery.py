@@ -99,14 +99,12 @@ def _fqn(cls: type) -> str:
 
 def _port_to_dict(port: InputPort | OutputPort) -> dict:
     """Serialise a port to a dict, replacing data_type with its fqn string."""
+    from app.core.nodes.type_names import type_label
+
     d = port.model_dump()
-    dt = port.data_type
-    if dt is None:
-        d["data_type"] = None
-    elif hasattr(dt, "__module__") and hasattr(dt, "__qualname__"):
-        d["data_type"] = _fqn(dt)
-    else:
-        d["data_type"] = str(dt)
+    # F19 / F-22: keep generics/unions (list[AudioSample] used to collapse to
+    # "builtins.list", which made wire-time type checks meaningless).
+    d["data_type"] = type_label(port.data_type)
     return d
 
 

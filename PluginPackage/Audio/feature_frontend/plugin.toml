@@ -26,6 +26,7 @@ dependencies = [
 ]
 
 node_types = ["feature_frontend"]
+runtime    = "inprocess"  # explicit (was the implicit default)
 
 [config_schema.feature_frontend]
 feature_type = {  type = "string", title = "Feature type", default = "log_mel", description = "Audio feature representation to extract. One of: log_mel, mfcc, spectrogram, chroma, zcr, spectral_centroid, spectral_rolloff, raw. Output is (T, F) per clip.", enum = ["log_mel", "mfcc", "spectrogram", "chroma", "zcr", "spectral_centroid", "spectral_rolloff", "raw"]  }

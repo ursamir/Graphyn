@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING
 
 from app.core.config import project_dir as _project_dir
 from app.core.errors import ResumeError
+from app.core.utils.json_safe import json_safe
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +63,13 @@ def write_cancel_marker(run_dir: str) -> None:
 
 
 class ArtifactCommitForbidden(RuntimeError):
-    """Raised when a cancelled run attempts to commit an artifact (API-FORBID-005)."""
+    """Raised when a cancelled run attempts to commit an artifact (API-FORBID-005).
+
+    RT-CANCEL-003: surfaces as HTTP 409 with code ``run_cancelled``.
+    """
+
+    code = "run_cancelled"
+    status_code = 409
 
 
 if TYPE_CHECKING:
@@ -103,11 +110,17 @@ class RunManager:
         os.makedirs(self.base_path, exist_ok=True)
         # PERS-001 / SRS §13.2: durable pending before async run_id ack;
         # orchestrator calls mark_running() when execution actually starts.
+        # DIST-ORPHAN-1: stamp + heartbeat the owning process so a restart
+        # that kills this run is detected (app.core.runs.orphans).
+        from app.core.runs.orphans import claim_run as _claim_run, owner_stamp as _owner_stamp
+
         self._write_meta({
             "run_id": self.run_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "status": "pending",
+            "owner": _owner_stamp(),
         })
+        _claim_run(self.run_id, self.base_path, self)
 
     # ── Meta persistence ───────────────────────────────────────────────────────
 
@@ -125,7 +138,8 @@ class RunManager:
     def _write_meta_unlocked(self, data: dict, path: str, tmp: str) -> None:
         """Write meta.json atomically. Caller MUST hold _meta_lock."""
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+            # F19: NaN/Inf (e.g. an undefined ROC AUC) → null; strict JSON on disk.
+            json.dump(json_safe(data), f, indent=2, allow_nan=False)
         os.replace(tmp, path)  # atomic on POSIX
 
     def _read_meta_unlocked(self, meta_path: str) -> dict:
@@ -231,7 +245,7 @@ class RunManager:
     def save_logs(self, logs) -> None:
         path = os.path.join(self.base_path, "logs.json")
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(list(logs), f, indent=2, default=str)
+            json.dump(json_safe(list(logs)), f, indent=2, default=str)
 
     def save_metadata(self, metadata: dict) -> bool:
         """Finalize a successful run (status → succeeded) — compare-and-set.

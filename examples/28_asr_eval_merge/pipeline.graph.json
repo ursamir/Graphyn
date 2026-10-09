@@ -3,7 +3,7 @@
   "metadata": {
     "name": "asr_eval_merge",
     "seed": 42,
-    "description": "Fan-out ingest to openai_compat ASR + python_code, merge, eval_gate, csv_table. Requires OPENAI_API_KEY.",
+    "description": "Fan-out ingest to local Whisper ASR + python_code, merge, eval_gate, csv_table. No API keys. pipeline.live.graph.json uses OpenAI-compatible ASR (OPENAI_API_KEY).",
     "created_at": null,
     "tags": [
       "example",
@@ -76,7 +76,7 @@
       "node_type": "csv_table",
       "config": {
         "operation": "write",
-        "path": "workspace/artifacts/asr-eval-merge/merged.csv"
+        "path": "artifacts/asr-eval-merge/merged.csv"
       },
       "label": null,
       "capability_metadata": null,

@@ -66,6 +66,51 @@ def list_models_endpoint():
         return {"models": list_models()}
 
 
+class PromotionPolicyOut(BaseModel):
+    require_separation_of_duties: bool = Field(..., description="Requester and approver of a prod promotion must be different principals")
+    updated_by: Optional[str] = Field(None, description="Admin principal that last changed the policy")
+    updated_at: Optional[str] = Field(None, description="ISO-8601 time of the last change")
+    reason: Optional[str] = Field(None, description="Recorded reason (required to waive SoD)")
+    source: str = Field(..., description="default (no policy file) or policy_file")
+
+
+class PromotionPolicyBody(BaseModel):
+    require_separation_of_duties: bool = Field(..., description="false waives SoD (admin only, audited)")
+    reason: str = Field("", max_length=500, description="Why the policy changes (required when waiving SoD)")
+
+
+@router.get("/promotion-policy", summary="Prod promotion governance policy", response_model=PromotionPolicyOut)
+def get_promotion_policy_endpoint():
+    from app.core.mlops.promotion_policy import get_promotion_policy
+
+    return get_promotion_policy()
+
+
+@router.put(
+    "/promotion-policy",
+    summary="Change prod promotion policy (admin only, audited)",
+    response_model=PromotionPolicyOut,
+)
+def put_promotion_policy_endpoint(body: PromotionPolicyBody, request: Request):
+    from app.api.actor import resolve_identity
+    from app.core.mlops.promotion_policy import SeparationOfDutiesError, set_promotion_policy
+
+    ident = resolve_identity(request)
+    # Users/agents are RBAC-checked for "admin" by middleware; a worker identity never may.
+    if str(ident.get("kind") or "") == "worker":
+        raise HTTPException(status_code=403, detail={"code": "admin_required", "message": "Admin only"})
+    try:
+        return set_promotion_policy(
+            require_separation_of_duties=body.require_separation_of_duties,
+            actor=str(ident.get("actor") or ""),
+            reason=body.reason,
+        )
+    except SeparationOfDutiesError as exc:
+        raise HTTPException(status_code=403, detail={"code": exc.code, "message": str(exc)}) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"code": "reason_required", "message": str(exc)}) from exc
+
+
 @router.get("/{name}", summary="Get one registered model")
 def get_model_endpoint(name: str):
     from app.api.store_guard import ensure_store_readable
@@ -205,8 +250,12 @@ def request_prod_endpoint(name: str, request: Request, body: RequestProdBody = R
 def approve_prod_endpoint(name: str, request: Request):
     from app.core.mlops.model_registry import approve_prod
 
+    from app.core.mlops.promotion_policy import SeparationOfDutiesError
+
     try:
         return approve_prod(name, actor=resolve_actor(request))
+    except SeparationOfDutiesError as exc:
+        raise HTTPException(status_code=403, detail={"code": exc.code, "message": str(exc)}) from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

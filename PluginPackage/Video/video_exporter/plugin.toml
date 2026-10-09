@@ -1,0 +1,20 @@
+[plugin]
+name             = "video-exporter"
+version          = "1.0.0"
+description      = "Write videos/clips into a label-per-folder dataset with manifest.jsonl/manifest.csv, attaching captions, predictions and other per-clip records."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+tags = ["video", "export", "dataset", "manifest"]
+
+# Needs the ffmpeg/ffprobe binaries on PATH (present in the Graphyn image).
+dependencies = ["numpy>=1.24"]
+
+runtime = "inprocess"
+node_types = ["video_exporter"]
+
+[config_schema.video_exporter]
+output_dir = { type = "string", title = "Output dir", default = "workspace/datasets/output/video", ui = { group = "Advanced" } }
+link_mode = { type = "string", title = "Link mode", default = "copy", enum = ["copy", "hardlink"], description = "hardlink saves space when on the same filesystem (falls back to copy)." }
+clean = { type = "boolean", title = "Clean output dir first", default = false }

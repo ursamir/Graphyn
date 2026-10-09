@@ -1,31 +1,40 @@
 # app/core/trust/egress.py
 """
 Bounded Context:  Platform Infrastructure (shared by all BCs)
-Responsibility:   HTTP egress policy for workflow nodes (SSRF hardening).
-Owns:             HttpEgressError, validate_http_egress_url(), is_blocked_ip(),
+Responsibility:   Network egress policy for workflow nodes (SSRF hardening) and
+                  the DNS-rebinding-safe HTTP client every node must use.
+Owns:             HttpEgressError, EgressTarget, check_egress_target(),
+                  check_egress_host(), validate_http_egress_url(),
+                  EgressTransport / egress_client(), is_blocked_ip(),
                   host_on_allowlist(), validated_webhook_ips().
-Public Surface:   validate_http_egress_url(url), validate_webhook_target_url(url),
-                  validated_webhook_ips(url) -> list[str] (raises on deny)
-Must NOT:         Perform the HTTP request itself; only validate destinations.
-                  Must not cache env reads at import time (token/mode rotation).
-Dependencies:     stdlib (ipaddress, socket, urllib.parse), app.core.config.
-Reason To Change: Egress policy expands (pin-IP connect, IPv6 getaddrinfo),
-                  or additional workflow HTTP callers opt in.
+Must NOT:         Cache env reads at import time (token/mode rotation).
+Dependencies:     stdlib (ipaddress, socket, urllib.parse), httpx (lazy),
+                  app.core.config.
+
+Policy (F19 / F-02 — safe by default):
+
+* ``GRAPHYN_HTTP_EGRESS_MODE=restricted`` is the **default**. Every resolved
+  address must be globally routable: loopback, RFC1918, CGNAT, link-local
+  (incl. ``169.254.169.254``), IPv6 ULA / link-local, multicast, reserved and
+  unspecified are denied — unless the target is explicitly listed in
+  ``GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW`` (trusted internal services such as a
+  local Ollama: ``ollama:11434,172.17.0.1:11434,10.0.0.0/8``).
+* Cloud-metadata hosts/addresses (``169.254.0.0/16``, ``fe80::/10``,
+  ``fd00:ec2::254``, ``100.100.100.200``, ``metadata.google.internal``) are
+  denied in **every** mode and can never be allowlisted.
+* ``GRAPHYN_HTTP_EGRESS_ALLOWLIST`` (optional) additionally restricts public
+  hosts to the listed domains.
+* ``trusted`` is an explicit operator opt-out (private targets allowed;
+  metadata still denied).
+
+Resolve-then-connect: :class:`EgressTransport` resolves + validates the host
+for **every** request (so each redirect hop is re-checked) and connects to the
+validated IP (Host header and TLS SNI/cert verification stay on the original
+hostname), so a DNS answer that changes between check and connect cannot
+retarget the socket. ``trust_env`` is off (no proxy bypass).
 
 Error messages never embed the full URL (path/query/userinfo may carry
-webhook tokens); they use redact_webhook_url_for_api(). Blocked addresses are
-everything that is not ``ip.is_global`` (incl. CGNAT 100.64.0.0/10).
-
-Trust model (Option A): default GRAPHYN_HTTP_EGRESS_MODE=trusted preserves
-current behaviour for single-tenant / shared-bearer deployments. Restricted
-mode is defense for multi-tenant or untrusted graph authors — not a full
-network sandbox.
-
-Limitations: validation resolves DNS once at check time; the subsequent HTTP
-client may resolve again (DNS rebinding TOCTOU). Pinning the connection to the
-validated IP (as WebhookService does) is not yet applied to http_request /
-http_webhook. CNAME chains and dual-stack AAAA-only private answers depend on
-getaddrinfo coverage.
+webhook tokens); they use redact_webhook_url_for_api().
 """
 
 from __future__ import annotations
@@ -33,25 +42,45 @@ from __future__ import annotations
 import ipaddress
 import logging
 import socket
+from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import urlparse
 
-from app.core.config import http_egress_allowlist, http_egress_mode
+from app.core.config import (
+    http_egress_allowlist,
+    http_egress_internal_allowlist,
+    http_egress_mode,
+)
 
 log = logging.getLogger(__name__)
 
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 
-# Hostnames commonly used for cloud instance metadata (blocked in restricted).
+# Hostnames commonly used for cloud instance metadata (always blocked).
 _METADATA_HOSTS = frozenset({
     "metadata.google.internal",
     "metadata.goog",
     "metadata",
     "instance-data",
+    "metadata.azure.com",
 })
+
+# Networks that are denied in every mode and can never be allowlisted
+# (instance metadata services live here).
+_NEVER_ALLOW_NETS = tuple(
+    ipaddress.ip_network(n)
+    for n in (
+        "169.254.0.0/16",
+        "fe80::/10",
+        "fd00:ec2::254/128",
+        "100.100.100.200/32",
+    )
+)
 
 
 class HttpEgressError(RuntimeError):
-    """Raised when a workflow HTTP destination is denied by egress policy."""
+    """Raised when a workflow network destination is denied by egress policy."""
 
 
 def is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
@@ -82,6 +111,38 @@ def is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     )
 
 
+def _unmapped(ip: ipaddress.IPv4Address | ipaddress.IPv6Address):
+    if isinstance(ip, ipaddress.IPv6Address):
+        for alt in (ip.ipv4_mapped, ip.sixtofour, ip.teredo[1] if ip.teredo else None):
+            if alt is not None:
+                return alt
+    return ip
+
+
+def is_never_allowed_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Metadata / link-local addresses: denied in every mode, never allowlistable."""
+    for cand in {ip, _unmapped(ip)}:
+        for net in _NEVER_ALLOW_NETS:
+            if cand.version == net.version and cand in net:
+                return True
+    return False
+
+
+def _blocked_reason(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str:
+    cand = _unmapped(ip)
+    if is_never_allowed_ip(ip):
+        return "a link-local / cloud-metadata address"
+    if cand.is_loopback:
+        return "a loopback address"
+    if cand.is_private:
+        return "a private (RFC1918 / ULA) address"
+    if cand.is_multicast:
+        return "a multicast address"
+    if cand.is_unspecified:
+        return "an unspecified address"
+    return "a non-public (reserved / shared) address"
+
+
 def host_on_allowlist(hostname: str, allowlist: list[str] | None = None) -> bool:
     """True when *hostname* exactly matches or is a subdomain of an allowlist entry.
 
@@ -110,10 +171,65 @@ def host_on_allowlist(hostname: str, allowlist: list[str] | None = None) -> bool
     return False
 
 
+def _parse_internal_entry(entry: str) -> tuple[str | None, Any, int | None]:
+    """Return ``(hostname, network, port)`` for one INTERNAL_ALLOW entry."""
+    raw = entry.strip().lower()
+    if "://" in raw:
+        parsed = urlparse(raw)
+        return (parsed.hostname or None), None, parsed.port
+    # CIDR (optionally "cidr" only — no port form for networks)
+    if "/" in raw:
+        try:
+            return None, ipaddress.ip_network(raw, strict=False), None
+        except ValueError:
+            return None, None, None
+    port: int | None = None
+    host = raw
+    if raw.startswith("["):
+        close = raw.find("]")
+        host = raw[1:close]
+        rest = raw[close + 1 :]
+        if rest.startswith(":") and rest[1:].isdigit():
+            port = int(rest[1:])
+    elif raw.count(":") == 1:
+        host, _, p = raw.partition(":")
+        if p.isdigit():
+            port = int(p)
+    try:
+        ip = ipaddress.ip_address(host)
+        return None, ipaddress.ip_network(ip), port
+    except ValueError:
+        return host.rstrip("."), None, port
+
+
+def internal_target_allowed(
+    hostname: str,
+    port: int | None,
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    entries: list[str] | None = None,
+) -> bool:
+    """True when ``hostname``/``ip``/``port`` matches GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW."""
+    if is_never_allowed_ip(ip):
+        return False
+    items = entries if entries is not None else http_egress_internal_allowlist()
+    host = (hostname or "").lower().rstrip(".")
+    for entry in items:
+        e_host, e_net, e_port = _parse_internal_entry(entry)
+        if e_port is not None and port is not None and e_port != port:
+            continue
+        if e_host and host and host == e_host:
+            return True
+        if e_net is not None:
+            for cand in {ip, _unmapped(ip)}:
+                if cand.version == e_net.version and cand in e_net:
+                    return True
+    return False
+
+
 def _resolve_ips(hostname: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
     """Resolve *hostname* via getaddrinfo (IPv4 + IPv6 when available)."""
     try:
-        return [ipaddress.ip_address(hostname)]
+        return [ipaddress.ip_address(hostname.strip("[]"))]
     except ValueError:
         pass
 
@@ -147,66 +263,217 @@ def _resolve_ips(hostname: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Ad
     return ips
 
 
-def validate_http_egress_url(url: str, *, mode: str | None = None) -> None:
-    """Validate *url* against the configured HTTP egress policy.
+@dataclass
+class EgressTarget:
+    """A validated destination: connect only to one of ``ips``."""
 
-    In ``trusted`` mode this is a no-op (aside from requiring a non-empty URL
-    when callers pass one). In ``restricted`` mode:
+    scheme: str
+    hostname: str
+    port: int | None
+    ips: list[str] = field(default_factory=list)
+    mode: str = "restricted"
+    internal: bool = False
 
-    - Only ``http`` / ``https`` schemes
-    - Hostname required
-    - Known cloud-metadata hostnames blocked
-    - Optional host allowlist (when ``GRAPHYN_HTTP_EGRESS_ALLOWLIST`` is set)
-    - All resolved IPs must be public (not RFC1918 / link-local / loopback /
-      ULA / reserved / multicast / unspecified), including ``169.254.169.254``
 
-    Raises:
-        HttpEgressError: when the destination is denied.
+def _effective_mode(mode: str | None) -> str:
+    effective = (mode or http_egress_mode()).lower()
+    if effective not in ("trusted", "restricted"):
+        raise HttpEgressError(
+            f"HTTP egress: unknown mode {effective!r}; use restricted|trusted."
+        )
+    return effective
+
+
+def check_egress_host(
+    hostname: str,
+    port: int | None,
+    *,
+    mode: str | None = None,
+    purpose: str = "HTTP",
+    label: str | None = None,
+) -> EgressTarget:
+    """Resolve + validate ``hostname:port`` against egress policy.
+
+    Returns the validated addresses (connect to one of them — never re-resolve).
+    Raises :class:`HttpEgressError` with a clear, URL-redacted reason.
     """
+    effective = _effective_mode(mode)
+    shown = label or hostname
+    host = (hostname or "").strip()
+    if not host:
+        raise HttpEgressError(f"{purpose} egress: a hostname is required.")
+    host_l = host.lower().rstrip(".").strip("[]")
+    if host_l in _METADATA_HOSTS:
+        raise HttpEgressError(
+            f"{purpose} egress blocked: {shown} is a cloud-metadata host "
+            "(always denied, cannot be allowlisted)."
+        )
+    internal_entries = http_egress_internal_allowlist()
+    allowlist = http_egress_allowlist() if effective == "restricted" else []
+    ips = _resolve_ips(host_l)
+    allowed: list[str] = []
+    internal = False
+    for ip in ips:
+        if is_never_allowed_ip(ip):
+            raise HttpEgressError(
+                f"{purpose} egress blocked: {shown} resolves to {ip}, "
+                f"{_blocked_reason(ip)} (always denied, cannot be allowlisted)."
+            )
+        if effective == "restricted" and is_blocked_ip(ip):
+            if internal_target_allowed(host_l, port, ip, internal_entries):
+                internal = True
+            else:
+                raise HttpEgressError(
+                    f"{purpose} egress blocked: {shown} resolves to {ip}, "
+                    f"{_blocked_reason(ip)}. Private/internal destinations are denied "
+                    "by default (SSRF protection). To allow a trusted internal service, "
+                    "add it to GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW (e.g. 'ollama:11434')."
+                )
+        allowed.append(str(ip))
+    if allowlist and not internal and not host_on_allowlist(host_l, allowlist):
+        raise HttpEgressError(
+            f"{purpose} egress blocked: host {host_l!r} is not on "
+            "GRAPHYN_HTTP_EGRESS_ALLOWLIST."
+        )
+    return EgressTarget(
+        scheme="", hostname=host_l, port=port, ips=allowed, mode=effective, internal=internal
+    )
+
+
+def check_egress_target(url: str, *, mode: str | None = None) -> EgressTarget:
+    """Validate an http(s) *url*; return the :class:`EgressTarget` to pin to."""
     url = (url or "").strip()
     if not url:
         raise HttpEgressError("HTTP egress: URL is required.")
-
-    effective = (mode or http_egress_mode()).lower()
-    if effective == "trusted":
-        return
-    if effective != "restricted":
-        raise HttpEgressError(
-            f"HTTP egress: unknown mode {effective!r}; use trusted|restricted."
-        )
-
     parsed = urlparse(url)
     scheme = (parsed.scheme or "").lower()
     if scheme not in _ALLOWED_SCHEMES:
         raise HttpEgressError(
-            f"HTTP egress: scheme {scheme!r} is not allowed in restricted mode "
-            f"(use http or https). URL={redact_webhook_url_for_api(url)!r}"
+            f"HTTP egress: scheme {scheme!r} is not allowed (use http or https). "
+            f"URL={redact_webhook_url_for_api(url)!r}"
         )
     hostname = parsed.hostname
     if not hostname:
         raise HttpEgressError(
             f"HTTP egress: URL must include a hostname. URL={redact_webhook_url_for_api(url)!r}"
         )
+    try:
+        port = parsed.port or _DEFAULT_PORTS.get(scheme)
+    except ValueError as exc:
+        raise HttpEgressError(f"HTTP egress: invalid port in URL: {exc}") from exc
+    target = check_egress_host(
+        hostname, port, mode=mode, purpose="HTTP",
+        label=redact_webhook_url_for_api(url).replace("/***", ""),
+    )
+    target.scheme = scheme
+    return target
 
-    host_l = hostname.lower().rstrip(".")
-    if host_l in _METADATA_HOSTS:
-        raise HttpEgressError(
-            f"HTTP egress: metadata host {hostname!r} is blocked in restricted mode."
-        )
 
-    allowlist = http_egress_allowlist()
-    if allowlist and not host_on_allowlist(host_l, allowlist):
-        raise HttpEgressError(
-            f"HTTP egress: host {hostname!r} is not on GRAPHYN_HTTP_EGRESS_ALLOWLIST."
-        )
+def validate_http_egress_url(url: str, *, mode: str | None = None) -> None:
+    """Validate *url* against the configured HTTP egress policy (raises on deny).
 
-    for ip in _resolve_ips(hostname):
-        if is_blocked_ip(ip):
-            raise HttpEgressError(
-                f"HTTP egress: {hostname!r} resolves to blocked address {ip} "
-                "(private/link-local/loopback/reserved). Restricted mode denies "
-                "SSRF-prone destinations."
+    Prefer :func:`egress_client` for the request itself: it re-validates and
+    pins the connection to the validated IP (DNS-rebinding safe).
+    """
+    check_egress_target(url, mode=mode)
+
+
+# ── DNS-rebinding-safe HTTP client ────────────────────────────────────────────
+
+def _make_transport_class():
+    import httpx
+
+    class EgressTransport(httpx.HTTPTransport):
+        """httpx transport that validates + IP-pins every request (each redirect hop)."""
+
+        def __init__(self, *args: Any, mode: str | None = None, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._egress_mode = mode
+
+        def handle_request(self, request: "httpx.Request") -> "httpx.Response":
+            target = check_egress_target(str(request.url), mode=self._egress_mode)
+            if not target.ips:
+                return super().handle_request(request)
+            pinned = target.ips[0]
+            headers = request.headers.copy()
+            # Host header keeps the logical host[:port] (brackets for IPv6).
+            headers["Host"] = request.url.netloc.decode("ascii")
+            extensions = dict(request.extensions)
+            if target.scheme == "https":
+                extensions["sni_hostname"] = target.hostname
+            pinned_req = httpx.Request(
+                request.method,
+                request.url.copy_with(host=pinned),
+                headers=headers,
+                stream=request.stream,
+                extensions=extensions,
             )
+            return super().handle_request(pinned_req)
+
+    return EgressTransport
+
+
+_TRANSPORT_CLS = None
+
+
+def egress_transport(*, mode: str | None = None, **kwargs: Any):
+    """Return a new :class:`EgressTransport` instance."""
+    global _TRANSPORT_CLS
+    if _TRANSPORT_CLS is None:
+        _TRANSPORT_CLS = _make_transport_class()
+    return _TRANSPORT_CLS(mode=mode, **kwargs)
+
+
+def egress_client(
+    *,
+    timeout: float | Any = 30.0,
+    follow_redirects: bool = False,
+    max_redirects: int = 5,
+    mode: str | None = None,
+    **kwargs: Any,
+):
+    """``httpx.Client`` whose every request (and redirect hop) is egress-checked + IP-pinned."""
+    import httpx
+
+    return httpx.Client(
+        transport=egress_transport(mode=mode),
+        timeout=timeout,
+        follow_redirects=follow_redirects,
+        max_redirects=max_redirects,
+        trust_env=False,
+        **kwargs,
+    )
+
+
+def egress_request(method: str, url: str, **kwargs: Any):
+    """One-shot egress-safe request (``httpx.request`` signature subset)."""
+    timeout = kwargs.pop("timeout", 30.0)
+    follow = kwargs.pop("follow_redirects", False)
+    with egress_client(timeout=timeout, follow_redirects=follow) as client:
+        resp = client.request(method, url, **kwargs)
+        resp.read()
+        return resp
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def egress_stream(method: str, url: str, **kwargs: Any):
+    """Egress-safe drop-in for ``httpx.stream`` (redirects not followed by default)."""
+    timeout = kwargs.pop("timeout", 30.0)
+    follow = kwargs.pop("follow_redirects", False)
+    with egress_client(timeout=timeout, follow_redirects=follow) as client:
+        with client.stream(method, url, **kwargs) as resp:
+            yield resp
+
+
+def egress_post(url: str, **kwargs: Any):
+    return egress_request("POST", url, **kwargs)
+
+
+def egress_get(url: str, **kwargs: Any):
+    return egress_request("GET", url, **kwargs)
 
 
 def validated_webhook_ips(url: str) -> list[str]:

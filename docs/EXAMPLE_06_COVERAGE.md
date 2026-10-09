@@ -236,7 +236,7 @@ default, enum, bounds) and that `ui.visible_if` references valid fields/values.
 ### edge_optimizer
 | Field | Default | Ex-06 | Verified by |
 |---|---|---|---|
-| backend tflite\|onnx\|tflm\|executorch\|ultralytics_export\|auto (last 3 = stub) | tflite | tflite | M::test_edge_optimizer_stub_backend |
+| backend tflite\|onnx\|tflm\|auto (tflm = .tflite + C arrays + op list; executorch/ultralytics_export removed, rejected at config) | tflite | tflite | M::test_edge_optimizer_tflm_backend, test_f19_edge_targets |
 | quantization float32\|float16\|int8 (TFLite only) | int8 | int8 | M::test_edge_optimizer_quantization[*] (uint8 I/O for int8, shape 1×101×40×1) |
 | representative_samples ≥1 | 100 | 100 | live / local INT8 analysis (§2) |
 | operator_fusion → "Weight optimization" (float32 + on = dynamic-range; result now reported as `dynamic_range`) | true | — | M::test_edge_optimizer_quantization[float32-True-…] |
@@ -247,7 +247,7 @@ default, enum, bounds) and that `ui.visible_if` references valid fields/values.
 ### deployment_packager (Ship → package)
 | Field | Default | Ship | Verified by |
 |---|---|---|---|
-| target edge\|docker\|mobile (runnable bundle) \| mcu (C header) \| cmsis_pack/arduino/zephyr/pte_bundle (stub) | mobile | edge | P::test_edge_package_is_runnable_and_traceable[*] |
+| target edge\|docker\|mobile (runnable bundle) \| mcu (C header) \| arduino (.zip library) / zephyr (module) / cmsis_pack (.pack); pte_bundle removed | mobile | edge | P::test_edge_package_is_runnable_and_traceable[*] |
 | include_inference_script (run_inference.py + serve.py) / include_metadata | true / true | true | as above |
 | (1.1) source_run_id — training run whose Feature Frontend / Dataset Builder config goes into `preprocessing.json` (empty = the package run's declared `source_run_id`, else a `runs/<id>/` segment of the model path) | "" | set by Ship | P::test_source_run_from_model_path |
 | (1.1) selftest strict\|warn\|off, selftest_samples 0–10 | strict / 3 | default | P::test_strict_selftest_fails_on_input_shape_mismatch |

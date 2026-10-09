@@ -70,3 +70,61 @@ def test_silence_audio_spans(installed_cls):
     mid = audio.data[1000:2000]
     assert float(np.max(np.abs(mid))) == 0.0
     assert float(audio.data[0]) == 1.0
+
+
+# ── engine selection: no silent downgrade; overlaps merged ───────────────────
+
+def test_presidio_engine_unavailable_raises(installed_cls, monkeypatch):
+    import sys
+    mod = sys.modules[installed_cls.__module__]
+    monkeypatch.setattr(mod, "presidio_available", lambda: False)
+    node = installed_cls(config={"engine": "presidio"}, seed=0)
+    with pytest.raises(RuntimeError, match="presidio-analyzer"):
+        node.process({"transcript": "mail me at a@b.com"})
+
+
+def test_presidio_failure_raises_not_regex(installed_cls, monkeypatch):
+    import sys
+    mod = sys.modules[installed_cls.__module__]
+    monkeypatch.setattr(mod, "presidio_available", lambda: True)
+
+    def boom(model, language):
+        raise OSError("model download blocked")
+
+    monkeypatch.setattr(mod, "_analyzer", boom)
+    node = installed_cls(config={"engine": "auto"}, seed=0)
+    with pytest.raises(RuntimeError, match="Presidio analysis failed"):
+        node.process({"transcript": "mail me at a@b.com"})
+
+
+def test_auto_without_presidio_uses_regex_and_says_so(installed_cls, monkeypatch):
+    import sys
+    mod = sys.modules[installed_cls.__module__]
+    monkeypatch.setattr(mod, "presidio_available", lambda: False)
+    out = installed_cls(config={"engine": "auto"}, seed=0).process({"transcript": "mail a@b.com"})
+    assert out["audit"].engine == "regex" and out["audit"].n_redacted == 1
+
+
+def test_presidio_overlaps_merged_no_leak(installed_cls, monkeypatch):
+    import sys
+    mod = sys.modules[installed_cls.__module__]
+    text = "Reach john.smith@example.com today"
+    s, e = text.index("john"), text.index(" today")
+
+    class R:
+        def __init__(self, t, a, b, sc):
+            self.entity_type, self.start, self.end, self.score = t, a, b, sc
+
+    class A:
+        def analyze(self, text, language):
+            assert language == "en"
+            return [R("URL", s, s + 10, 0.5), R("EMAIL_ADDRESS", s, e, 1.0), R("URL", s + 11, e, 0.5),
+                    R("DATE_TIME", 0, 5, 0.1)]
+
+    monkeypatch.setattr(mod, "presidio_available", lambda: True)
+    monkeypatch.setattr(mod, "_analyzer", lambda model, language: A())
+    out = installed_cls(config={"engine": "presidio"}, seed=0).process({"transcript": text})
+    assert out["audit"].engine == "presidio"
+    assert [f.entity_type for f in out["audit"].findings] == ["EMAIL_ADDRESS"]
+    red = out["transcript"] if isinstance(out["transcript"], str) else out["transcript"].text
+    assert "example" not in red and "smith" not in red and red.startswith("Reach ")

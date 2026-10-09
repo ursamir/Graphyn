@@ -1,3 +1,4 @@
+import { queueReasonHelp, queueReasonLabel } from '../../lib/fieldLabels'
 import React from 'react'
 import { ListTodo as EmptyListTodo, Server as EmptyServer } from 'lucide-react'
 import { ExternalLink, Plus, RefreshCw, Server, X } from 'lucide-react'
@@ -17,6 +18,7 @@ import {
 } from '../../components/ui'
 import { WorkbenchPage } from '../../layout'
 import { WorkerJoinPanel } from './WorkerJoinPanel'
+import { type FleetTab, fleetTabFromPath, fleetTabPath } from './fleetTab'
 
 /** Same-host smoke command — see docs/SDK_AND_CLI.md `graphyn worker start`. */
 const WORKER_START_CMD =
@@ -37,6 +39,9 @@ type WorkerRow = {
   content_hashes?: Record<string, string> | null
   trusted?: boolean
   max_claimed?: number | null
+  max_slots?: number | null
+  used_slots?: number
+  free_slots?: number | null
   usage_claims?: number
   usage_completes?: number
   usage_bytes_in?: number
@@ -57,6 +62,31 @@ type WorkerRow = {
     vram_mib_free?: number | null
     cpus?: number | null
   }
+}
+
+type QueueJobRow = {
+  job_id: string
+  run_id: string
+  node_id: string
+  node_type: string
+  org_id?: string | null
+  status: string
+  queue_position: number
+  queue_reason?: string | null
+  pool?: string | null
+  created_at?: string | null
+}
+
+type QueueResponse = {
+  queue: QueueJobRow[]
+  pending_count: number
+  worker_slots?: Array<{
+    worker_id: string
+    max_slots?: number | null
+    used_slots?: number
+    free_slots?: number | null
+    status?: string
+  }>
 }
 
 const STALE_AFTER_MS = 45_000
@@ -102,10 +132,25 @@ export default function WorkersView() {
   const [editTrustedTouched, setEditTrustedTouched] = React.useState(false)
   const [editMaxClaimed, setEditMaxClaimed] = React.useState('')
   const [savingAcl, setSavingAcl] = React.useState(false)
-  const [fleetTab, setFleetTab] = React.useState<'workers' | 'queue' | 'join'>('workers')
+  // Deep links: /deploy/workers/queue opens the Queue tab; tab changes update the URL.
+  const [fleetTab, setFleetTabState] = React.useState<FleetTab>(() =>
+    typeof window === 'undefined' ? 'workers' : fleetTabFromPath(window.location.pathname),
+  )
+  const setFleetTab = React.useCallback((tab: FleetTab) => {
+    setFleetTabState(tab)
+    if (typeof window !== 'undefined' && fleetTabFromPath(window.location.pathname) !== tab) {
+      window.history.replaceState(null, '', `${fleetTabPath(tab)}${window.location.search}`)
+    }
+  }, [])
+  React.useEffect(() => {
+    const onPop = () => setFleetTabState(fleetTabFromPath(window.location.pathname))
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
   const [recentRuns, setRecentRuns] = React.useState<
     Array<{ run_id: string; status?: string; created_at?: string; graph_name?: string }>
   >([])
+  const [jobQueue, setJobQueue] = React.useState<QueueResponse | null>(null)
   const [queueNote, setQueueNote] = React.useState<string | null>(null)
 
   const selectWorker = (w: WorkerRow) => {
@@ -132,14 +177,20 @@ export default function WorkersView() {
       setLastRefresh(new Date())
       errorToastShownRef.current = false
       try {
+        const q = await apiJson<QueueResponse>('/jobs/queue')
+        setJobQueue(q && typeof q === 'object' ? q : { queue: [], pending_count: 0 })
+        setQueueNote(null)
+      } catch {
+        setJobQueue(null)
+        setQueueNote('Could not load job queue (GET /jobs/queue).')
+      }
+      try {
         const runs = await apiJson<
           Array<{ run_id: string; status?: string; created_at?: string; graph_name?: string }>
         >('/runs', { query: { limit: 12 } })
         setRecentRuns(Array.isArray(runs) ? runs.slice(0, 12) : [])
-        setQueueNote(null)
       } catch {
         setRecentRuns([])
-        setQueueNote('Could not load recent runs as a queue proxy.')
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -243,53 +294,79 @@ export default function WorkersView() {
           <div>
             <h3 className="text-sm font-semibold text-ink-900">Job queue</h3>
             <p className="mt-1 text-xs text-ink-500 max-w-2xl">
-              There is no list-all jobs API — only <code className="font-mono text-[11px]">GET /jobs/{'{id}'}</code>{' '}
-              plus claim/complete/cancel. Mode B (
-              <code className="font-mono text-[11px]">GRAPHYN_BACKEND=distributed</code>): workers claim eligible
-              jobs from this control plane by label/pool; this tab cannot show a live lease queue.
+              Jobs waiting to start. A worker with a free slot takes the next one it can run —
+              first in, first out, shared fairly between organizations.
             </p>
-            {backendMode === 'distributed' ? (
-              <p className="text-xs text-accent-800 bg-accent-50/80 border border-accent-100 rounded-lg px-3 py-2">
-                Mode B active — queue depth is worker-side. Use heartbeats on Workers and recent run statuses below as
-                a proxy until a list-jobs API exists.
+            {jobQueue ? (
+              <p className="mt-2 text-xs text-ink-500">
+                {jobQueue.pending_count} queued
+                {jobQueue.worker_slots
+                  ? ` · ${jobQueue.worker_slots.length} worker${jobQueue.worker_slots.length === 1 ? '' : 's'} online`
+                  : ''}
               </p>
-            ) : (
-              <p className="text-xs text-ink-500 bg-ink-50 border border-ink-100 rounded-lg px-3 py-2">
-                Mode A (local) runs in-process — the claim queue is unused unless you switch the control plane to
-                distributed.
-              </p>
-            )}
-            <a
-              href="https://github.com/ursamir/Graphyn/blob/main/docs/DISTRIBUTED_EXECUTION.md"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-2 inline-flex items-center gap-1 text-[12px] font-medium text-accent-700 hover:text-accent-900"
-            >
-              <ExternalLink className="h-3 w-3" />
-              Distributed execution · claim protocol
-            </a>
+            ) : null}
           </div>
           {queueNote && <p className="text-sm text-amber-800">{queueNote}</p>}
-          {loading && recentRuns.length === 0 ? (
-            <LoadingBlock label="Loading recent runs…" />
-          ) : recentRuns.length === 0 ? (
-            <EmptyState icon={EmptyListTodo}
-              title="No queue listing available"
-              description="Use recent run statuses below as a rough proxy once runs exist, or inspect a job by id via the API."
+          {loading && !jobQueue ? (
+            <LoadingBlock label="Loading job queue…" />
+          ) : !jobQueue || jobQueue.queue.length === 0 ? (
+            <EmptyState
+              icon={EmptyListTodo}
+              title="Queue is empty"
+              description="When workers are full or org quotas gate concurrency, pending jobs appear here with position and reason."
               action={
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => goView('runs')}
-                >
+                <button type="button" className="btn-secondary" onClick={() => goView('runs')}>
                   Open Runs
                 </button>
               }
             />
           ) : (
+            <div className="overflow-x-auto rounded-xl border border-ink-100">
+              <table className="w-full min-w-[40rem] text-left text-sm">
+                <thead className="border-b border-ink-100 bg-ink-50/80 text-[11px] uppercase tracking-wide text-ink-500">
+                  <tr>
+                    <th className="px-3 py-2 font-semibold">#</th>
+                    <th className="px-3 py-2 font-semibold">Job</th>
+                    <th className="px-3 py-2 font-semibold">Run / node</th>
+                    <th className="px-3 py-2 font-semibold">Org</th>
+                    <th className="px-3 py-2 font-semibold">Reason</th>
+                    <th className="px-3 py-2 font-semibold">Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {jobQueue.queue.map((j) => (
+                    <tr key={j.job_id} className="border-b border-ink-50 last:border-0">
+                      <td className="px-3 py-1.5 font-mono text-xs">{j.queue_position}</td>
+                      <td className="px-3 py-1.5 font-mono text-xs" title={j.job_id}>
+                        {j.job_id.slice(0, 10)}…
+                      </td>
+                      <td className="px-3 py-1.5 text-ink-700">
+                        <div className="font-mono text-xs">{j.run_id.slice(0, 10)}…</div>
+                        <div className="text-[11px] text-ink-500">
+                          {j.node_id} · {j.node_type}
+                        </div>
+                      </td>
+                      <td className="px-3 py-1.5 font-mono text-xs">{j.org_id || '—'}</td>
+                      <td className="px-3 py-1.5">
+                        <StatusBadge
+                          status={String(j.queue_reason || 'waiting_worker')}
+                          label={queueReasonLabel(j.queue_reason)}
+                          title={queueReasonHelp(j.queue_reason)}
+                        />
+                      </td>
+                      <td className="px-3 py-1.5 text-xs text-ink-500 whitespace-nowrap">
+                        {j.created_at ? formatRelativeTime(j.created_at) : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {recentRuns.length > 0 ? (
             <div>
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-                Recent run statuses (proxy)
+                Recent runs
               </div>
               <div className="overflow-x-auto rounded-xl border border-ink-100">
                 <table className="w-full min-w-[32rem] text-left text-sm">
@@ -318,7 +395,7 @@ export default function WorkersView() {
                 </table>
               </div>
             </div>
-          )}
+          ) : null}
         </section>
       ) : loading && workers === null ? (
         <LoadingBlock label="Loading workers…" />
@@ -507,8 +584,14 @@ export default function WorkersView() {
               <div>
                 <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Status</div>
                 <StatusBadge status={String(selected.status ?? (isStale(selected.heartbeat_at) ? 'offline' : 'idle'))} />
-                {typeof selected.active_jobs === 'number' && (
-                  <div className="mt-1 text-ink-600">{selected.active_jobs} active job(s)</div>
+                {(typeof selected.used_slots === 'number' || typeof selected.active_jobs === 'number') && (
+                  <div className="mt-1 text-ink-600">
+                    Slots: {selected.used_slots ?? selected.active_jobs ?? 0}
+                    {selected.max_slots != null || selected.max_claimed != null
+                      ? ` / ${selected.max_slots ?? selected.max_claimed}`
+                      : ' used'}
+                    {selected.free_slots != null ? ` (${selected.free_slots} free)` : ''}
+                  </div>
                 )}
               </div>
               <div>

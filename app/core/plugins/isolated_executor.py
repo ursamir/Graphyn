@@ -2,6 +2,7 @@
 """
 Bounded Context:  BC3 / BC5 — Isolated plugin execution bridge
 Responsibility:   Run an isolated plugin node's process() in a subprocess
+                  (default) or opt-in docker/podman container sandbox
                   using that plugin's venv Python, with pickle IPC via files.
 Owns:             run_isolated_node(), recast_plugin_types(); live parsing
                   of worker ``@@GRAPHYN_PROGRESS@@ <json>`` stderr lines
@@ -864,13 +865,56 @@ def run_isolated_node(
             spec.venv_python,
             timeout,
         )
-        result = _run_isolated_subprocess(
-            cmd,
-            env=env,
-            timeout=timeout,
-            cancel_check=cancel_check,
-            on_progress=progress_sink,
+        from app.core.plugins.container_sandbox import (
+            ContainerSandboxError,
+            plugin_isolation_mode,
+            run_in_container,
         )
+
+        mode = plugin_isolation_mode()
+        if mode in ("container", "docker", "podman"):
+            # Mount host paths at identical absolute locations so cmd/venv work.
+            project_root_p = Path(project_root).resolve()
+            venv_python_p = Path(spec.venv_python).resolve()
+            venv_root = venv_python_p.parent.parent  # .../bin/python -> venv root
+            plugin_dir_p = Path(spec.install_path).resolve()
+            mounts = [
+                (work, str(work), False),
+                (project_root_p, str(project_root_p), True),
+                (venv_root, str(venv_root), True),
+                (plugin_dir_p, str(plugin_dir_p), True),
+            ]
+            # Deduplicate mounts
+            seen = set()
+            uniq = []
+            for h, d, ro in mounts:
+                key = (str(h), d)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if Path(h).exists():
+                    uniq.append((Path(h), d, ro))
+            try:
+                result = run_in_container(
+                    cmd=cmd,
+                    env=env,
+                    work_dir=work,
+                    mounts=uniq,
+                    timeout=timeout,
+                    cancel_check=cancel_check,
+                )
+            except ContainerSandboxError as exc:
+                raise RuntimeError(
+                    f"Container plugin isolation failed for '{node_type}': {exc}"
+                ) from exc
+        else:
+            result = _run_isolated_subprocess(
+                cmd,
+                env=env,
+                timeout=timeout,
+                cancel_check=cancel_check,
+                on_progress=progress_sink,
+            )
         if result.returncode != 0:
             exc = _build_isolated_error(
                 result,
@@ -878,14 +922,17 @@ def run_isolated_node(
                 node_type=node_type,
                 plugin_name=spec.plugin_name,
             )
+            # One line here: the orchestrator logs the node failure and the run
+            # journal keeps the worker traceback (meta.error_traceback / node_error
+            # event), so the container log does not repeat it.
             log.warning(
-                "Isolated plugin worker failed for '%s' (plugin=%s, exit=%s): %s\n%s",
+                "Isolated plugin worker failed for '%s' (plugin=%s, exit=%s): %s",
                 node_type,
                 spec.plugin_name,
                 result.returncode,
                 exc,
-                exc.traceback_text or exc.stderr_tail,
             )
+            log.debug("Isolated worker traceback for '%s':\n%s", node_type, exc.traceback_text or exc.stderr_tail)
             raise exc
         if not outputs_path.exists():
             raise RuntimeError(

@@ -1,0 +1,20 @@
+[plugin]
+name             = "scene-detect"
+version          = "1.0.0"
+description      = "Detect shot/scene boundaries with ffmpeg's scene-change score; merges cuts shorter than a minimum scene length."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+tags = ["video", "scene", "shot-boundary", "ffmpeg"]
+
+# Needs the ffmpeg/ffprobe binaries on PATH (present in the Graphyn image).
+dependencies = ["numpy>=1.24"]
+
+runtime = "inprocess"
+node_types = ["scene_detect"]
+
+[config_schema.scene_detect]
+threshold = { type = "number", title = "Threshold", default = 0.3, exclusiveMinimum = 0, exclusiveMaximum = 1, description = "ffmpeg scene-change score (0–1) above which a frame starts a new scene." }
+min_scene_len_s = { type = "number", title = "Min scene length (s)", default = 1.0, minimum = 0, description = "Cuts closer than this to the previous cut are ignored." }
+analysis_width = { type = "integer", title = "Analysis width (px)", default = 320, minimum = 0, description = "Downscale before scoring for speed (0 = full resolution)." }

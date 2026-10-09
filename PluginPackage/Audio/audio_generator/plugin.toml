@@ -1,0 +1,36 @@
+[plugin]
+name             = "audio-generator"
+version          = "2.0.0"
+description      = "Generate music from text prompts with Meta MusicGen (transformers); optional melody conditioning."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "generation",
+    "musicgen",
+    "generative"
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "soundfile>=0.12",
+    "torch>=2.1",
+    "transformers>=4.40",
+]
+
+runtime = "isolated"
+node_types = ["audio_generator"]
+
+[config_schema.audio_generator]
+model_size = { type = "string", title = "Model size", default = "small", description = "facebook/musicgen-<size> (ignored when conditioning audio selects musicgen-melody).", enum = ["small", "medium", "large"] }
+duration_s = { type = "number", title = "Duration (s)", default = 5.0, description = "Length of generated audio in seconds (max 30)." }
+prompt = { type = "string", title = "Prompt", default = "", description = "Text prompt used when the input port is empty." }
+conditioning_audio = { type = "string", title = "Conditioning audio", default = "", description = "Optional audio file whose melody conditions generation (uses facebook/musicgen-melody)." }
+temperature = { type = "number", title = "Temperature", default = 1.0, description = "Sampling temperature (higher = more random)." }
+top_k = { type = "integer", title = "Top-K", default = 250, description = "Top-k sampling over audio tokens." }
+guidance_scale = { type = "number", title = "Guidance scale", default = 3.0, description = "Classifier-free guidance scale." }
+output_dir = { type = "string", title = "Output dir", default = "workspace/datasets/output/generated_audio", description = "Where generated WAV files are written.", ui = { group = "Advanced" } }

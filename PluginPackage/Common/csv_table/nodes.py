@@ -28,6 +28,10 @@ log = logging.getLogger(__name__)
 
 
 def _rows_of(value: Any) -> list[dict]:
+    from app.core.nodes.payload import unwrap_payload
+
+    # F19 (F-06): CodeResult.data / MappedPayload.data / CsvTableResult.rows …
+    value = unwrap_payload(value)
     if value is None:
         return []
     if hasattr(value, "model_dump"):
@@ -102,7 +106,7 @@ class CsvTableNode(Node):
         "input": InputPort(name="input", data_type=object | None, required=False, description="list[dict] for write"),
     }
     output_ports: ClassVar[dict[str, OutputPort]] = {
-        "output": OutputPort(name="output", data_type=object, description="CsvTableResult"),
+        "output": OutputPort(name="output", data_type=CsvTableResult, description="CsvTableResult"),
     }
 
     class Config(NodeConfig):
@@ -110,20 +114,26 @@ class CsvTableNode(Node):
         path: str = Field(default='', title="Path", description="CSV path relative to the workspace (absolute paths and '..' are rejected).")
         encoding: str = Field(default='utf-8', title="Encoding", description="Text file encoding (e.g. utf-8).")
 
+    @classmethod
+    def missing_run_config(cls, config):
+        if not str(getattr(config, "path", "") or "").strip():
+            return [("path", "CsvTableNode: config.path is required.")]
+        return []
+
     def process(self, inputs):
         payload = inputs.get("input") if isinstance(inputs, dict) else inputs
         op = (self.config.operation or "read").strip().lower()
         raw_path = (self.config.path or "").strip()
         if not raw_path:
             raise RuntimeError("CsvTableNode: config.path is required.")
-        from app.core.paths.write_paths import jail_relative_path
+        from app.core.paths.write_paths import jail_read_path, jail_relative_path
 
-        try:
-            path = jail_relative_path(raw_path, what="CsvTableNode: config.path")
-        except ValueError as exc:
-            raise RuntimeError(str(exc)) from exc
         encoding = self.config.encoding or "utf-8"
         if op == "write":
+            try:
+                path = jail_relative_path(raw_path, what="CsvTableNode: config.path")
+            except ValueError as exc:
+                raise RuntimeError(str(exc)) from exc
             rows = _rows_of(payload)
             path.parent.mkdir(parents=True, exist_ok=True)
             fieldnames: list[str] = []
@@ -146,8 +156,17 @@ class CsvTableNode(Node):
                 row_count=len(rows),
                 metadata={"columns": fieldnames},
             )}
-        if not path.exists():
-            raise RuntimeError(f"CsvTableNode: CSV path not found: {path}")
+        # F19 (F-19): reads follow workspace symlinks into the bundled examples
+        # seed tree (datasets/input/<slug> → examples/<folder>/data); a
+        # ``workspace/`` prefix is accepted once, never doubled.
+        try:
+            path = jail_read_path(raw_path, what="CsvTableNode: config.path")
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"CsvTableNode: CSV path not found: {exc}") from exc
+        if not path.is_file():
+            raise RuntimeError(f"CsvTableNode: CSV path is not a file: {raw_path}")
         with path.open("r", encoding=encoding, newline="") as fh:
             reader = csv.DictReader(fh)
             rows = [dict(r) for r in reader]

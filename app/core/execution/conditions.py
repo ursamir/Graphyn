@@ -159,7 +159,26 @@ class _GuardBinOps(ast.NodeTransformer):
         return ast.copy_location(call, node)
 
 
-def _parse_and_validate(expression: str) -> ast.Expression:
+class _BareNamesToOutput(ast.NodeTransformer):
+    """Rewrite bare field names ``score`` into ``output['score']`` (if_switch, F19)."""
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        if node.id in ("output", "len"):
+            return node
+        sub = ast.Subscript(
+            value=ast.Name(id="output", ctx=ast.Load()),
+            slice=ast.Constant(value=node.id),
+            ctx=ast.Load(),
+        )
+        return ast.copy_location(sub, node)
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        # keep the ``len`` function name itself; rewrite its arguments
+        node.args = [self.visit(a) for a in node.args]
+        return node
+
+
+def _parse_and_validate(expression: str, *, bare_names: bool = False) -> ast.Expression:
     if not isinstance(expression, str):
         raise ConditionEvaluationError("Condition expression must be a string")
     if len(expression) > _MAX_EXPRESSION_LENGTH:
@@ -173,20 +192,24 @@ def _parse_and_validate(expression: str) -> ast.Expression:
         raise ConditionEvaluationError(
             f"Syntax error in condition '{expression}': {exc}"
         ) from exc
+    if bare_names:
+        tree = ast.fix_missing_locations(_BareNamesToOutput().visit(tree))
     _validate_ast(tree)
     return tree
 
 
-def validate_condition_syntax(expression: str) -> None:
+def validate_condition_syntax(expression: str, *, bare_names: bool = False) -> None:
     """Static check (length, syntax, AST whitelist) without evaluating.
 
     Used by graph validation so malformed edge conditions fail before a run.
     Raises ConditionEvaluationError on any problem.
     """
-    _parse_and_validate(expression)
+    _parse_and_validate(expression, bare_names=bare_names)
 
 
-def evaluate_condition(expression: str, output: dict[str, Any]) -> bool:
+def evaluate_condition(
+    expression: str, output: dict[str, Any], *, bare_names: bool = False
+) -> bool:
     """Evaluate a condition expression against a node's output dict.
 
     The expression has access to ``output`` (the source node's output dict)
@@ -205,7 +228,7 @@ def evaluate_condition(expression: str, output: dict[str, Any]) -> bool:
 
     Req 5.2, 5.3, 5.4, 5.5
     """
-    tree = _parse_and_validate(expression)
+    tree = _parse_and_validate(expression, bare_names=bare_names)
     guarded = ast.fix_missing_locations(_GuardBinOps().visit(tree))
 
     try:

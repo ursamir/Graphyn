@@ -62,10 +62,14 @@ def test_http_missing_key(installed_cls):
 
 
 def test_default_provider_is_not_mock(installed_cls, monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    from app.core.credentials.errors import NeedsCredentialsError
+
+    for k in ("OLLAMA_BASE_URL", "OPENAI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY",
+              "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
     node = installed_cls(config={"json_schema": SCHEMA}, seed=0)
-    assert node.config.provider == "openai_compat"
-    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+    assert node.config.provider == "auto"
+    with pytest.raises(NeedsCredentialsError, match="OPENAI_API_KEY"):
         node.process({"input": "hello"})
 
 
@@ -86,24 +90,59 @@ def test_openai_extract_httpx_mocked(installed_cls, monkeypatch):
             "score": 3,
         })}}],
     }
-    with patch("httpx.post", return_value=mock_resp) as mocked:
+    with patch("app.core.trust.egress.egress_post", return_value=mock_resp) as mocked:
         out = node.process({"input": "the customer is unhappy"})["output"]
     assert out.data["pain"] == "latency"
     assert out.provider == "openai_compat"
     mocked.assert_called_once()
 
 
-def test_local_heuristic_provider(installed_cls):
+def test_rule_based_is_honest_not_filler(installed_cls):
+    """F19 (F-23): legacy local_heuristic → rule_based; no first-sentence filler."""
     node = installed_cls(
         config={"provider": "local_heuristic", "json_schema": SCHEMA, "schema_name": "crm"},
         seed=0,
     )
-    out = node.process({"input": "Alex is blocked by pricing. Next we will schedule a demo."})["output"]
-    assert out.provider == "local_heuristic"
-    assert isinstance(out.data, dict)
-    assert out.data.get("pain")
-    assert out.data.get("next_step")
-    assert out.data.get("owner")
+    text = "Alex is blocked by a pricing problem. Next we will schedule a demo."
+    out = node.process({"input": text})["output"]
+    assert out.provider == "rule_based"
+    assert out.metadata["is_llm"] is False
+    assert out.data["pain"] == "Alex is blocked by a pricing problem."
+    assert out.data["next_step"] == "Next we will schedule a demo."
+    # No rule matches "owner"/"score": they stay null and are reported.
+    assert out.data["owner"] is None and out.data["score"] is None
+    assert set(out.metadata["unfilled"]) >= {"owner", "score"}
+    assert out.data["pain"] != out.data["next_step"]
+
+
+def test_rule_based_unwraps_code_result(installed_cls):
+    class CodeResult:
+        def __init__(self, data):
+            self.data = data
+            self.metadata = {}
+
+    node = installed_cls(config={"provider": "rule_based", "json_schema": SCHEMA}, seed=0)
+    out = node.process({"input": CodeResult("We have an issue with latency.")})
+    out = out["output"] if isinstance(out, dict) else out
+    assert out.raw_text == "We have an issue with latency."
+    assert out.data["pain"] == "We have an issue with latency."
+
+
+def test_auto_routes_to_ollama_when_configured(installed_cls, monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    for k in ("OPENAI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://172.17.0.1:11434/v1")
+    monkeypatch.setenv("GRAPHYN_HTTP_EGRESS_INTERNAL_ALLOW", "172.17.0.1:11434")
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {"choices": [{"message": {"content": "```json\n{\"pain\": \"latency\"}\n```"}}]}
+    with patch("app.core.trust.egress.egress_post", return_value=resp):
+        out = installed_cls(config={"json_schema": SCHEMA}, seed=0).process({"input": "x"})
+    out = out["output"] if isinstance(out, dict) else out
+    assert out.provider == "ollama" and out.data == {"pain": "latency"}
+    assert out.metadata["is_llm"] is True
 
 
 def test_openai_compat_groq_key_fallback(installed_cls, monkeypatch):
@@ -132,7 +171,7 @@ def test_openai_compat_groq_key_fallback(installed_cls, monkeypatch):
             "pain": "price", "objections": [], "next_step": "call", "owner": "Sam", "score": 1
         })}}]
     }
-    with patch("httpx.post", return_value=mock_resp) as post:
+    with patch("app.core.trust.egress.egress_post", return_value=mock_resp) as post:
         out = node.process({"input": "hello"})["output"]
     assert out.data["pain"] == "price"
     headers = post.call_args.kwargs.get("headers") or {}

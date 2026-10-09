@@ -75,7 +75,7 @@
       "node_type": "csv_table",
       "config": {
         "operation": "write",
-        "path": "workspace/artifacts/asr-eval-merge/merged.csv"
+        "path": "artifacts/asr-eval-merge/merged.csv"
       },
       "label": null,
       "capability_metadata": null,

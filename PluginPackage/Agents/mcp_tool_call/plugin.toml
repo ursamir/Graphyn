@@ -1,0 +1,24 @@
+[plugin]
+name             = "mcp-tool-call"
+version          = "0.2.0"
+description      = "Invoke an allowlisted Graphyn MCP tool in-process (auth via graphyn_mcp credential)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["agents", "mcp"]
+
+dependencies = []
+
+runtime = "inprocess"
+node_types = ["mcp_tool_call"]
+credential_kinds = ["graphyn_mcp"]
+
+[config_schema.mcp_tool_call]
+timeout_s = { type = "number", title = "Timeout s", default = 60.0, description = "Per-call timeout in seconds (0 = no limit)." }
+server = { type = "string", title = "Server", default = "graphyn", description = "MCP server (only 'graphyn' in-process)." }
+tool_name = { type = "string", title = "Tool name", default = "", description = "Pin the tool; data may not request a different one." }
+tool_allowlist = { type = "array", title = "Tool allowlist", default = [], description = "Tools this node may call. Empty → refuse all." }
+allow_mutating = { type = "boolean", title = "Allow mutating", default = false, description = "Permit state-changing / credential / execution tools (still must be allowlisted)." }
+connection_id = { type = "string", title = "Credential connection id", default = "", description = "Credential of kind graphyn_mcp (agent/API token) used when the platform requires auth. Empty → workspace default for that kind." }

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 import threading
 import time
 import uuid
@@ -359,6 +360,31 @@ def _wait_remote_result(
             _ack(queue, job_id)
             return result
         wait_slice = min(wait_slice_cap, wait_slice * 1.5)
+
+
+def _job_retry_fields(ir_node: Any, config: dict) -> dict[str, Any]:
+    """F19: lease-loss policy for a remote job.
+
+    ``idempotent`` from the node (metadata / ``idempotent_for(config)``);
+    ``max_attempts`` (reclaim cycles) from IR ``retry.max_attempts`` (total
+    executions) when the graph sets one — ``max_attempts=1`` means a lost lease
+    is not retried.
+    """
+    from app.core.nodes.idempotency import node_is_idempotent
+
+    out: dict[str, Any] = {"idempotent": node_is_idempotent(ir_node.node_type, config)}
+    try:
+        from app.core.execution.planner import _policy_dict
+
+        retry = _policy_dict(getattr(ir_node, "retry", None))
+    except Exception:
+        retry = None
+    if isinstance(retry, dict) and retry.get("max_attempts") is not None:
+        try:
+            out["max_attempts"] = max(0, int(retry["max_attempts"]) - 1)
+        except (TypeError, ValueError):
+            pass
+    return out
 
 
 def _ack(queue: Any, job_id: str) -> None:
@@ -1092,6 +1118,28 @@ class DistributedBackend(RuntimeBackend):
                     safe_cfg = assert_remote_config_safe(
                         dict(ir_node.config) if ir_node.config else {}
                     )
+                    # F18: stamp org_id for fair-share + org concurrent quotas.
+                    job_org_id = None
+                    try:
+                        import json as _json
+                        meta: dict = {}
+                        base = getattr(run, "base_path", None)
+                        if base:
+                            mp = os.path.join(str(base), "meta.json")
+                            if os.path.isfile(mp):
+                                with open(mp, encoding="utf-8") as _mf:
+                                    meta = _json.load(_mf)
+                        job_org_id = meta.get("org_id") if isinstance(meta, dict) else None
+                        if not job_org_id and isinstance(meta, dict) and meta.get("project"):
+                            from app.core.trust.orgs import get_org_store
+
+                            job_org_id = get_org_store().project_org_id(str(meta.get("project")))
+                        if not job_org_id:
+                            from app.core.trust.identity import current_identity
+
+                            job_org_id = (current_identity() or {}).get("org_id")
+                    except Exception:
+                        job_org_id = None
                     job = NodeJob(
                         job_id=str(uuid.uuid4()),
                         run_id=run_id,
@@ -1107,6 +1155,8 @@ class DistributedBackend(RuntimeBackend):
                         tags=list(constraints["tags"]),
                         pool=constraints["pool"],
                         timeout_s=default_timeout,
+                        org_id=str(job_org_id) if job_org_id else None,
+                        **_job_retry_fields(ir_node, safe_cfg),
                     )
                     _remote_start = _time.time()
                     idx = node_index.get(node_id, 0)
@@ -1154,10 +1204,14 @@ class DistributedBackend(RuntimeBackend):
                                 f"(node={node_id})"
                             )
                         if result.status != "succeeded":
-                            raise RuntimeError(
+                            _remote_exc = RuntimeError(
                                 f"Distributed job {stored.job_id} (node={node_id}) "
                                 f"ended with status={result.status}: {result.error}"
                             )
+                            # A user/control-plane cancel is not a failure: log it
+                            # at INFO, not ERROR (F19 — clean container logs).
+                            _remote_exc.cancelled = result.status == "cancelled"
+                            raise _remote_exc
                     except Exception as exc:
                         if logger is not None:
                             try:

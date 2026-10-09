@@ -22,7 +22,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, ClassVar, Literal
-from pydantic import Field
+from pydantic import Field, field_validator
 
 import numpy as np
 
@@ -206,7 +206,7 @@ class EdgeOptimizerNode(Node):
     SISO node: reads ModelArtifact, produces DeploymentArtifact.
 
     Config options:
-        backend                (str):  "tflite" | "onnx" | "auto". Default: "tflite"
+        backend                (str):  "tflite" | "onnx" | "tflm" | "auto". Default: "tflite"
         quantization           (str):  "float32" | "float16" | "int8". Default: "int8"
         output_path            (str):  Directory for output model and labels.txt.
         representative_samples (int):  Number of calibration batches for INT8. Default: 100
@@ -253,16 +253,32 @@ class EdgeOptimizerNode(Node):
     }
 
     class Config(NodeConfig):
-        backend: Literal["tflite", "onnx", "tflm", "executorch", "ultralytics_export", "auto"] = Field(default='tflite', title="Backend", description="Export format. tflite = TensorFlow Lite (supports quantization); onnx = ONNX (float32 only); tflm, executorch, ultralytics_export = placeholder only, use the dedicated export nodes; auto = tflite when available, else onnx.")
+        backend: Literal["tflite", "onnx", "tflm", "auto"] = Field(default='tflite', title="Backend", description="Export format. tflite = TensorFlow Lite (supports quantization); onnx = ONNX (float32 only); tflm = TensorFlow Lite for Microcontrollers (the .tflite plus C source arrays and an op-resolver list); auto = tflite when available, else onnx.")
         quantization: Literal["float32", "float16", "int8"] = Field(default='int8', title="Quantization", description="float32 = no quantization; float16 = half-precision weights; int8 = full integer model (uint8 input/output), calibrated on training samples. TFLite only.")
         output_path: str = Field(default='workspace/artifacts/optimized', title="Output path", description="Folder for the exported model and its labels.txt.")
         representative_samples: int = Field(default=100, ge=1, title="Representative samples", description="Number of training samples used to calibrate int8 quantization.")
         prune: bool = Field(default=False, title="Prune", description="Not implemented yet: On only logs a warning.")
         operator_fusion: bool = Field(default=True, title="Weight optimization", description="float32 only: On stores weights as int8 for a smaller file (activations stay float); Off keeps a pure float32 model.")
 
+        @field_validator("backend", mode="before")
+        @classmethod
+        def _route_removed_backends(cls, v):
+            name = str(v or "").strip().lower()
+            if name == "executorch":
+                raise ValueError(
+                    "backend 'executorch' was removed: ExecuTorch export needs torch + executorch, "
+                    "which this build does not ship. Use 'tflm' for microcontrollers or 'onnx'."
+                )
+            if name == "ultralytics_export":
+                raise ValueError(
+                    "backend 'ultralytics_export' was removed: YOLO export belongs to the vision "
+                    "pack, which is not part of this build. Use 'tflite' or 'onnx'."
+                )
+            return v
+
     def __init__(self, config=None, seed: int = 0, observer=None) -> None:
         super().__init__(config=config, seed=seed, observer=observer)
-        allowed_backends = {"tflite", "onnx", "tflm", "executorch", "ultralytics_export", "auto"}
+        allowed_backends = {"tflite", "onnx", "tflm", "auto"}
         if self.config.backend not in allowed_backends:
             raise ValueError(
                 f"EdgeOptimizerNode: backend must be one of {allowed_backends}, "
@@ -283,7 +299,7 @@ class EdgeOptimizerNode(Node):
         Returns a concrete backend name. Raises ImportError if neither tflite
         nor onnx is available and backend="auto".
         """
-        if self.config.backend in ("tflite", "onnx", "tflm", "executorch", "ultralytics_export"):
+        if self.config.backend in ("tflite", "onnx", "tflm"):
             return self.config.backend
         # auto: prefer tflite if tensorflow available, else onnx
         try:
@@ -795,10 +811,10 @@ class EdgeOptimizerNode(Node):
             result = self._export_tflite(artifact, out_path)
         elif backend == "onnx":
             result = self._export_onnx(artifact, out_path)
-        else:
-            # Additive backends (tflm / executorch / ultralytics_export): stub package
-            # unless optional deps present — prefer dedicated TinyML/Vision nodes.
-            result = self._export_stub_backend(artifact, out_path, backend)
+        elif backend == "tflm":
+            result = self._export_tflm(artifact, out_path)
+        else:  # pragma: no cover - validator restricts the enum
+            raise ValueError(f"EdgeOptimizerNode: unsupported backend '{backend}'")
         self._publish_opt_tree(out_path)
         return result
 
@@ -822,34 +838,53 @@ class EdgeOptimizerNode(Node):
         except Exception as exc:
             log.warning("EdgeOptimizerNode: publish_files failed: %s", exc)
 
-    def _export_stub_backend(self, artifact, out_path: Path, backend: str):
-        """Minimal DeploymentArtifact for additive backends without heavy deps."""
-        from app.models.deployment_artifact import DeploymentArtifact
-        dest = out_path / f"optimized_{backend}"
-        dest.mkdir(parents=True, exist_ok=True)
-        marker = dest / "BACKEND_STUB.txt"
-        marker.write_text(
-            f"EdgeOptimizerNode backend={backend} stub.\n"
-            f"Prefer dedicated nodes (tflm_quantize / executorch_export / yolo_export).\n"
-            f"source={artifact.model_path}\n",
+    def _export_tflm(self, artifact, out_path: Path):
+        """TFLite Micro: real .tflite + C arrays + the exact op-resolver list (F-05)."""
+        from app.core.ml.embedded_packaging import (
+            is_tflite,
+            op_resolver_source,
+            tflite_operators,
+            write_c_model,
+        )
+
+        base = self._export_tflite(artifact, out_path)
+        tfl = Path(base.artifact_path)
+        if not is_tflite(tfl):
+            raise RuntimeError(f"EdgeOptimizerNode: TFLite export did not produce a flatbuffer at {tfl}")
+        model_bytes = tfl.read_bytes()
+        ops = tflite_operators(model_bytes)
+        resolver, unsupported = op_resolver_source(model_bytes)
+        if unsupported:
+            raise ValueError(
+                "EdgeOptimizerNode: the model uses operators TensorFlow Lite Micro does not "
+                f"implement ({', '.join(unsupported)}); use backend 'tflite' instead."
+            )
+        c_dir = tfl.parent / "tflm"
+        labels = list(base.labels or _artifact_labels(artifact))
+        header, source = write_c_model(model_bytes, c_dir, symbol="g_model", labels=labels)
+        (c_dir / "op_resolver.inc").write_text(
+            "// Generated by Graphyn: the operators this model uses (paste before MicroInterpreter).\n"
+            + resolver + "\n",
             encoding="utf-8",
         )
-        labels = _artifact_labels(artifact)
-        if labels:
-            (dest / "labels.txt").write_text("\n".join(labels), encoding="utf-8")
-        labels_file = dest / "labels.txt"
-        return _deployment_artifact_with_refs(
-            artifact_path=str(dest),
-            model_format=backend,
-            target_hardware="mcu" if backend in ("tflm", "executorch") else "cpu",
-            quantization=str(self.config.quantization),
-            labels=labels,
-            metadata={
-                "backend": backend,
-                "stub": True,
-                "source": artifact.model_path,
-                "labels": list(labels),
-                "display_name": _export_display_name(artifact, backend, str(self.config.quantization)),
-            },
-            labels_path=str(labels_file) if labels_file.is_file() else "",
+        meta = dict(base.metadata or {})
+        meta.update(
+            {
+                "backend": "tflm",
+                "tflm": {
+                    "header": str(header),
+                    "source": str(source),
+                    "op_resolver": str(c_dir / "op_resolver.inc"),
+                    "operators": ops,
+                    "model_bytes": len(model_bytes),
+                },
+                "display_name": _export_display_name(artifact, "tflm", str(self.config.quantization)),
+            }
         )
+        try:
+            return base.model_copy(update={"model_format": "tflm", "target_hardware": "mcu", "metadata": meta})
+        except Exception:
+            base.model_format = "tflm"
+            base.target_hardware = "mcu"
+            base.metadata = meta
+            return base

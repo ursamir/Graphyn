@@ -1,0 +1,35 @@
+[plugin]
+name             = "voice-converter"
+version          = "2.0.0"
+description      = "Any-to-any voice conversion with kNN-VC (WavLM-Large features matched to a target speaker's reference audio, prematched HiFi-GAN vocoder; weights via torch.hub bshall/knn-vc). Optional librosa pitch shift."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "voice-conversion",
+    "knnvc",
+    "wavlm",
+    "timbre",
+    "generative"
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "librosa>=0.10",
+    "soundfile>=0.12",
+    "torch>=2.1",
+    "torchaudio>=2.1",
+]
+
+runtime = "isolated"
+node_types = ["voice_converter"]
+
+[config_schema.voice_converter]
+backend = { type = "string", title = "Backend", default = "knnvc", description = "knnvc: convert to the target speaker's voice (kNN-VC). pitch_shift: shift the pitch only (no speaker change).", enum = ["knnvc", "pitch_shift"] }
+target_speaker = { type = "string", title = "Target speaker reference", default = "", description = "Reference audio of the target voice: file path(s), comma-separated, or a directory. Required for knnvc." }
+topk = { type = "integer", title = "k (neighbours)", default = 4, minimum = 1, maximum = 32, description = "Number of nearest target frames averaged per source frame." }
+pitch_shift_semitones = { type = "number", title = "Pitch shift (semitones)", default = 0.0, minimum = -24.0, maximum = 24.0, description = "Pitch shift applied after conversion (or alone with backend=pitch_shift)." }
+device = { type = "string", title = "Device", default = "cpu", enum = ["cpu", "cuda", "auto"] }

@@ -3,7 +3,7 @@
   "metadata": {
     "name": "meeting-crm",
     "seed": 42,
-    "description": "Meeting CRM: local_whisper ASR \u2192 PII redact \u2192 local_heuristic extract \u2192 eval_gate \u2192 httpbin webhook. Free local E2E.",
+    "description": "Meeting CRM, offline: local Whisper ASR -> PII redact -> rule-based CRM fields -> eval gate -> local object store (workspace/artifacts/meeting-crm/store). No API keys; examples/23_meeting_crm/pipeline.live.graph.json is the hosted variant.",
     "created_at": null,
     "tags": [
       "example",
@@ -52,7 +52,7 @@
       "id": "structured_llm_3",
       "node_type": "structured_llm",
       "config": {
-        "provider": "local_heuristic",
+        "provider": "rule_based",
         "schema_name": "meeting_crm",
         "json_schema": {
           "type": "object",
@@ -89,23 +89,20 @@
       "node_type": "eval_gate",
       "config": {
         "check_empty_transcript": false,
-        "required_keys": [
-          "pain",
-          "next_step",
-          "owner"
-        ]
+        "required_keys": []
       },
       "label": null,
       "capability_metadata": null,
       "event_trigger": null
     },
     {
-      "id": "http_webhook_5",
-      "node_type": "http_webhook",
+      "id": "object_store_5",
+      "node_type": "object_store",
       "config": {
-        "url": "https://httpbin.org/post",
-        "timeout_s": 2.0,
-        "provider": "http"
+        "backend": "local",
+        "operation": "put",
+        "root": "workspace/artifacts/meeting-crm/store",
+        "prefix": "meetings"
       },
       "label": null,
       "capability_metadata": null,
@@ -144,7 +141,7 @@
     {
       "src_id": "eval_gate_4",
       "src_port": "output",
-      "dst_id": "http_webhook_5",
+      "dst_id": "object_store_5",
       "dst_port": "input",
       "condition": null
     }

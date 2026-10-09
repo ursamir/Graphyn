@@ -226,6 +226,22 @@ def materialize_artifact_refs(
         def get_fn(uri: str, expected_sha256: str | None = None) -> bytes:  # type: ignore[misc]
             return get_blob(uri, expected_sha256=expected_sha256)
 
+    # Residency guard (F15): a ResidencyError must propagate; any other failure of
+    # the optional residency check must not block materialisation.
+    try:
+        import os as _os
+        from app.core.trust.residency import assert_workspace_placement
+
+        assert_workspace_placement(
+            (_os.environ.get("GRAPHYN_ACTIVE_ORG_REGION") or "").strip() or None
+        )
+    except Exception as _exc:
+        from app.core.trust.residency import ResidencyError
+
+        if isinstance(_exc, ResidencyError):
+            raise
+    # F19 (F-01): root must be bound on the normal path too — previously it was
+    # only assigned inside ``except`` so every call raised UnboundLocalError.
     root = Path(materialize_dir) if materialize_dir is not None else default_materialize_root()
     if port:
         root = inputs_materialize_dir(root, port)
@@ -450,7 +466,12 @@ def verify_blob_bytes(
             )
 
 
-def put_blob_with_digest(data: bytes, *, key: str | None = None) -> tuple[str, str]:
+def put_blob_with_digest(
+    data: bytes,
+    *,
+    key: str | None = None,
+    org_region: str | None = None,
+) -> tuple[str, str]:
     """Store raw bytes; return ``(artifact://local/{key}, sha256_hex)``.
 
     When ``key`` is omitted a sha256 content-addressed key is used. Blobs are
@@ -460,7 +481,26 @@ def put_blob_with_digest(data: bytes, *, key: str | None = None) -> tuple[str, s
     Content-addressing always hashes **plaintext**. When
     ``GRAPHYN_BLOB_ENCRYPTION_KEY`` is set the on-disk file is a GBE1 envelope
     (see ``blob_crypto``); ``get_blob`` decrypts then verifies sha256.
+
+    When ``GRAPHYN_RESIDENCY_ENFORCE=1``, *org_region* (or
+    ``GRAPHYN_ACTIVE_ORG_REGION``) is checked against this node's
+    ``GRAPHYN_RESIDENCY_REGION`` — mismatch raises ``ResidencyError``.
     """
+    try:
+        from app.core.trust.residency import assert_blob_placement
+        import os as _os
+
+        region = org_region
+        if region is None:
+            region = (_os.environ.get("GRAPHYN_ACTIVE_ORG_REGION") or "").strip() or None
+        assert_blob_placement(region)
+    except Exception as _res_exc:
+        from app.core.trust.residency import ResidencyError
+
+        if isinstance(_res_exc, ResidencyError):
+            raise
+        # residency module unavailable — do not block puts
+        pass
     if not isinstance(data, (bytes, bytearray)):
         raise TypeError(f"put_blob expects bytes, got {type(data)!r}")
     body = bytes(data)
@@ -535,9 +575,9 @@ def put_blob_with_digest(data: bytes, *, key: str | None = None) -> tuple[str, s
     return uri, digest
 
 
-def put_blob(data: bytes, *, key: str | None = None) -> str:
+def put_blob(data: bytes, *, key: str | None = None, org_region: str | None = None) -> str:
     """Store raw bytes (write-once); return ``artifact://local/{key}``."""
-    return put_blob_with_digest(data, key=key)[0]
+    return put_blob_with_digest(data, key=key, org_region=org_region)[0]
 
 
 def get_blob(uri: str, *, expected_sha256: str | None = None) -> bytes:

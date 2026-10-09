@@ -9,8 +9,10 @@ import { cleanError } from './accessApi'
 import { MyAccountPanel } from './MyAccountPanel'
 import { ProjectMembersPanel } from './ProjectMembersPanel'
 import { UsersPanel } from './UsersPanel'
+import { OrgsPanel } from './OrgsPanel'
+import { AgentsPanel } from './AgentsPanel'
 
-type Tab = 'me' | 'users' | 'members'
+type Tab = 'me' | 'users' | 'members' | 'orgs' | 'agents'
 
 /**
  * Access: who you are + (admins) users, roles and project membership.
@@ -37,6 +39,8 @@ export default function AccessView() {
   const tabs: Array<{ id: Tab; label: string }> = [{ id: 'me', label: 'My access' }]
   if (canAdminUsers && usersConfigured) tabs.push({ id: 'users', label: 'Users & roles' })
   if ((canAdminUsers || ownsProject) && usersConfigured) tabs.push({ id: 'members', label: 'Project members' })
+  if (isUserAccount(me) || canAdminUsers) tabs.push({ id: 'orgs', label: 'Organizations' })
+  if (canAdminUsers && usersConfigured) tabs.push({ id: 'agents', label: 'Agents' })
   const current = tabs.some((t) => t.id === tab) ? tab : 'me'
 
   return (
@@ -49,6 +53,10 @@ export default function AccessView() {
         <UsersPanel />
       ) : current === 'members' ? (
         <ProjectMembersPanel canListUsers={canAdminUsers} />
+      ) : current === 'orgs' ? (
+        <OrgsPanel canListUsers={canAdminUsers} />
+      ) : current === 'agents' ? (
+        <AgentsPanel />
       ) : me && isUserAccount(me) ? (
         <MyAccountPanel me={me} />
       ) : (

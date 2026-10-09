@@ -323,12 +323,34 @@ def test_mcp_handler_error_structured(mcp, fake_tools):
 
 
 def test_mcp_auth_enforced(mcp, fake_tools, monkeypatch):
+    """With platform auth on, the node resolves a graphyn_mcp credential and
+    injects its token; without one it fails closed; data cannot spoof it."""
+    import app.core.credentials.resolve as resolve
+
     monkeypatch.setenv("GRAPHYN_API_TOKEN", "s3cret")
     node = mcp.McpToolCallNode(config={"tool_allowlist": ["list_nodes"]})
-    with pytest.raises(PermissionError, match="Authentication"):
+    with pytest.raises(resolve.NeedsCredentialsError, match="graphyn_mcp"):
         node.process({"tool_name": "list_nodes", "arguments": {}})
-    out = node.process({"tool_name": "list_nodes", "arguments": {"_meta": {"auth_token": "s3cret"}}})
-    assert out["output"].ok
+    assert fake_tools == []
+
+    stored = {"token": "wrong"}
+    monkeypatch.setattr(resolve, "resolve_connection", lambda **kw: {
+        "connection_id": "c1", "kind": kw["kind"], "source": "store", "payload": dict(stored)})
+    with pytest.raises(PermissionError, match="Authentication"):
+        node.process({"tool_name": "list_nodes", "arguments": {"_meta": {"auth_token": "s3cret"}}})
+    assert fake_tools == []
+
+    stored["token"] = "s3cret"
+    out = node.process({"tool_name": "list_nodes", "arguments": {}})
+    assert out["output"].ok and [c[0] for c in fake_tools] == ["list_nodes"]
+    assert fake_tools[0][1]["_meta"]["auth_token"] == "s3cret"  # same shape the MCP server passes
+
+
+def test_mcp_credential_kind_registered(mcp):
+    from app.core.credentials.kinds import get_kind
+
+    kind = get_kind("graphyn_mcp")
+    assert kind is not None and any(f.name == "token" and f.secret for f in kind.fields)
 
 
 # ── 4. tool_router ────────────────────────────────────────────────────────────
@@ -524,6 +546,20 @@ def test_memory_concurrent_writes_not_lost(mem, tmp_path):
     assert len(json.loads(Path(path).read_text())["default"]) == 25
 
 
+def test_memory_record_key_stores_any_payload(mem, tmp_path):
+    path = tmp_path / "r.json"
+    node = mem.MemoryStoreNode(config={"persist_path": str(path), "namespace": "runs", "key": "last_route"})
+    out = node.process({"input": {"tool_name": "inspect_run", "arguments": {}}})["output"]
+    assert out.key == "last_route" and out.metadata["op"] == "set"
+    assert json.loads(path.read_text()) == {"runs": {"last_route": {"tool_name": "inspect_run", "arguments": {}}}}
+    # A real MemoryOp still wins over the record key.
+    node.process({"input": {"key": "other", "value": 1}})
+    assert node.process({"input": {"key": "other"}})["output"].value == 1
+    # Without a record key, a dict that is not a MemoryOp is still rejected clearly.
+    with pytest.raises(ValueError, match="key is required"):
+        mem.MemoryStoreNode(config={"persist_path": str(path)}).process({"input": {"tool_name": "x"}})
+
+
 def test_memory_backend_memory(mem):
     node = mem.MemoryStoreNode(config={"backend": "memory", "namespace": "t-mem"})
     node.process({"input": {"key": "a", "value": [1]}})
@@ -532,14 +568,85 @@ def test_memory_backend_memory(mem):
 
 # ── 8. agent_loop ─────────────────────────────────────────────────────────────
 
-def test_agent_loop_is_labelled_extractive():
+def _fake_llm(monkeypatch, replies):
+    import app.core.ml.llm_client as llm_client
+
+    seen = []
+
+    def fake_chat(**kw):
+        seen.append(kw)
+        return {"content": replies.pop(0), "model": kw["model"], "base_url": "http://llm.test/v1"}
+
+    monkeypatch.setattr(llm_client, "chat_completion", fake_chat)
+    return seen
+
+
+def test_agent_loop_calls_llm_and_answers(monkeypatch):
     al = _load("agent_loop")
-    node = al.AgentLoopNode(config={"max_steps": 2})
+    seen = _fake_llm(monkeypatch, ['<think>hmm</think>{"action": "final", "answer": "cats are here"}'])
+    node = al.AgentLoopNode(config={"max_steps": 2, "model": "m1"})
     out = node.process({"goal": "find cats", "context": "cats are here"})["output"]
-    assert out.mode == "extractive"
-    assert out.metadata["llm_called"] is False
-    assert "extractive" in al.AgentLoopNode.metadata.description.lower()
-    assert "extractive" in _toml("agent_loop")["plugin"]["description"].lower()
+    assert out.mode == "llm" and out.final == "cats are here"
+    assert out.metadata["llm_called"] is True and out.metadata["llm_calls"] == 1
+    assert "cats are here" in seen[0]["messages"][1]["content"]
+    assert seen[0]["model"] == "m1" and seen[0]["temperature"] == 0.0
+    calls = node.take_external_calls()
+    assert len(calls) == 1 and calls[0]["kind"] == "llm" and calls[0]["status"] == 200
+    assert "extractive" not in al.AgentLoopNode.metadata.description.lower()
+
+
+def test_agent_loop_tool_round_trip(monkeypatch, fake_tools):
+    al = _load("agent_loop")
+    seen = _fake_llm(monkeypatch, [
+        '{"action": "final", "answer": "guess"}',
+        '{"action": "call_tool", "tool": "list_nodes", "arguments": {"q": 1}}',
+        '{"action": "final", "answer": "one node: x"}',
+    ])
+    node = al.AgentLoopNode(config={"tool_allowlist": ["list_nodes"], "require_tool_call": True})
+    out = node.process({"goal": "how many nodes?"})["output"]
+    assert out.final == "one node: x"
+    assert fake_tools == [("list_nodes", {"q": 1})]
+    assert out.metadata["tools_called"] == ["list_nodes"]
+    assert [s["action"] for s in out.steps] == ["rejected_final", "call_tool", "final"]
+    assert "Observation" in seen[2]["messages"][-1]["content"] and '"x"' in seen[2]["messages"][-1]["content"]
+
+
+def test_agent_loop_refuses_mutating_and_unknown_tools(monkeypatch, fake_tools):
+    al = _load("agent_loop")
+    _fake_llm(monkeypatch, ['{"action": "call_tool", "tool": "install_plugin", "arguments": {}}',
+                            '{"action": "final", "answer": "done"}'])
+    with pytest.raises(PermissionError, match="allow_mutating"):
+        al.AgentLoopNode(config={"tool_allowlist": ["install_plugin"]}).process({"goal": "x"})
+    with pytest.raises(ValueError, match="unknown MCP tool"):
+        al.AgentLoopNode(config={"tool_allowlist": ["nope"]}).process({"goal": "x"})
+    # model asks for a tool outside the allowlist → refused observation, no call
+    out = al.AgentLoopNode(config={"tool_allowlist": ["list_nodes"]}).process({"goal": "x"})["output"]
+    assert fake_tools == [] and out.steps[0]["ok"] is False and out.final == "done"
+
+
+def test_agent_loop_forces_final_after_max_steps(monkeypatch, fake_tools):
+    al = _load("agent_loop")
+    _fake_llm(monkeypatch, ['{"action": "call_tool", "tool": "list_nodes", "arguments": {}}',
+                            "plain prose answer"])
+    out = al.AgentLoopNode(config={"tool_allowlist": ["list_nodes"], "max_steps": 1}).process(
+        {"goal": "x"})["output"]
+    assert out.final == "plain prose answer" and out.steps[-1]["note"] == "forced after max_steps"
+
+
+def test_agent_loop_requires_goal_and_surfaces_llm_errors(monkeypatch):
+    al = _load("agent_loop")
+    with pytest.raises(ValueError, match="goal"):
+        al.AgentLoopNode().process({})
+    import app.core.ml.llm_client as llm_client
+
+    def boom(**kw):
+        raise ConnectionError("no server")
+
+    monkeypatch.setattr(llm_client, "chat_completion", boom)
+    node = al.AgentLoopNode()
+    with pytest.raises(RuntimeError, match="no server"):
+        node.process({"goal": "x"})
+    assert node.take_external_calls()[0]["error"] == "ConnectionError"
 
 
 # ── 9. llm_chat zero values ───────────────────────────────────────────────────
@@ -558,3 +665,10 @@ def test_llm_chat_temperature_zero_passed(monkeypatch):
     node = lc.LlmChatNode(config={"provider": "openai_compat", "temperature": 0.0, "timeout_s": 5})
     assert node.process({"input": "hi"})["output"].content == "ok"
     assert seen["temperature"] == 0.0 and seen["timeout_s"] == 5.0
+
+
+def test_memory_store_unwraps_canonical_payload_wrappers(mem, tmp_path):
+    """F-06 payload contract: a python_code CodeResult (dict form after transfer) is unwrapped."""
+    node = mem.MemoryStoreNode(config={"persist_path": str(tmp_path / "m.json")})
+    node.process({"input": {"data": {"key": "w", "value": 7}, "metadata": {"python_code": {}}}})
+    assert node.process({"input": "w"})["output"].value == 7

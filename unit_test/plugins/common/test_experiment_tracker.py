@@ -132,3 +132,92 @@ def test_experiment_name_propagated(installed_cls, tmp_path):
     )
     result = node.process({"input": artifact})["output"]
     assert result.experiment_name == "my_experiment"
+
+
+# ── JSON record content + MLflow (no silent fallback) ────────────────────────
+
+def test_json_record_written(installed_cls, tmp_path):
+    import json
+    from app.models.model_artifact import ModelArtifact
+
+    node = installed_cls(config={"backend": "json", "output_dir": str(tmp_path / "runs")}, seed=0)
+    out = node.process({"input": ModelArtifact(model_path="/m", labels=["a", "b"],
+                                               metrics={"test_accuracy": 0.9})})["output"]
+    rec = json.loads(open(out.metadata["record_path"]).read())
+    assert rec["run_id"] == out.run_id and rec["metrics"]["test_accuracy"] == 0.9
+    assert rec["parameters"]["n_classes"] == 2
+
+
+class _FakeMlflow:
+    def __init__(self, fail=False):
+        self.fail, self.calls = fail, []
+
+    def set_tracking_uri(self, uri):
+        self.calls.append(("uri", uri))
+
+    def set_experiment(self, name):
+        if self.fail:
+            raise ConnectionError("tracking server down")
+        self.calls.append(("exp", name))
+
+    def start_run(self, run_name):
+        fake = self
+
+        class _Run:
+            info = type("I", (), {"run_id": "mlf-123"})()
+
+            def __enter__(self):
+                fake.calls.append(("run", run_name))
+                return self
+
+            def __exit__(self, *a):
+                return False
+        return _Run()
+
+    def log_params(self, p):
+        self.calls.append(("params", p))
+
+    def log_metric(self, k, v, step=None):
+        self.calls.append(("metric", k, v, step))
+
+    def log_artifact(self, path, artifact_path=None):
+        self.calls.append(("artifact", artifact_path))
+
+    def log_artifacts(self, path, artifact_path=None):
+        self.calls.append(("artifacts", artifact_path))
+
+
+def test_mlflow_backend_logs_to_local_store(installed_cls, tmp_path, monkeypatch):
+    import sys
+    from app.models.model_artifact import ModelArtifact
+
+    fake = _FakeMlflow()
+    monkeypatch.setitem(sys.modules, "mlflow", fake)
+    node = installed_cls(config={"backend": "mlflow", "output_dir": str(tmp_path / "runs")}, seed=0)
+    out = node.process({"input": ModelArtifact(model_path="/m", labels=["a"],
+                                               history={"loss": [0.5, 0.25]})})["output"]
+    assert out.metadata["mlflow_run_id"] == "mlf-123"
+    assert out.metadata["tracking_uri"].startswith("file://") and "mlruns" in out.metadata["tracking_uri"]
+    assert ("metric", "loss", 0.25, 1) in fake.calls
+    assert not (tmp_path / "runs" / out.run_id / "experiment.json").exists()
+
+
+def test_mlflow_failure_raises_no_json_fallback(installed_cls, tmp_path, monkeypatch):
+    import sys
+    from app.models.model_artifact import ModelArtifact
+
+    monkeypatch.setitem(sys.modules, "mlflow", _FakeMlflow(fail=True))
+    node = installed_cls(config={"backend": "mlflow", "output_dir": str(tmp_path / "runs")}, seed=0)
+    with pytest.raises(RuntimeError, match="MLflow logging .* failed"):
+        node.process({"input": ModelArtifact(model_path="/m", labels=["a"])})
+    assert not list((tmp_path / "runs").glob("*/experiment.json"))
+
+
+def test_mlflow_missing_package_is_clear(installed_cls, tmp_path, monkeypatch):
+    import sys
+    from app.models.model_artifact import ModelArtifact
+
+    monkeypatch.setitem(sys.modules, "mlflow", None)
+    node = installed_cls(config={"backend": "mlflow", "output_dir": str(tmp_path / "runs")}, seed=0)
+    with pytest.raises(RuntimeError, match="mlflow-skinny"):
+        node.process({"input": ModelArtifact(model_path="/m", labels=["a"])})

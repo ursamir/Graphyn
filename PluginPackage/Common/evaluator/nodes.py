@@ -13,6 +13,7 @@ DatasetArtifact is the platform type ``app.models.dataset_artifact``.
 
 import json
 import logging
+import math
 from pathlib import Path
 from typing import ClassVar
 from pydantic import Field
@@ -373,15 +374,19 @@ class EvaluatorNode(Node):
                 "Install with: pip install keras tensorflow"
             )
 
-    def _compute_roc_auc(self, y_test, y_pred_probs, n_classes: int) -> float:
-        """Compute macro-average ROC AUC using OvR strategy."""
+    def _compute_roc_auc(self, y_test, y_pred_probs, n_classes: int) -> float | None:
+        """Compute macro-average ROC AUC using OvR strategy.
+
+        Returns ``None`` when the score is undefined — sklearn yields NaN when
+        a class has no samples in the eval split (tiny / imbalanced splits).
+        """
         from sklearn.metrics import roc_auc_score
 
         if n_classes == 2:
             # Binary: use probability of positive class
-            return float(roc_auc_score(y_test, y_pred_probs[:, 1]))
+            score = float(roc_auc_score(y_test, y_pred_probs[:, 1]))
         else:
-            return float(
+            score = float(
                 roc_auc_score(
                     y_test,
                     y_pred_probs,
@@ -389,6 +394,7 @@ class EvaluatorNode(Node):
                     average="macro",
                 )
             )
+        return score if math.isfinite(score) else None
 
     def _compute_fairness(
         self,
@@ -591,8 +597,14 @@ class EvaluatorNode(Node):
         if self.config.compute_roc:
             try:
                 roc_auc = self._compute_roc_auc(y_test, y_pred_probs, n_classes)
-                metrics["roc_auc"] = roc_auc
-                log.info("EvaluatorNode: ROC AUC (macro): %.4f", roc_auc)
+                if roc_auc is None:
+                    log.warning(
+                        "EvaluatorNode: ROC AUC undefined for this eval split "
+                        "(a class has no samples) — omitted from metrics"
+                    )
+                else:
+                    metrics["roc_auc"] = roc_auc
+                    log.info("EvaluatorNode: ROC AUC (macro): %.4f", roc_auc)
             except Exception as exc:
                 log.warning("EvaluatorNode: ROC AUC computation failed: %s", exc)
 

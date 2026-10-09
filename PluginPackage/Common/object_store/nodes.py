@@ -80,31 +80,82 @@ def _chunk_text(item: Any) -> tuple[str, str]:
 
 
 def _paths_from(value: Any) -> list[Path]:
-    if value is None:
-        return []
-    if isinstance(value, (str, Path)):
-        p = Path(value)
-        return [p] if p.exists() else []
-    if isinstance(value, dict) and value.get("path"):
-        p = Path(str(value["path"]))
-        return [p] if p.exists() else []
-    if hasattr(value, "paths"):
-        out = []
-        for p in value.paths or []:
-            pp = Path(str(p))
-            if pp.exists():
-                out.append(pp)
-        return out
-    if isinstance(value, list):
-        out = []
-        for item in value:
-            if isinstance(item, (str, Path)):
-                p = Path(item)
-                if p.exists() and p.is_file():
-                    out.append(p)
-        return out
-    return []
+    """Existing file paths carried by *value* (F19 / F-11).
 
+    Uses the canonical payload contract (:func:`app.core.nodes.payload.payload_paths`):
+    plain strings / ``Path``, dicts with ``path``/``file``/``paths``/``files``,
+    objects with ``.path`` / ``.source_path`` (CsvTableResult, ArtifactRef …),
+    ``refs`` lists, wrapper ``data`` and nested lists.
+    """
+    from app.core.nodes.payload import payload_paths
+
+    out: list[Path] = []
+    seen: set[str] = set()
+    for raw in payload_paths(value):
+        p = Path(raw)
+        if not p.is_absolute():
+            try:
+                p = _jail(raw, "input path")
+            except RuntimeError:
+                p = Path(raw)
+        if p.exists() and p.is_file() and str(p) not in seen:
+            seen.add(str(p))
+            out.append(p)
+    return out
+
+
+def _looks_like_chunks(value: Any) -> bool:
+    if not isinstance(value, list) or not value:
+        return False
+    for item in value:
+        if isinstance(item, dict):
+            if "text" not in item:
+                return False
+        elif not hasattr(item, "text"):
+            return False
+    return True
+
+
+def _inline_bytes(value: Any) -> tuple[bytes, str, str] | None:
+    """Serialise an inline payload → (bytes, extension, media type); None if empty."""
+    import csv
+    import io
+    import json
+
+    from app.core.nodes.payload import unwrap_payload
+
+    data = unwrap_payload(value)
+    if data is None:
+        return None
+    if isinstance(data, bytes):
+        return (data, ".bin", "application/octet-stream") if data else None
+    if isinstance(data, str):
+        return (data.encode("utf-8"), ".txt", "text/plain") if data else None
+    if isinstance(data, (int, float, bool)):
+        return json.dumps(data).encode("utf-8"), ".json", "application/json"
+    if isinstance(data, list) and data and all(isinstance(r, dict) for r in data):
+        cols: list[str] = []
+        for r in data:
+            for k in r:
+                if str(k) not in cols:
+                    cols.append(str(k))
+        flat = all(not isinstance(v, (dict, list)) for r in data for v in r.values())
+        if flat:
+            buf = io.StringIO()
+            w = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
+            w.writeheader()
+            for r in data:
+                w.writerow({str(k): v for k, v in r.items()})
+            return buf.getvalue().encode("utf-8"), ".csv", "text/csv"
+    if isinstance(data, (dict, list)):
+        if not data:
+            return None
+        return (
+            json.dumps(data, indent=2, sort_keys=True, default=str).encode("utf-8"),
+            ".json",
+            "application/json",
+        )
+    return str(data).encode("utf-8"), ".txt", "text/plain"
 
 
 def _object_ref_with_refs(*, key: str, uri: str, backend: str, size: int = 0, metadata: dict | None = None) -> "ObjectRef":
@@ -140,7 +191,7 @@ class ObjectStoreNode(Node):
             "(default workspace/artifacts/object_store); backend=s3 uses boto3 when installed."
         ),
         category="Output",
-        version="1.0.0",
+        version="1.1.0",
         tags=["storage", "s3", "export", "common"],
         requires_gpu=False,
         supports_cpu=True,
@@ -157,7 +208,7 @@ class ObjectStoreNode(Node):
             data_type=object | None,
             cardinality="single",
             required=False,
-            description="Files, caption paths, or Chunk list to put; unused for list",
+            description="put: files (paths, {path}, objects with .path, CsvTableResult) or inline data (dict, rows, text, CodeResult) — inline data is saved as JSON/CSV/text; unused for list/get",
         )
     }
 
@@ -236,7 +287,7 @@ class ObjectStoreNode(Node):
         refs: list = []
         written: list[Path] = []
         # Chunks → write text files then store
-        if isinstance(value, list) and value and not _paths_from(value):
+        if _looks_like_chunks(value) and not _paths_from(value):
             prefix = (self.config.prefix or self.config.key or "chunks").rstrip("/")
             for item in value:
                 cid, text = _chunk_text(item)
@@ -252,7 +303,7 @@ class ObjectStoreNode(Node):
 
         files = [_jail_input(p) for p in _paths_from(value)]
         key_cfg = (self.config.key or "").strip()
-        if key_cfg and not key_cfg.startswith("/") and ".." not in key_cfg.split("/"):
+        if not files and key_cfg and value is None:
             # A configured key that names an existing workspace file is a source.
             try:
                 cand = _jail(key_cfg, "config.key")
@@ -260,30 +311,53 @@ class ObjectStoreNode(Node):
                 cand = None
             if cand is not None and cand.is_file():
                 files.append(cand)
-        # Allow putting a single configured source path via dest/key
-        if not files and key_cfg:
-            # treat input as raw text
-            if isinstance(value, str) and not Path(value).exists():
-                dest = _key_path(root, key_cfg)
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(value, encoding="utf-8")
-                self._publish(root, [dest])
-                return _object_ref_with_refs(key=key_cfg, uri=str(dest), backend="local", size=dest.stat().st_size)
-        if not files:
-            return []
+                key_cfg = ""
         prefix = (self.config.prefix or "").rstrip("/")
+        if not files:
+            # F19 (F-11): inline payloads (dict, rows, CodeResult.data, text) are
+            # serialised and stored — never a silent no-op.
+            blob = _inline_bytes(value)
+            if blob is None:
+                raise RuntimeError(
+                    "ObjectStoreNode: put received nothing to store — the input has no "
+                    "existing file path and no inline data (got "
+                    f"{type(value).__name__}). Connect a node that outputs files or data."
+                )
+            content, ext, media = blob
+            key = key_cfg or self._inline_key(prefix, content, ext)
+            dest = _key_path(root, key)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(content)
+            self._publish(root, [dest])
+            return _object_ref_with_refs(
+                key=key, uri=str(dest), backend="local", size=dest.stat().st_size,
+                metadata={"source": "inline", "media_type": media},
+            )
         for src in files:
             name = src.name
             key = f"{prefix}/{name}" if prefix else name
             if len(files) == 1 and key_cfg and not key_cfg.endswith("/"):
                 key = key_cfg
+            elif key_cfg.endswith("/"):
+                key = f"{key_cfg.rstrip('/')}/{name}"
             dest = _key_path(root, key)
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest)
             written.append(dest)
-            refs.append(_object_ref_with_refs(key=key, uri=str(dest), backend="local", size=dest.stat().st_size))
+            refs.append(_object_ref_with_refs(
+                key=key, uri=str(dest), backend="local", size=dest.stat().st_size,
+                metadata={"source": "file", "source_path": str(src)},
+            ))
         self._publish(root, written)
         return refs[0] if len(refs) == 1 else refs
+
+    def _inline_key(self, prefix: str, content: bytes, ext: str) -> str:
+        import hashlib
+
+        node = (getattr(self, "node_id", "") or "object").replace("/", "-") or "object"
+        digest = hashlib.sha256(content).hexdigest()[:12]
+        name = f"{node}-{digest}{ext}"
+        return f"{prefix}/{name}" if prefix else name
 
     def _s3(self, op: str, value: Any):
         try:
@@ -297,6 +371,16 @@ class ObjectStoreNode(Node):
         if not bucket:
             raise RuntimeError("ObjectStoreNode: s3 backend requires config.bucket")
         client = boto3.client("s3")
+        # F19 (F-02): the S3 endpoint (AWS default or AWS_ENDPOINT_URL[_S3]) is
+        # network egress — validate it against the egress policy before any call.
+        from app.core.trust.egress import HttpEgressError, validate_http_egress_url
+
+        endpoint = str(getattr(getattr(client, "meta", None), "endpoint_url", "") or "")
+        if endpoint:
+            try:
+                validate_http_egress_url(endpoint)
+            except HttpEgressError as exc:
+                raise RuntimeError(f"ObjectStoreNode: S3 endpoint refused: {exc}") from exc
         if op == "list":
             prefix = self.config.prefix or self.config.key or ""
             keys = []
@@ -325,10 +409,22 @@ class ObjectStoreNode(Node):
             self._publish(dest.parent, [dest])
             return _object_ref_with_refs(key=key, uri=f"s3://{bucket}/{key}", backend="s3", size=dest.stat().st_size)
         files = [_jail_input(p) for p in _paths_from(value)]
-        if not files:
-            raise RuntimeError("ObjectStoreNode: s3 put requires file input")
-        refs = []
         prefix = (self.config.prefix or "").rstrip("/")
+        if not files:
+            blob = _inline_bytes(value)
+            if blob is None:
+                raise RuntimeError(
+                    "ObjectStoreNode: s3 put received nothing to store (no file path and "
+                    "no inline data)."
+                )
+            content, ext, media = blob
+            key = (self.config.key or "").strip() or self._inline_key(prefix, content, ext)
+            client.put_object(Bucket=bucket, Key=key, Body=content, ContentType=media)
+            return _object_ref_with_refs(
+                key=key, uri=f"s3://{bucket}/{key}", backend="s3", size=len(content),
+                metadata={"source": "inline", "media_type": media},
+            )
+        refs = []
         for src in files:
             key = f"{prefix}/{src.name}" if prefix else (self.config.key or src.name)
             client.upload_file(str(src), bucket, key)

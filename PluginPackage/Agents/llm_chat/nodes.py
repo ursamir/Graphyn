@@ -8,7 +8,7 @@ import logging
 import time
 from typing import Any, ClassVar, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -50,17 +50,19 @@ def _text(obj: Any) -> str:
         return json.dumps(data, default=str)
     return str(obj)
 
-def _local_answer(prompt: Any) -> str:
-    text = _text(prompt)
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    context = [ln for ln in lines if not ln.lower().startswith("question") and len(ln) > 40]
-    if context:
-        return context[0][:1200]
-    return text[:1200]
-
+def _echo_text(raw: Any) -> str:
+    """provider='echo': the user's last message, verbatim (no model involved)."""
+    msgs = _normalize_messages(raw)
+    users = [m["content"] for m in msgs if m.get("role") == "user"]
+    return users[-1] if users else (msgs[-1]["content"] if msgs else "")
 
 
 def _normalize_messages(raw: Any) -> list[dict[str, str]]:
+    from app.core.nodes.payload import wrapper_field, unwrap_payload
+
+    # F19 (F-06): a CodeResult / MappedPayload / … carries the real payload.
+    if wrapper_field(raw) is not None:
+        raw = unwrap_payload(raw)
     if raw is None:
         return []
     if isinstance(raw, dict):
@@ -96,8 +98,11 @@ def _normalize_messages(raw: Any) -> list[dict[str, str]]:
     return out
 
 
+_LEGACY_PROVIDER = {"local": "auto", "stub": "echo", "local_stub": "echo"}
+
+
 class LlmChatNode(Node):
-    """Multi-turn chat completion (stub | openai_compat | ollama)."""
+    """Multi-turn chat completion against a real LLM provider (or explicit echo)."""
 
     node_type: ClassVar[str] = "llm_chat"
 
@@ -105,11 +110,14 @@ class LlmChatNode(Node):
         node_type="llm_chat",
         label="LLM Chat",
         description=(
-            "Multi-turn chat. Providers: stub, openai_compat, ollama, "
-            "anthropic (ANTHROPIC_API_KEY), gemini (GEMINI_API_KEY)."
+            "Multi-turn chat with a real model. provider=auto (default) uses the configured "
+            "provider: a credential connection / workspace default, a local Ollama "
+            "(OLLAMA_BASE_URL), or an OpenAI-compatible / Anthropic / Gemini key — and fails "
+            "with a clear needs-credentials error when none is configured. provider=echo returns "
+            "the input unchanged for tests and is labelled as not an LLM."
         ),
         category="Processing",
-        version="0.2.0",
+        version="0.3.0",
         tags=["agents", "llm", "openai", "ollama"],
         requires_gpu=False,
         supports_cpu=True,
@@ -142,24 +150,29 @@ class LlmChatNode(Node):
         stub: bool = Field(
             default=False,
             title="Stub mode",
-            description="Opt-in placeholder. Default answers from the local extractive reader.",
+            description="Deprecated: same as provider=echo. Returns a labelled placeholder, never a model answer.",
         )
-        provider: Literal["local", "stub", "openai_compat", "ollama", "anthropic", "gemini"] = Field(
-            default="local",
+        provider: Literal["auto", "openai_compat", "ollama", "anthropic", "gemini", "echo"] = Field(
+            default="auto",
             title="Provider",
-            description="local | openai_compat | ollama | anthropic | gemini",
+            description=(
+                "auto (default): the configured LLM — connection / workspace default, local Ollama "
+                "(OLLAMA_BASE_URL), or an API key; fails clearly if none is set. openai_compat | "
+                "ollama | anthropic | gemini: that provider. echo: returns your input unchanged "
+                "(for tests; not an LLM)."
+            ),
         )
-        model: str = Field(default="gpt-4o-mini", title="Model", description="Chat model id.")
+        model: str = Field(default="gpt-4o-mini", title="Model", description="Chat model id. Ollama uses OLLAMA_MODEL / the connection default when left as gpt-*.")
         temperature: float = Field(default=0.2, ge=0, title="Temperature", description="Sampling temperature (0 allowed).")
         api_secret_name: str = Field(
             default="OPENAI_API_KEY",
             title="API secret name",
-            description="Secret/env name for openai_compat. Unused for stub/ollama.",
+            description="Secret/env name for openai_compat. Unused for echo/ollama.",
         )
         base_url: str = Field(
             default="",
             title="Base URL",
-            description="OpenAI-compatible base URL override. Ollama default: http://127.0.0.1:11434/v1",
+            description="OpenAI-compatible base URL override (must pass the egress policy).",
         )
         system_prompt: str = Field(
             default="",
@@ -173,30 +186,50 @@ class LlmChatNode(Node):
             description="Graphyn credential store connection id (kind matches provider). Empty → workspace default → env.",
         )
 
+        @model_validator(mode="before")
+        @classmethod
+        def _legacy_provider(cls, data: Any) -> Any:
+            """``local`` (was an extractive echo) → ``auto``; ``stub`` → ``echo``."""
+            if isinstance(data, dict):
+                prov = str(data.get("provider") or "").strip().lower()
+                if prov in _LEGACY_PROVIDER:
+                    data = dict(data)
+                    data["provider"] = _LEGACY_PROVIDER[prov]
+                    log.warning(
+                        "llm_chat: provider=%r is deprecated; using %r", prov, data["provider"]
+                    )
+            return data
+
     def process(self, inputs=None, **kwargs):
         if inputs is None:
             inputs = kwargs
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, "stub", False))
-        provider = (getattr(self.config, "provider", None) or "local").strip().lower()
-        if stub:
-            return {
-                "output": ChatMessage(
-                    role="assistant",
-                    content="[stub] llm_chat — set stub=False and provider=openai_compat|ollama|anthropic|gemini to call a model.",
-                )
-            }
-        if provider in ("local", "stub", ""):
-            raw = inputs.get("messages")
-            if raw is None:
-                raw = inputs.get("input")
-            return {"output": ChatMessage(role="assistant", content=_local_answer(raw))}
-
         raw = inputs.get("messages")
         if raw is None:
             raw = inputs.get("input")
+        provider = (getattr(self.config, "provider", None) or "auto").strip().lower()
+        if bool(getattr(self.config, "stub", False)) or provider == "echo":
+            return {
+                "output": ChatMessage(
+                    role="assistant",
+                    content=_echo_text(raw),
+                    metadata={"provider": "echo", "is_llm": False,
+                              "note": "echo provider: input returned unchanged, no model was called"},
+                )
+            }
+
+        conn_id = (getattr(self.config, "connection_id", "") or "") or None
+        from app.core.ml.llm_client import NeedsCredentialsError, chat_completion, resolve_auto_provider
+
+        reason = "explicit"
+        if provider == "auto":
+            try:
+                provider, reason = resolve_auto_provider(conn_id)
+            except NeedsCredentialsError as exc:
+                raise NeedsCredentialsError(f"llm_chat: {exc}") from exc
+
         messages = _normalize_messages(raw)
         system = (getattr(self.config, "system_prompt", "") or "").strip()
         if system and not any(m.get("role") == "system" for m in messages):
@@ -204,10 +237,7 @@ class LlmChatNode(Node):
         if not messages:
             messages = [{"role": "user", "content": ""}]
 
-        from app.core.ml.llm_client import NeedsCredentialsError, chat_completion
-
         model = getattr(self.config, "model", None) or "gpt-4o-mini"
-        conn_id = (getattr(self.config, "connection_id", "") or "") or None
         req_hash = self.body_sha256({"model": model, "messages": messages,
                                      "temperature": float(self.config.temperature)})
         t0 = time.monotonic()
@@ -241,5 +271,11 @@ class LlmChatNode(Node):
             "output": ChatMessage(
                 role="assistant",
                 content=str(result.get("content") or ""),
+                metadata={
+                    "provider": str(result.get("provider") or provider),
+                    "model": str(result.get("model") or model),
+                    "is_llm": True,
+                    "provider_selected_by": reason,
+                },
             )
         }

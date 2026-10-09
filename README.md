@@ -41,7 +41,7 @@ Follow **[Getting Started](docs/GETTING_STARTED.md)** — install once, then Mod
 | Console | graphyn-ui (default port 5173) |
 | SDK | app.core.sdk Pipeline / PipelineNode |
 | CLI | app.cli.main |
-| MCP | app.mcp.server (77 tools; +`accept_proposal` when `GRAPHYN_MCP_HUMAN_APPROVAL=1`) |
+| MCP | app.mcp.server (<!-- count:mcp_tools -->79<!-- /count --> tools; <!-- count:mcp_tools_with_approval -->80<!-- /count --> with `accept_proposal` when `GRAPHYN_MCP_HUMAN_APPROVAL=1`) |
 
 ## Documentation
 

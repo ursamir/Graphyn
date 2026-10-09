@@ -20,6 +20,7 @@ optional_dependencies = [
 ]
 
 node_types = ["audio_quality_gate"]
+runtime    = "inprocess"  # explicit (was the implicit default)
 
 [config_schema.audio_quality_gate]
 min_snr_db = { type = "number", title = "Min SNR (dB)", default = 10.0, description = "Reject audio whose estimated signal-to-noise ratio is below this (dB). Clips with a near-silent noise floor are not checked.", ui = { help_advanced = "SNR = mean power vs the 5th-percentile amplitude floor.", group = "Basic", visible_if = { check_snr = true } } }

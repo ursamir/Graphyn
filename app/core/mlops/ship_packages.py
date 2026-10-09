@@ -8,7 +8,8 @@ Owns:             create/list/get/download/promote/transition helpers;
                   If-Match check + manifest write run under a per-package
                   lock (project_pipelines.resource_lock) — no lost updates.
 Public Surface:   Same helpers for API / MCP; InvalidPackageTransition,
-                  LabelsMismatch.
+                  LabelsMismatch, RuntimeFormatMismatch, SignatureRequired,
+                  validate_runtime_format, verify_package.
 Must NOT:         Import app.api or app.domain.
 Dependencies:     stdlib; model_registry (lazy); run_summary (lazy); project_pipelines
                   (resource_lock, lazy); audit (lazy).
@@ -261,6 +262,103 @@ class LabelsMismatch(ValueError):
         )
 
 
+# ── runtime ↔ artifact format (F19 / F-14) ───────────────────────────────────
+
+# Accepted model formats per target runtime. The format comes from the model
+# file itself (suffix + magic bytes), never from the request.
+RUNTIME_FORMATS: dict[str, frozenset[str]] = {
+    "tflite": frozenset({"tflite"}),
+    "tflm": frozenset({"tflite"}),
+    "onnx": frozenset({"onnx"}),
+    "keras": frozenset({"keras"}),
+    "tensorflow": frozenset({"saved_model", "keras"}),
+    "saved_model": frozenset({"saved_model"}),
+    "pytorch": frozenset({"pt"}),
+    "torchscript": frozenset({"pt"}),
+}
+
+
+class RuntimeFormatMismatch(ValueError):
+    """target.runtime cannot execute the packaged model → 422 ``runtime_format_mismatch``."""
+
+    code = "runtime_format_mismatch"
+
+    def __init__(self, runtime: str, model_format: str | None, accepted: list[str], path: str = "") -> None:
+        self.runtime = runtime
+        self.model_format = model_format
+        self.accepted = accepted
+        where = f" ({path})" if path else ""
+        if model_format:
+            msg = f"target.runtime '{runtime}' cannot run a '{model_format}' model{where}"
+        else:
+            msg = f"the model file{where} is not a recognisable model (content does not match its type)"
+        super().__init__(f"{msg}; target.runtime '{runtime}' needs one of: {', '.join(accepted)}")
+
+
+class SignatureRequired(ValueError):
+    """Promotion to prod needs a valid Ed25519 signature → 422 ``signature_required``."""
+
+    code = "signature_required"
+
+
+def _sniff_format(fs: Path) -> str | None:
+    """Model format from content (magic bytes), falling back to the suffix."""
+    if fs.is_dir():
+        return "saved_model" if (fs / "saved_model.pb").is_file() else None
+    try:
+        with fs.open("rb") as fh:
+            head = fh.read(8)
+    except OSError:
+        return None
+    if len(head) >= 8 and head[4:8] == b"TFL3":
+        return "tflite"
+    suffix = fs.suffix.lower()
+    if head.startswith(b"\x89HDF\r\n\x1a\n"):
+        return "keras"
+    if head.startswith(b"PK"):
+        if suffix == ".keras":
+            return "keras"
+        if suffix in (".pt", ".pth"):
+            return "pt"  # torch.save / TorchScript archives are zips
+        return None
+    if suffix == ".onnx" and head[:1] in (b"\x08", b"\x0a", b"\x12", b"\x1a", b"\x22", b"\x3a"):
+        return "onnx"  # protobuf ModelProto (field 1 ir_version / graph …)
+    if suffix in (".pt", ".pth") and head[:1] == b"\x80":
+        return "pt"  # legacy pickle-based torch.save
+    return None
+
+
+_AUTO_RUNTIME = {"tflite": "tflite", "onnx": "onnx", "keras": "keras", "saved_model": "tensorflow", "pt": "pytorch"}
+
+
+def validate_runtime_format(runtime: str, model_file: dict[str, Any] | None) -> tuple[str, str]:
+    """Raise unless *runtime* can execute the model file.
+
+    Returns ``(runtime, detected_format)``; ``runtime='auto'`` resolves to the
+    runtime that matches the detected model format.
+    """
+    rt = (runtime or "").strip().lower()
+    if rt != "auto" and rt not in RUNTIME_FORMATS:
+        raise ValueError(
+            f"unknown target.runtime '{runtime}'; supported: {', '.join(sorted(RUNTIME_FORMATS))}"
+        )
+    if model_file is None:
+        raise ValueError(
+            "nothing to package: the model has no artifact file. Register the model from a run "
+            "with a model artifact, or pass model_path from GET /runs/{id}/models."
+        )
+    fs = Path(model_file["fs_path"])
+    fmt = _sniff_format(fs)
+    if rt == "auto":
+        if fmt not in _AUTO_RUNTIME:
+            raise RuntimeFormatMismatch("auto", fmt, sorted(_AUTO_RUNTIME), str(model_file.get("path") or fs.name))
+        return _AUTO_RUNTIME[fmt], fmt
+    accepted = sorted(RUNTIME_FORMATS[rt])
+    if fmt not in RUNTIME_FORMATS[rt]:
+        raise RuntimeFormatMismatch(rt, fmt, accepted, str(model_file.get("path") or fs.name))
+    return rt, fmt
+
+
 # Max bytes of model payload copied into package.zip (bigger → pointer only).
 MAX_EMBED_MODEL_BYTES = 256 * 1024 * 1024
 
@@ -343,6 +441,19 @@ def _embed_model(zf: zipfile.ZipFile, fs: Path) -> list[tuple[str, bytes | Path]
     return items  # type: ignore[return-value]
 
 
+def verify_package(project_dir: Path, package_id: str, *, manifest: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Archive checksum + Ed25519 signature check for one package."""
+    pkg = package_dir(project_dir, package_id)
+    man = manifest if manifest is not None else _load_manifest(pkg)
+    archive = pkg / "package.zip"
+    try:
+        from app.core.mlops.ship_signing import verify_manifest
+
+        return verify_manifest(man, archive if archive.is_file() else None)
+    except Exception as exc:  # cryptography missing / key unreadable
+        return {"signed": False, "valid": False, "checksum_ok": None, "key_id": None, "reason": str(exc)}
+
+
 def _summary(manifest: dict[str, Any]) -> dict[str, Any]:
     checksums = manifest.get("checksums") if isinstance(manifest.get("checksums"), dict) else {}
     return {
@@ -389,6 +500,7 @@ def get_package(project_dir: Path, package_id: str) -> dict[str, Any]:
         "package_id": man.get("package_id"),
         "status": normalize_status(str(man.get("status") or "")),
         "env": man.get("env") or "draft",
+        "signature": verify_package(project_dir, package_id, manifest=man),
         "manifest": man,
         "checksums": man.get("checksums") or {},
         "created_at": man.get("created_at"),
@@ -406,7 +518,7 @@ def create_package(
     env: str = "draft",
     actor: str = "api",
     notes: str | None = None,
-    unsigned_allowed: bool = True,
+    unsigned_allowed: bool = False,
     package_id: str | None = None,
     model_path: str | None = None,
     run_id: str | None = None,
@@ -419,6 +531,12 @@ def create_package(
     GET /runs/{id}/models. The model file (≤ 256 MB) and ``labels.txt`` are
     embedded in the archive. ``labels`` must match the model's labels.txt
     order exactly, else :class:`LabelsMismatch` (``labels_mismatch``).
+
+    F19 / F-14: ``target.runtime`` must be able to run the model file (format
+    sniffed from content, :class:`RuntimeFormatMismatch`), and the package is
+    Ed25519-signed by default. ``unsigned_allowed=True`` is an explicit dev
+    opt-in that only applies when signing is unavailable; unsigned packages
+    can never be promoted to prod.
     """
     if not isinstance(target, dict) or not target:
         raise ValueError("target object required (runtime/arch)")
@@ -457,7 +575,9 @@ def create_package(
         run_id=run_id or (model_ref.get("run_id") or None),
         stage_artifact=stage_artifact,
     )
+    runtime, detected_format = validate_runtime_format(runtime, model_file)
     if model_file is not None:
+        model_file["format"] = detected_format
         expected = list(model_file.get("labels") or [])
         if labels is not None:
             got = [str(x) for x in labels]
@@ -599,14 +719,29 @@ def create_package(
         "resource_version": 1,
         "updated_at": created_at,
     }
-    # Advance draft → validated → built (and optionally signed when unsigned_allowed)
+    # Advance draft → validated (runtime/format checked above) → built → signed.
     manifest["status"] = "validated"
     manifest["status"] = "built"
-    if unsigned_allowed:
-        manifest["signatures"] = [
-            {"alg": "unsigned", "value": "", "key_id": "dev-unsigned"}
-        ]
+    try:
+        from app.core.mlops.ship_signing import sign_manifest
+
+        manifest["signatures"] = [sign_manifest(manifest, actor=actor)]
         manifest["status"] = "signed"
+    except Exception as exc:
+        if not unsigned_allowed:
+            import shutil
+
+            shutil.rmtree(pkg, ignore_errors=True)
+            raise ValueError(
+                f"package signing failed ({exc}); fix GRAPHYN_SHIP_SIGNING_KEY or pass "
+                "unsigned_allowed=true for a development package"
+            ) from exc
+        log.warning("ship: signing unavailable (%s); creating unsigned dev package %s", exc, pid)
+        manifest["signatures"] = [{"alg": "unsigned", "value": "", "key_id": "dev-unsigned"}]
+        manifest["status"] = "signed"
+        warnings.append(
+            {"code": "unsigned", "message": "package is unsigned (development only; cannot be promoted to prod)"}
+        )
     _save_manifest(pkg, manifest)
 
     try:
@@ -700,6 +835,10 @@ def _transition_locked(
     if action_s == "publish" and current == "built" and not man.get("unsigned_allowed"):
         raise InvalidPackageTransition(current, action_s)
     nxt = next_status(current, action_s)
+    if action_s == "sign":
+        from app.core.mlops.ship_signing import sign_manifest
+
+        man["signatures"] = [sign_manifest(man)]
     man["status"] = nxt
     man["updated_at"] = _now()
     man["resource_version"] = int(man.get("resource_version") or 1) + 1
@@ -784,6 +923,14 @@ def _promote_locked(
             current = "signed"
         else:
             raise InvalidPackageTransition(current, "promote")
+    if to == "prod":
+        from app.core.mlops.ship_signing import verify_manifest
+
+        check = verify_manifest(man, pkg / "package.zip")
+        if not check.get("valid"):
+            raise SignatureRequired(
+                f"promoting to prod needs a valid package signature: {check.get('reason') or 'invalid'}"
+            )
     if current == "signed":
         man["status"] = "published"
         current = "published"

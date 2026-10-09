@@ -159,18 +159,15 @@ def create_ship_package_handler(arguments: dict[str, Any] | None = None) -> dict
             env=str(args.get("env") or "draft"),
             actor=str(resolve_mcp_actor(args)["actor"]),
             notes=args.get("notes"),
-            unsigned_allowed=bool(
-                args.get("unsigned_allowed")
-                if args.get("unsigned_allowed") is not None
-                else True
-            ),
+            # F19 / F-14: packages are Ed25519-signed; unsigned is an explicit dev opt-in.
+            unsigned_allowed=bool(args.get("unsigned_allowed") or False),
         )
     except FileNotFoundError as exc:
         return _err("not_found", str(exc))
     except InvalidPackageTransition as exc:
         return _err("invalid_transition", str(exc))
     except ValueError as exc:
-        return _err("validation_failed", str(exc))
+        return _err(str(getattr(exc, "code", "") or "validation_failed"), str(exc))
 
 
 def download_ship_package_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -215,4 +212,4 @@ def promote_ship_package_handler(arguments: dict[str, Any] | None = None) -> dic
     except InvalidPackageTransition as exc:
         return _err("invalid_transition", str(exc))
     except ValueError as exc:
-        return _err("validation_failed", str(exc))
+        return _err(str(getattr(exc, "code", "") or "validation_failed"), str(exc))

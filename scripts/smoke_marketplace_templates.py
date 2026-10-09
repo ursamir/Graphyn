@@ -9,7 +9,7 @@ Usage:
   export GRAPHYN_API_TOKEN=…
   venv/bin/python scripts/smoke_marketplace_templates.py
   venv/bin/python scripts/smoke_marketplace_templates.py --ids tpl-audio-sed-callcenter
-  venv/bin/python scripts/smoke_marketplace_templates.py --families audio,rag --limit 3
+  venv/bin/python scripts/smoke_marketplace_templates.py --families audio,video --limit 3
 """
 from __future__ import annotations
 
@@ -26,18 +26,17 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_API = os.environ.get("GRAPHYN_API", "http://127.0.0.1:8001").rstrip("/")
 PROJECT = os.environ.get("GRAPHYN_SMOKE_PROJECT", "tpl-smoke")
 
-# One representative per major family + the SED template that failed in UI.
+# One representative per shipped family (Audio, Common, Agents, Video, WakeWord, cross).
 DEFAULT_IDS = [
-    "tpl-audio-sed-callcenter",
-    "tpl-audio-kws-smart-home",
-    "tpl-vision-yolo-detect-train-retail-shelf",
-    "tpl-rag-ingest-fs-recursive-faiss-support",
-    "tpl-tinyml-kws-wearable-cortex-m4-ptq-tflm",
-    "tpl-wakeword-en-hey-graphyn-data-gen",
-    "tpl-video-ingest-scene-caption-security",
-    "tpl-agents-run-pipeline-mlops",
-    "tpl-mlops-train-eval-ship-audio",
-    "tpl-common-http-poll-transform-general",
+    "tpl-audio-kws-train-smart-home",
+    "tpl-audio-sound-event-detection",
+    "tpl-audio-speech-enhancement",
+    "tpl-common-http-poll-transform",
+    "tpl-common-asr-pii-redact-callcenter",
+    "tpl-agents-structured-extract-validate",
+    "tpl-video-scene-clips-security",
+    "tpl-wakeword-train-export",
+    "tpl-cross-call-analytics",
 ]
 
 
@@ -315,7 +314,7 @@ def main() -> int:
             else:
                 timeout = args.timeout
                 types = {n.get("node_type") for n in graph.get("nodes") or []}
-                if types & {"mcu_train", "tflm_quantize", "yolo_train", "trainer"}:
+                if types & {"trainer", "wakeword_train"}:
                     timeout = max(timeout, 600)
                 ex = execute_and_wait(token, graph, timeout)
                 row.update({k: v for k, v in ex.items() if k != "body"})
